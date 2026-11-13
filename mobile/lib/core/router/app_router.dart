@@ -1,7 +1,9 @@
-import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../../features/auth/presentation/login_screen.dart';
+import '../../features/customer/presentation/pase_screen.dart';
+import '../../features/customer/presentation/restaurants_screen.dart';
 
 /// Configuración central de rutas de navegación con GoRouter.
 /// Las rutas de Comensal (/customer/*) y Dueño (/owner/*) apuntan inicialmente a
@@ -22,20 +24,12 @@ final GoRouter appRouter = GoRouter(
     GoRoute(
       path: '/customer/pase',
       name: 'customer_pase',
-      builder: (context, state) => const _RoutePlaceholder(
-        title: 'Pase Digital Comensal',
-        routePath: '/customer/pase',
-        subtitle: 'Fase C3 (James): pase_screen.dart',
-      ),
+      builder: (context, state) => const PaseScreen(),
     ),
     GoRoute(
       path: '/customer/restaurants',
       name: 'customer_restaurants',
-      builder: (context, state) => const _RoutePlaceholder(
-        title: 'Restaurantes',
-        routePath: '/customer/restaurants',
-        subtitle: 'Fase C4 (James): restaurants_screen.dart',
-      ),
+      builder: (context, state) => const RestaurantsScreen(),
     ),
     // Rutas Dueño (Owner)
     GoRoute(
