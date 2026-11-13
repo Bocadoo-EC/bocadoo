@@ -330,6 +330,7 @@ class OwnerStore {
 class ScanResult {
   final bool isValid;
   final String outcome; // VERDE, ADVERTENCIA, ROJO, GRIS
+  final String? apiStatus; // OK, OK_ADVERTENCIA, DUPLICADO, SIN_PLAN, ...
   final String title;
   final String supportingLine;
   final String? studentName;
@@ -345,6 +346,7 @@ class ScanResult {
   const ScanResult({
     required this.isValid,
     required this.outcome,
+    this.apiStatus,
     required this.title,
     required this.supportingLine,
     this.studentName,
@@ -366,6 +368,7 @@ class ScanResult {
   ScanResult copyWith({
     bool? isValid,
     String? outcome,
+    String? apiStatus,
     String? title,
     String? supportingLine,
     String? studentName,
@@ -381,6 +384,7 @@ class ScanResult {
     return ScanResult(
       isValid: isValid ?? this.isValid,
       outcome: outcome ?? this.outcome,
+      apiStatus: apiStatus ?? this.apiStatus,
       title: title ?? this.title,
       supportingLine: supportingLine ?? this.supportingLine,
       studentName: studentName ?? this.studentName,

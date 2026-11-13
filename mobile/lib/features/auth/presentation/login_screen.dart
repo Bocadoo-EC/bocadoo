@@ -1,19 +1,22 @@
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/auth/auth_models.dart';
+import '../../../core/auth/auth_provider.dart';
 import '../../../core/theme/app_theme.dart';
 
 /// Pantalla de Autenticación / Selección de Rol para Bocadoo
-class LoginScreen extends StatefulWidget {
+class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
 
   @override
-  State<LoginScreen> createState() => _LoginScreenState();
+  ConsumerState<LoginScreen> createState() => _LoginScreenState();
 }
 
 enum UserRole { customer, owner }
 
-class _LoginScreenState extends State<LoginScreen> {
+class _LoginScreenState extends ConsumerState<LoginScreen> {
   UserRole _selectedRole = UserRole.customer;
   final TextEditingController _identifierController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
@@ -49,7 +52,24 @@ class _LoginScreenState extends State<LoginScreen> {
     });
   }
 
-  void _onLogin() {
+  Future<void> _onLogin() async {
+    final targetRole =
+        _selectedRole == UserRole.customer ? AuthRole.customer : AuthRole.owner;
+    final ok = await ref.read(authProvider.notifier).login(
+          email: _identifierController.text,
+          password: _passwordController.text,
+          demoFallbackRole: targetRole,
+        );
+    if (!mounted) return;
+    if (!ok) {
+      final err = ref.read(authProvider).errorMessage;
+      if (err != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(err)),
+        );
+      }
+      return;
+    }
     if (_selectedRole == UserRole.customer) {
       context.go('/customer/pase');
     } else {

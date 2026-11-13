@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/auth/auth_provider.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/widgets.dart';
@@ -42,7 +43,10 @@ class _CustomerProfileScreenState extends ConsumerState<CustomerProfileScreen> {
             actions: [
               IconButton(
                 tooltip: 'Cerrar sesión',
-                onPressed: () => context.go('/login'),
+                onPressed: () async {
+                  await ref.read(authProvider.notifier).logout();
+                  if (context.mounted) context.go('/login');
+                },
                 icon: Icon(Icons.logout_rounded, color: colors.onSurface),
               ),
             ],
@@ -158,7 +162,10 @@ class _CustomerProfileScreenState extends ConsumerState<CustomerProfileScreen> {
               const SizedBox(height: 12),
 
               OutlinedButton.icon(
-                onPressed: () => context.go('/login'),
+                onPressed: () async {
+                  await ref.read(authProvider.notifier).logout();
+                  if (context.mounted) context.go('/login');
+                },
                 icon: const Icon(Icons.logout_rounded),
                 label: const Text('Cerrar sesión'),
               ),

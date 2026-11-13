@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../../../core/auth/auth_provider.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/contracts/qr_parser.dart';
 import '../../../core/theme/app_theme.dart';
@@ -69,7 +70,10 @@ class _PaseScreenState extends ConsumerState<PaseScreen> {
             CustomerStatus.error when uiState.pass == null => _PaseErrorView(
                 message: uiState.errorMessage ?? 'No pudimos cargar tu pase.',
                 onRetry: () => controller.loadDashboard(),
-                onLogout: () => context.go('/login'),
+                onLogout: () async {
+                  await ref.read(authProvider.notifier).logout();
+                  if (context.mounted) context.go('/login');
+                },
               ),
             _ => _buildContent(context, controller, uiState),
           },
@@ -96,7 +100,10 @@ class _PaseScreenState extends ConsumerState<PaseScreen> {
           isRenewal: true,
         ),
         onExploreRestaurants: () => context.go('/customer/restaurants'),
-        onLogout: () => context.go('/login'),
+        onLogout: () async {
+          await ref.read(authProvider.notifier).logout();
+          if (context.mounted) context.go('/login');
+        },
         onShowHistory: () => _showHistorySheet(context, uiState.history),
       );
     }
