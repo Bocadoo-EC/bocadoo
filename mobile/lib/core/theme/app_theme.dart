@@ -1,3 +1,4 @@
+import 'package:google_fonts/google_fonts.dart';
 import 'package:material_ui/material_ui.dart';
 
 /// Bocadoo App Theme & Design System tokens.
@@ -262,6 +263,61 @@ class AppTheme {
   static const double cardRadius = 28.0;
   static const double inputRadius = 16.0;
 
+  static TextTheme _buildTextTheme(TextTheme base, ColorScheme colors) {
+    final jakarta = GoogleFonts.plusJakartaSansTextTheme(base);
+    return jakarta.copyWith(
+      displayLarge: jakarta.displayLarge?.copyWith(
+        fontSize: 48,
+        fontWeight: FontWeight.w800,
+        color: colors.onSurface,
+      ),
+      displayMedium: jakarta.displayMedium?.copyWith(
+        fontSize: 32,
+        fontWeight: FontWeight.w800,
+        color: colors.onSurface,
+      ),
+      headlineMedium: jakarta.headlineMedium?.copyWith(
+        fontSize: 24,
+        fontWeight: FontWeight.w800,
+        color: colors.onSurface,
+      ),
+      titleLarge: jakarta.titleLarge?.copyWith(
+        fontSize: 20,
+        fontWeight: FontWeight.w700,
+        color: colors.onSurface,
+      ),
+      titleMedium: jakarta.titleMedium?.copyWith(
+        fontSize: 17,
+        fontWeight: FontWeight.w700,
+        color: colors.onSurface,
+      ),
+      bodyLarge: jakarta.bodyLarge?.copyWith(
+        fontSize: 15,
+        fontWeight: FontWeight.w500,
+        color: colors.onSurface,
+      ),
+      bodyMedium: jakarta.bodyMedium?.copyWith(
+        fontSize: 15,
+        fontWeight: FontWeight.w400,
+        color: colors.onSurface,
+      ),
+      bodySmall: jakarta.bodySmall?.copyWith(
+        fontSize: 13,
+        fontWeight: FontWeight.w600,
+        color: colors.onSurfaceVariant,
+      ),
+      labelLarge: jakarta.labelLarge?.copyWith(
+        fontSize: 17,
+        fontWeight: FontWeight.w700,
+      ),
+      labelMedium: jakarta.labelMedium?.copyWith(
+        fontSize: 13,
+        fontWeight: FontWeight.w600,
+        color: colors.onSurfaceVariant,
+      ),
+    );
+  }
+
   static ThemeData get lightTheme {
     final colorScheme = const ColorScheme.light(
       primary: AppColors.lightPrimary,
@@ -283,11 +339,13 @@ class AppTheme {
       onErrorContainer: AppColors.lightOnDangerContainer,
     );
 
+    final baseTextTheme = ThemeData.light().textTheme;
     return ThemeData(
       useMaterial3: true,
       colorScheme: colorScheme,
       scaffoldBackgroundColor: AppColors.lightBackground,
-      fontFamily: 'Plus Jakarta Sans',
+      textTheme: _buildTextTheme(baseTextTheme, colorScheme),
+      fontFamily: GoogleFonts.plusJakartaSans().fontFamily,
       extensions: const [BocadooColors.light],
       appBarTheme: const AppBarTheme(
         backgroundColor: Colors.transparent,
@@ -389,11 +447,13 @@ class AppTheme {
       onErrorContainer: AppColors.darkOnDangerContainer,
     );
 
+    final baseTextTheme = ThemeData.dark().textTheme;
     return ThemeData(
       useMaterial3: true,
       colorScheme: colorScheme,
       scaffoldBackgroundColor: AppColors.darkBackground,
-      fontFamily: 'Plus Jakarta Sans',
+      textTheme: _buildTextTheme(baseTextTheme, colorScheme),
+      fontFamily: GoogleFonts.plusJakartaSans().fontFamily,
       extensions: const [BocadooColors.dark],
       appBarTheme: const AppBarTheme(
         backgroundColor: Colors.transparent,
