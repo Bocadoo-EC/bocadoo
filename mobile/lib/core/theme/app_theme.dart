@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Bocadoo App Theme & Design System tokens.
 /// Fuente única de verdad basada en Material Design 3 y los tokens del PMV Web
@@ -83,21 +83,13 @@ class AppColors {
   static const LinearGradient lightHeroGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [
-      Color(0xFF9C51E1),
-      Color(0xFF8234C6),
-      Color(0xFF680EAC),
-    ],
+    colors: [Color(0xFF9C51E1), Color(0xFF8234C6), Color(0xFF680EAC)],
   );
 
   static const LinearGradient darkHeroGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [
-      Color(0xFF8234C6),
-      Color(0xFF680EAC),
-      Color(0xFF2D0050),
-    ],
+    colors: [Color(0xFF8234C6), Color(0xFF680EAC), Color(0xFF2D0050)],
   );
 }
 
@@ -218,18 +210,33 @@ class BocadooColors extends ThemeExtension<BocadooColors> {
     if (other is! BocadooColors) return this;
     return BocadooColors(
       success: Color.lerp(success, other.success, t)!,
-      successForeground:
-          Color.lerp(successForeground, other.successForeground, t)!,
-      successContainer:
-          Color.lerp(successContainer, other.successContainer, t)!,
-      onSuccessContainer:
-          Color.lerp(onSuccessContainer, other.onSuccessContainer, t)!,
+      successForeground: Color.lerp(
+        successForeground,
+        other.successForeground,
+        t,
+      )!,
+      successContainer: Color.lerp(
+        successContainer,
+        other.successContainer,
+        t,
+      )!,
+      onSuccessContainer: Color.lerp(
+        onSuccessContainer,
+        other.onSuccessContainer,
+        t,
+      )!,
       danger: Color.lerp(danger, other.danger, t)!,
-      dangerForeground:
-          Color.lerp(dangerForeground, other.dangerForeground, t)!,
+      dangerForeground: Color.lerp(
+        dangerForeground,
+        other.dangerForeground,
+        t,
+      )!,
       dangerContainer: Color.lerp(dangerContainer, other.dangerContainer, t)!,
-      onDangerContainer:
-          Color.lerp(onDangerContainer, other.onDangerContainer, t)!,
+      onDangerContainer: Color.lerp(
+        onDangerContainer,
+        other.onDangerContainer,
+        t,
+      )!,
       surfaceNav: Color.lerp(surfaceNav, other.surfaceNav, t)!,
       footerBg: Color.lerp(footerBg, other.footerBg, t)!,
       footerAccent: Color.lerp(footerAccent, other.footerAccent, t)!,
@@ -337,8 +344,10 @@ class AppTheme {
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: AppColors.lightInputBg,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 20,
+          vertical: 16,
+        ),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(inputRadius),
           borderSide: const BorderSide(color: AppColors.lightOutline),
@@ -349,8 +358,7 @@ class AppTheme {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(inputRadius),
-          borderSide:
-              const BorderSide(color: AppColors.lightPrimary, width: 2),
+          borderSide: const BorderSide(color: AppColors.lightPrimary, width: 2),
         ),
         errorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(inputRadius),
@@ -442,8 +450,10 @@ class AppTheme {
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: AppColors.darkInputBg,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 20,
+          vertical: 16,
+        ),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(inputRadius),
           borderSide: const BorderSide(color: AppColors.darkOutline),
@@ -454,8 +464,7 @@ class AppTheme {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(inputRadius),
-          borderSide:
-              const BorderSide(color: AppColors.darkPrimary, width: 2),
+          borderSide: const BorderSide(color: AppColors.darkPrimary, width: 2),
         ),
         errorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(inputRadius),
@@ -472,4 +481,3 @@ extension BocadooThemeX on BuildContext {
       Theme.of(this).extension<BocadooColors>() ?? BocadooColors.light;
   ColorScheme get colorScheme => Theme.of(this).colorScheme;
 }
-
