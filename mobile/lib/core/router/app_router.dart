@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../features/auth/presentation/login_screen.dart';
+import '../../features/owner/presentation/cash_closing_screen.dart';
+import '../../features/owner/presentation/scan_result_screen.dart';
+import '../../features/owner/presentation/scanner_screen.dart';
 
 /// Configuración central de rutas de navegación con GoRouter.
 /// Las rutas de Comensal (/customer/*) y Dueño (/owner/*) apuntan inicialmente a
@@ -41,29 +44,17 @@ final GoRouter appRouter = GoRouter(
     GoRoute(
       path: '/owner/scanner',
       name: 'owner_scanner',
-      builder: (context, state) => const _RoutePlaceholder(
-        title: 'Escáner QR Dueño',
-        routePath: '/owner/scanner',
-        subtitle: 'Fase O3 (Carlos): scanner_screen.dart',
-      ),
+      builder: (context, state) => const ScannerScreen(),
     ),
     GoRoute(
       path: '/owner/scan-result',
       name: 'owner_scan_result',
-      builder: (context, state) => const _RoutePlaceholder(
-        title: 'Resultado de Escaneo',
-        routePath: '/owner/scan-result',
-        subtitle: 'Fase O4 (Carlos): scan_result_screen.dart',
-      ),
+      builder: (context, state) => const ScanResultScreen(),
     ),
     GoRoute(
       path: '/owner/cash-closing',
       name: 'owner_cash_closing',
-      builder: (context, state) => const _RoutePlaceholder(
-        title: 'Cierre de Caja',
-        routePath: '/owner/cash-closing',
-        subtitle: 'Fase O5 (Carlos): cash_closing_screen.dart',
-      ),
+      builder: (context, state) => const CashClosingScreen(),
     ),
   ],
   errorBuilder: (context, state) => Scaffold(
