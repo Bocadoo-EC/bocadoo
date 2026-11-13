@@ -210,6 +210,16 @@ class CustomerController extends ChangeNotifier {
     }
   }
 
+  /// Actualiza inmediatamente el pase activo tras adquirir o renovar un paquete.
+  void updateActivePass(CustomerPass updatedPass) {
+    _state = _state.copyWith(
+      status: CustomerStatus.success,
+      pass: updatedPass,
+      errorMessage: null,
+    );
+    notifyListeners();
+  }
+
   List<Restaurant> _applyFilters(
     List<Restaurant> list,
     String query,

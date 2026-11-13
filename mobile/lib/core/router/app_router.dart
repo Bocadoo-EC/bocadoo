@@ -5,6 +5,7 @@ import '../../features/auth/presentation/login_screen.dart';
 import '../../features/owner/presentation/cash_closing_screen.dart';
 import '../../features/owner/presentation/scan_result_screen.dart';
 import '../../features/owner/presentation/scanner_screen.dart';
+import '../../features/customer/presentation/customer_profile_screen.dart';
 import '../../features/customer/presentation/pase_screen.dart';
 import '../../features/customer/presentation/restaurants_screen.dart';
 
@@ -33,6 +34,11 @@ final GoRouter appRouter = GoRouter(
       path: '/customer/restaurants',
       name: 'customer_restaurants',
       builder: (context, state) => const RestaurantsScreen(),
+    ),
+    GoRoute(
+      path: '/customer/profile',
+      name: 'customer_profile',
+      builder: (context, state) => const CustomerProfileScreen(),
     ),
     // Rutas Dueño (Owner)
     GoRoute(

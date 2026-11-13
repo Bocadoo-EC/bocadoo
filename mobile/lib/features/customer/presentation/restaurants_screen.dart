@@ -4,7 +4,9 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../../core/contracts/models.dart';
 import '../../../core/theme/app_theme.dart';
+import 'customer_bottom_nav.dart';
 import 'customer_controller.dart';
+import 'plan_checkout_modal.dart';
 
 /// Catálogo de restaurantes afiliados, filtros y detalle del Menú del Día.
 class RestaurantsScreen extends ConsumerStatefulWidget {
@@ -170,6 +172,7 @@ class _RestaurantsScreenState extends ConsumerState<RestaurantsScreen> {
               ),
             ],
           ),
+          bottomNavigationBar: const CustomerBottomNav(currentIndex: 1),
         );
       },
     );
@@ -486,6 +489,19 @@ class _RestaurantsScreenState extends ConsumerState<RestaurantsScreen> {
                     ),
                   const SizedBox(height: 12),
                   ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.of(ctx).pop();
+                      PlanCheckoutModal.show(
+                        context,
+                        restaurantId: restaurant.id,
+                        restaurantName: restaurant.name,
+                      );
+                    },
+                    icon: const Icon(Icons.local_offer_rounded),
+                    label: const Text('Quiero este'),
+                  ),
+                  const SizedBox(height: 10),
+                  OutlinedButton.icon(
                     onPressed: () {
                       Navigator.of(ctx).pop();
                       context.go('/customer/pase');

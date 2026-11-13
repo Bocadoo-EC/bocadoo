@@ -8,7 +8,9 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/contracts/qr_parser.dart';
 import '../../../core/theme/app_theme.dart';
+import 'customer_bottom_nav.dart';
 import 'customer_controller.dart';
+import 'plan_checkout_modal.dart';
 
 /// Pantalla principal del Comensal: Pase digital, saldo de almuerzos y QR rotativo.
 class PaseScreen extends ConsumerStatefulWidget {
@@ -71,6 +73,7 @@ class _PaseScreenState extends ConsumerState<PaseScreen> {
               ),
             _ => _buildContent(context, controller, uiState),
           },
+          bottomNavigationBar: const CustomerBottomNav(currentIndex: 0),
         );
       },
     );
@@ -86,6 +89,12 @@ class _PaseScreenState extends ConsumerState<PaseScreen> {
     if (pass == null || pass.remainingLunches <= 0 || pass.status == 'AGOTADO') {
       return _PaseExhaustedView(
         pass: pass,
+        onRenew: () => PlanCheckoutModal.show(
+          context,
+          restaurantId: pass?.restaurantId ?? 'r1',
+          restaurantName: pass?.restaurantName ?? 'La Cuchara de San Blas',
+          isRenewal: true,
+        ),
         onExploreRestaurants: () => context.go('/customer/restaurants'),
         onLogout: () => context.go('/login'),
         onShowHistory: () => _showHistorySheet(context, uiState.history),
@@ -440,6 +449,19 @@ class _PaseScreenState extends ConsumerState<PaseScreen> {
 
                     // 3. BOTONES DE ACCIÓN INFERIORES
                     ElevatedButton.icon(
+                      onPressed: () => PlanCheckoutModal.show(
+                        context,
+                        restaurantId: pass.restaurantId,
+                        restaurantName: pass.restaurantName,
+                        isRenewal: true,
+                      ),
+                      icon: const Icon(Icons.autorenew_rounded, size: 20),
+                      label: const Text('Renovar'),
+                    ),
+
+                    const SizedBox(height: 12),
+
+                    OutlinedButton.icon(
                       onPressed: () => context.go('/customer/restaurants'),
                       icon: const Icon(Icons.restaurant_rounded, size: 20),
                       label: const Text('Explorar restaurantes'),
@@ -751,12 +773,14 @@ class _UserAvatar extends StatelessWidget {
 /// Estado visual: Pase agotado o sin planes activos
 class _PaseExhaustedView extends StatelessWidget {
   final CustomerPass? pass;
+  final VoidCallback onRenew;
   final VoidCallback onExploreRestaurants;
   final VoidCallback onLogout;
   final VoidCallback onShowHistory;
 
   const _PaseExhaustedView({
     required this.pass,
+    required this.onRenew,
     required this.onExploreRestaurants,
     required this.onLogout,
     required this.onShowHistory,
@@ -815,6 +839,12 @@ class _PaseExhaustedView extends StatelessWidget {
             ),
             const SizedBox(height: 28),
             ElevatedButton.icon(
+              onPressed: onRenew,
+              icon: const Icon(Icons.autorenew_rounded),
+              label: const Text('Renovar'),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
               onPressed: onExploreRestaurants,
               icon: const Icon(Icons.explore_rounded),
               label: const Text('Explorar restaurantes'),
