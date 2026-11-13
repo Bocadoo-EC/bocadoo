@@ -1,212 +1,177 @@
-# 🚀 Master Execution Plan & Antigravity Prompts — Bocadoo Mobile
+Plan de Ejecución por Fases: Bocadoo Mobile (Flutter)
 
-> **Stack:** Flutter (Dart) | Material Design 3 | Clean Architecture + MVVM  
-> **Estrategia Git:** `main` (Core compartida) ➡️ `feat/customer` (James) | `feat/owner` (Carlos)
+Documento de Control y Tareas — Bocadoo PMV
+Fuente de verdad de diseño: bocadoo/docs/IDENTIDAD_BOCADOO.md
+Referencia de prototipo Web: Workspace inspo-palette-creation
 
----
+🎯 Objetivo General
 
-## 🛠️ 1. Configuración Obligatoria del Workspace (Para Ambos)
+Trasladar de manera fiel el prototipo web funcional y visualmente completo (inspo-palette-creation) a la aplicación Flutter (bocadoo/mobile). La app debe respetar estrictamente el sistema de diseño Material Design 3 de Bocadoo (paleta morada #8234C6, tipografía Plus Jakarta Sans, radios redondeados, soporte claro/oscuro sin destellos y diccionario de microcopy permitido).
 
-Antes de ejecutar cualquier prompt en Antigravity IDE:
+📋 Lista de Fases y Tareas Tecnológicas
 
-1. Abre **Antigravity IDE** en la carpeta del proyecto `bocadoo`.
-2. Ve al menú superior: **`File` > `Add Folder to Workspace...`**.
-3. Selecciona la carpeta local donde tienes clonado el **PMV Web** (landing/web actual).
-4. Verifica que ambas carpetas aparezcan en el panel explorador lateral. Esto permite que el agente de IA inspeccione pantallas, colores, modelos de datos y lógica directamente del código web existente.
+🎨 FASE 0: Sistema de Diseño, Tokens y Componentes Atómicos (Material 3)
 
----
+Objetivo: Establecer la base visual inmutable para que ninguna pantalla use colores hardcodeados ni estilos fuera del manual de marca.
 
-## 🔀 2. Flujo de Trabajo en Git (Paralelo y Sin Conflictos)
+[ ] 0.1 Configuración de Tokens y Tema (app_theme.dart)
 
-```
-                            ┌──> [feat/customer] (James)  ──> Prompts C1 a C4 ──┐
-                            │                                                   ├──> PRs a main
- [main] (Fase 0 Completa) ──┤                                                   │
-                            │                                                   │
-                            └──> [feat/owner]    (Carlos) ──> Prompts O1 a O4 ──┘
-```
+Implementar paleta clara y oscura oficial en mobile/lib/core/theme/app_theme.dart:
 
-### Comandos de inicio de rama (Ejecutar en la terminal de `bocadoo`):
+Primario: #8234C6 (Claro) / #DEB7FF (Oscuro)
 
-* **James (Módulo Comensal):**
-  ```powershell
-  git checkout main
-  git pull origin main
-  git checkout -b feat/customer
-  ```
+Fondo general: #F5ECFF (Claro) / #1C1127 (Oscuro)
 
-* **Carlos (Módulo Dueño / Restaurante):**
-  ```powershell
-  git checkout main
-  git pull origin main
-  git checkout -b feat/owner
-  ```
+Tarjetas (surface): #FFFFFF (Claro) / #2A1B3A (Oscuro)
 
----
+Texto base (foreground): #2D0050 (Claro) / #F1DBFF (Oscuro)
 
-## 🔒 3. Reglas de Oro de Estructura
+Texto secundario: #635C65 (Claro) / #CDB8E0 (Oscuro)
 
-* ❌ **Prohibido modificar contratos globales:** No alteres archivos dentro de `lib/core/` sin coordinar antes.
-* 🟢 **James trabaja únicamente en:** `lib/features/customer/` (y añade dependencias en `pubspec.yaml` si lo requiere).
-* 🔵 **Carlos trabaja únicamente en:** `lib/features/owner/` (y añade dependencias en `pubspec.yaml` si lo requiere).
-* ✅ **Verificación obligatoria:** Ejecutar siempre `flutter analyze` al finalizar cada prompt.
+Configurar tema de bordes (#CDC4CE / #4A454D) y contenedor de inputs (#FFFFFF / #2A1B3A).
 
----
+Configurar ThemeData claro y oscuro de Flutter usando Material 3 (useMaterial3: true).
 
-## 🍔 TRACK A: Módulo Comensal — James (`feat/customer`)
+[ ] 0.2 Tipografía y Radios Globales
 
-| Fase | Componentes / Archivos | Objetivo |
-| :--- | :--- | :--- |
-| **C1** | `mock_customer_repo.dart`, `customer_controller.dart` | Repositorio mock con datos del PMV Web y gestor de estado MVVM. |
-| **C2** | `pase_screen.dart` | Pase digital, tarjeta con saldo 14/20, QR dinámico e historial. |
-| **C3** | `restaurants_screen.dart` | Catálogo de restaurantes, filtros de categorías y modal de Menú del Día. |
-| **C4** | Persistencia local offline | Caché en memoria / SharedPreferences para mostrar QR sin internet. |
+Asegurar la fuente Plus Jakarta Sans en el proyecto (pubspec.yaml y assets/google_fonts).
 
----
+Aplicar jerarquía de tamaños: Metadatos 13px (600), Lectura 15px, Botones 17px (700/800), Números gigantes 32px–48px (800).
 
-### 🤖 Prompts para Antigravity — Track Comensal
+Definir radios globales: Botones en Cápsula (rounded-full / 56px de alto), Tarjetas de 28px a 32px, Inputs de 14px a 16px (rounded-2xl).
 
-#### 📌 Prompt C1 — Data Mock & Controller MVVM
-```markdown
-Lee las reglas en @GEMINI.md. Estamos en la rama `feat/customer`.
-Inspecciona el código del PMV Web en este Workspace para extraer la estructura exacta de los datos del Comensal (planes activos, almuerzos disponibles/usados, historial de consumos, restaurantes y menú del día).
+[ ] 0.3 Componentes Atómicos Reutilizables (core/widgets/ o common/)
 
-Implementa dentro de `bocadoo/mobile/lib/features/customer/`:
-1. `data/mock_customer_repo.dart`: Implementa `ICustomerRepository` (definido en `core/contracts/repositories.dart`) con datos realistas idénticos al flujo del PMV Web, simulando latencia de red (`Future.delayed`) y manejo de errores.
-2. `presentation/customer_controller.dart`: Gestor de estado (`ChangeNotifier` o `ValueNotifier`) que maneje los estados `Loading`, `Success` y `Error` sin bloquear la UI.
+BocadooButton: Botón cápsula primario (morado sólido, 1 por grupo) y secundario (borde o container).
 
-REGLA: No modifiques ningún archivo fuera de `features/customer/` (salvo `pubspec.yaml` si requiere paquetes). Ejecuta `flutter analyze` en `bocadoo/mobile` al terminar.
-```
+BocadooHeader: Header superior con degradado hero-gradient (linear-gradient(160deg, #9C51E1, #8234C6, #680EAC)) y esquinas inferiores redondeadas de 40px.
 
-#### 📌 Prompt C2 — Pantalla del Pase Digital (`pase_screen.dart`)
-```markdown
-Lee las reglas en @GEMINI.md.
-Inspecciona en el PMV Web la vista principal del Comensal (tarjeta de pase digital, contador de almuerzos restantes, barra de progreso, código QR dinámico y estado cuando el plan está agotado).
+BocadooQr: Contenedor del QR con fondo blanco obligatorio #FFFFFF y módulos #2D0050 (inviolable en ambos temas).
 
-Implementa `bocadoo/mobile/lib/features/customer/presentation/pase_screen.dart`:
-1. Replica la jerarquía visual, paleta morada Material 3 (modo claro y oscuro) y textos del PMV Web.
-2. Renderiza el código QR dinámico del usuario usando el payload generado por `core/contracts/qr_parser.dart` (instala `qr_flutter` si hace falta).
-3. Maneja los estados visuales: Carga (Shimmer), Pase Activo, Pase Agotado (con botón para ver/renovar planes) y Error.
-4. Incluye botón desplegable (`showModalBottomSheet`) para el Historial de Consumos (`ConsumptionRecord`) y botón para cerrar sesión (`/login`).
+StatusChip: Chips de estado para Validado (verde), Renovar/Agotado/Error (rojo) y Oferta (morado).
 
-REGLA: Trabaja exclusivamente dentro de `features/customer/`. Ejecuta `flutter analyze` al finalizar.
-```
+BottomNavBar: NavigationBar de Flutter adaptado a la identidad (pastilla primary-container para la pestaña activa).
 
-#### 📌 Prompt C3 — Catálogo de Restaurantes y Menú del Día (`restaurants_screen.dart`)
-```markdown
-Lee las reglas en @GEMINI.md.
-Inspecciona en el PMV Web la vista de restaurantes afiliados, filtros, horarios y detalle del menú del día.
+👤 FASE 1: Módulo Comensal / Customer App
 
-Implementa `bocadoo/mobile/lib/features/customer/presentation/restaurants_screen.dart`:
-1. Muestra la lista de restaurantes afiliados con buscador (`TextField`), filtros rápidos con `ChoiceChip` (Todos, Ejecutivo, Veggie, Económico) y tarjetas estilizadas.
-2. Al hacer tap en un restaurante, despliega un modal `showModalBottomSheet` con el Menú del Día categorizado (Sopa, Fuerte, Bebida, Postre).
-3. Conecta la navegación fluida con `pase_screen.dart`.
+Objetivo: Replicar el catálogo de restaurantes, compra/renovación de pases y la tarjeta digital de almuerzos (QR).
 
-REGLA: Trabaja exclusivamente dentro de `features/customer/`. Ejecuta `flutter analyze` al finalizar.
-```
+[ ] 1.1 Catalogo de Restaurantes (restaurants_screen.dart)
 
-#### 📌 Prompt C4 — Persistencia Local Offline (Caché QR)
-```markdown
-Lee las reglas en @GEMINI.md.
-Para garantizar que el comensal pueda presentar su QR en el restaurante aun sin señal/internet:
+Encabezado con saludo al usuario y barra de búsqueda ("Buscar restaurante").
 
-1. Actualiza `mock_customer_repo.dart` (o añade `local_customer_cache.dart` en `features/customer/data/`) usando `shared_preferences` para almacenar el último `CustomerPass` cargado y su token QR.
-2. Si falla la red o no hay conexión, `pase_screen.dart` debe mostrar automáticamente el pase guardado en caché con un indicador discreto de "Modo Offline".
-3. Asegura que las rutas `/customer/pase` y `/customer/restaurants` estén conectadas correctamente en `app_router.dart`.
+Tarjetas de restaurantes con fotos de comida (sin alteración por tema), etiqueta de precio, descuento y badge "Ahorras $X".
 
-Ejecuta `flutter analyze` y verifica que el flujo de Comensal compile con 0 errores.
-```
+Selector de menús o del día para el restaurante seleccionado.
 
----
+[ ] 1.2 Pantalla Mi Pase / Cartulina (pase_screen.dart)
 
-### 📤 Subida Final de James
-```powershell
-git add .
-git commit -m "feat(customer): modulo comensal completo con pase QR, restaurantes y soporte offline"
-git push origin feat/customer
-```
+Bloque superior a todo el ancho con hero-gradient y curvas de 40px. Muestra: nombre del plan, almuerzos restantes ("Te quedan 14") y fecha de vencimiento ("Vence 30 oct").
 
----
+Tarjeta de QR superpuesta ~48px sobre el degradado en surface con el código QR escaneable (#2D0050 sobre #FFFFFF).
 
-## 🏪 TRACK B: Módulo Dueño / Restaurante — Carlos (`feat/owner`)
+Botón rápido "Renovar" o "Comprar más almuerzos".
 
-| Fase | Componentes / Archivos | Objetivo |
-| :--- | :--- | :--- |
-| **O1** | `mock_owner_repo.dart`, `owner_controller.dart` | Lógica de validación QR, consumo de pases y métricas de caja. |
-| **O2** | `scanner_screen.dart` | Escáner QR de alta velocidad con overlay, linterna e ingreso manual. |
-| **O3** | `scan_result_screen.dart` | Vistas de resultado: Verde (Canje Exitoso) y Rojo (Rechazado/Sin saldo). |
-| **O4** | `cash_closing_screen.dart`, `sell_plan_modal.dart` | Resumen de caja diaria, historial de ventas y modal para vender plan. |
+[ ] 1.3 Flujo de Adquisición / Selección de Plan
 
----
+Modal/Bottom Sheet para elegir plan de almuerzos (ej: 10 almuerzos, 20 almuerzos).
 
-### 🤖 Prompts para Antigravity — Track Dueño
+Resumen de pago claro usando el vocabulario permitido: "Quiero este", "Paga en caja".
 
-#### 📌 Prompt O1 — Data Mock & Controller Dueño
-```markdown
-Lee las reglas en @GEMINI.md. Estamos en la rama `feat/owner`.
-Inspecciona el código del PMV Web en este Workspace para extraer la lógica del Dueño/Restaurante (validación de QR, canje de almuerzos, métricas de caja y venta de nuevos planes).
+[ ] 1.4 Perfil y Ajustes del Comensal
 
-Implementa dentro de `bocadoo/mobile/lib/features/owner/`:
-1. `data/mock_owner_repo.dart`: Implementa `IOwnerRepository` (definido en `core/contracts/repositories.dart`). Simula validación de QR usando `core/contracts/qr_parser.dart`, control de doble escaneo y resumen de caja.
-2. `presentation/owner_controller.dart`: Gestor de estado MVVM con estados `Idle`, `Scanning`, `Success` y `Error`.
+Selector de Tema (ThemeToggle): Sistema (por defecto), Claro y Oscuro. Persistencia de la selección.
 
-REGLA: No modifiques ningún archivo fuera de `features/owner/` (salvo `pubspec.yaml` si requiere paquetes). Ejecuta `flutter analyze` en `bocadoo/mobile` al terminar.
-```
+Historial de almuerzos consumidos.
 
-#### 📌 Prompt O2 — Escáner QR (`scanner_screen.dart`)
-```markdown
-Lee las reglas en @GEMINI.md.
-Inspecciona en el PMV Web la pantalla de escaneo del Dueño.
+🏪 FASE 2: Módulo Dueño / Owner App
 
-Implementa `bocadoo/mobile/lib/features/owner/presentation/scanner_screen.dart`:
-1. Vista de lectura QR en dispositivo usando `mobile_scanner` (basado en ML Kit Barcode Scanning offline) con overlay animado y botón de linterna.
-2. Incluye un botón "Simular Escaneo" (para pruebas en emulador) que pruebe un token válido y uno inválido/expirado.
-3. Botón inferior "Ingresar Código Manualmente" con diálogo modal para escribir el token en caso de falla de cámara.
-4. Al detectar un código, invoca `ownerController.validateQr()` y navega a `scan_result_screen.dart`.
+Objetivo: Replicar las herramientas operativas del dueño: escáner de pases, validación instantánea, caja y menú.
 
-REGLA: Trabaja exclusivamente dentro de `features/owner/`. Ejecuta `flutter analyze` al finalizar.
-```
+[ ] 2.1 Escáner de Pases QR (scanner_screen.dart)
 
-#### 📌 Prompt O3 — Resultado del Escaneo (`scan_result_screen.dart`)
-```markdown
-Lee las reglas en @GEMINI.md.
-Inspecciona en el PMV Web las pantallas de confirmación y rechazo del escáner.
+Vista de cámara completa utilizando paquete nativo optimizado (mobile_scanner / ML Kit).
 
-Implementa `bocadoo/mobile/lib/features/owner/presentation/scan_result_screen.dart`:
-1. Caso Pase VÁLIDO (Verde): Muestra avatar del estudiante, nombre, plan actual, saldo restante (ej: "13/20 restantes") y botón "CONFIRMAR CANJE".
-2. Caso Pase INVÁLIDO / SIN SALDO (Rojo): Muestra motivo del rechazo (ej: "Pase consumido hoy a las 12:45 PM") y botón directo "VENDER PLAN" que abre `sell_plan_modal.dart`.
-3. Botón principal "Volver a Escanear".
+Marco guía de escaneo con diseño en bordes morados y botón de linterna/flash.
 
-REGLA: Trabaja exclusivamente dentro de `features/owner/`. Ejecuta `flutter analyze` al finalizar.
-```
+Switch rápido para cambiar modo (Validar Almuerzo vs. Venta Rápida).
 
-#### 📌 Prompt O4 — Cierre de Caja y Venta de Planes (`cash_closing_screen.dart` & `sell_plan_modal.dart`)
-```markdown
-Lee las reglas en @GEMINI.md.
-Inspecciona en el PMV Web el dashboard de caja diaria y el modal para registrar ventas de planes.
+[ ] 2.2 Resultado de Validación (scan_result_screen.dart)
 
-Implementa dentro de `bocadoo/mobile/lib/features/owner/presentation/`:
-1. `cash_closing_screen.dart`: Cards con métricas (Total Almuerzos Canjeados Hoy, Planes Vendidos, Ingresos Totales $), lista cronológica de transacciones y botón "Cerrar Caja".
-2. `sell_plan_modal.dart`: BottomSheet con formulario para ID/Cédula del estudiante, selector de plan (10, 20 o 30 almuerzos), método de pago y botón "Registrar Venta".
-3. Conecta las rutas `/owner/scanner`, `/owner/scan-result` y `/owner/cash-closing` en `app_router.dart`.
+Feedback visual instantáneo tras el escaneo:
 
-Ejecuta `flutter analyze` y confirma que la app de Dueño compile sin errores ni advertencias.
-```
+Estado Éxito: Chip verde Validado, muestra almuerzos restantes ("Le quedan 19"), botón grande "Pasar cartulina" o "Deshacer".
 
----
+Estado Error: Chip rojo Ya validado, Vencido o Sin almuerzos.
 
-### 📤 Subida Final de Carlos
-```powershell
-git add .
-git commit -m "feat(owner): modulo dueño completo con escaner ML Kit, resultado de canje y cierre de caja"
-git push origin feat/owner
-```
+Sonido/Vibración de confirmación.
 
----
+[ ] 2.3 Cierre de Caja Diaria (cash_closing_screen.dart)
 
-## 🎯 4. Checklist de Integración Final (Pull Request a `main`)
+Resumen de métricas del día: Total cobrado, almuerzos servidos, desglose por Efectivo y Transferencia.
 
-- [ ] **Fase 0:** Tema, modelos de datos, interfaces y login subidos a `main`.
-- [ ] **James (`feat/customer`):** `flutter analyze` arroja `0 issues`. Pantalla de pase QR, catálogo y caché offline verificados.
-- [ ] **Carlos (`feat/owner`):** `flutter analyze` arroja `0 issues`. Escáner QR, pantalla verde/roja, cierre de caja y venta de planes verificados.
-- [ ] **Integración en GitHub:** Crear Pull Request de `feat/customer` ➡️ `main` y `feat/owner` ➡️ `main`.
+Calculadora/Cuadre de caja: Botón "Cerrar caja", badges de "Cuadra", "Faltan $3,00" o "Sobran $1,50".
+
+Lista de "Almuerzos que debes" / pendientes de cobro.
+
+[ ] 2.4 Publicación de Menú del Día
+
+Pantalla o modal rápido para ingresar/actualizar el plato de hoy.
+
+Acciones rápidas: "Publicar", "Repetir ayer", botón de pánico "Se acabó" / "Agotado".
+
+🔀 FASE 3: Enrutamiento, Estado y Persistencia
+
+Objetivo: Conectar todas las pantallas mediante GoRouter y sincronizar el estado global.
+
+[ ] 3.1 Consolidación de Rutas (app_router.dart)
+
+Definir la estructura limpia con GoRouter para navegación por Shell (BottomNavigationBar compartida para Comensal y Dueño).
+
+Separación clara de rutas /customer/* y /owner/*.
+
+[ ] 3.2 Gestión de Estado (Provider / Riverpod)
+
+Provider de Autenticación / Rol (Comensal vs. Dueño).
+
+Provider de Pases y Consumo (actualización en tiempo real del saldo de almuerzos).
+
+Provider de Menú y Estado del Restaurante.
+
+[ ] 3.3 Conexión con Datos (Mock / Backend API)
+
+Repositorios alineados con las estructuras de datos usadas en inspo-palette-creation.
+
+Simulación de latencia y manejo de errores sin conexión.
+
+🔬 FASE 4: Auditoría de Marca, Calidad y Pruebas Multiplataforma
+
+Objetivo: Verificar cumplimiento estricto del manual de marca y asegurar estabilidad.
+
+[ ] 4.1 Auditoría de Marca e Identidad (IDENTIDAD_BOCADOO.md)
+
+Verificación de Colores: Cero valores hexadecimales fuera de app_theme.dart.
+
+Verificación de Contraste: Todo texto ≥ 4.5:1 sobre su fondo.
+
+Verificación de Vocabulario: Cero palabras prohibidas ("suscripción", "transacción", "canje", "redención", "gestión", "módulo", "dashboard", "procesar", "ítem"). Todo en lenguaje simple y coloquial ecuatoriano.
+
+Verificación de Formato de Dinero: $2,75, $55,00, $0,00.
+
+[ ] 4.2 Pruebas en Android y Preparación para iOS
+
+Ejecutar flutter analyze en mobile/: 0 errores.
+
+Ejecutar flutter test en mobile/: todos los tests pasando.
+
+Verificar permisos de cámara en Android (AndroidManifest.xml) e iOS (ios/Runner/Info.plist con NSCameraUsageDescription).
+
+Probar renderizado y respuesta táctil en emulador/dispositivo Android y navegador (modo vista previa iOS).
+
+📌 Protocolo de Trabajo para Antigravity
+
+Progreso Incremental: Ejecutar una tarea o subfase a la vez.
+
+Validación Visual Obligatoria: Tras modificar cada pantalla, verificar el resultado en el tema claro y oscuro.
+
+Registro de Estado: Marcar las casillas [x] en este archivo TASKS.md a medida que se completen y verifiquen las funcionalidades.
