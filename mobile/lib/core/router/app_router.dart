@@ -3,6 +3,8 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../features/auth/presentation/login_screen.dart';
 import '../../features/owner/presentation/cash_closing_screen.dart';
+import '../../features/owner/presentation/owner_menu_screen.dart';
+import '../../features/owner/presentation/owner_settings_screen.dart';
 import '../../features/owner/presentation/scan_result_screen.dart';
 import '../../features/owner/presentation/scanner_screen.dart';
 import '../../features/customer/presentation/pase_screen.dart';
@@ -50,6 +52,16 @@ final GoRouter appRouter = GoRouter(
       name: 'owner_cash_closing',
       builder: (context, state) => const CashClosingScreen(),
     ),
+    GoRoute(
+      path: '/owner/menu',
+      name: 'owner_menu',
+      builder: (context, state) => const OwnerMenuScreen(),
+    ),
+    GoRoute(
+      path: '/owner/settings',
+      name: 'owner_settings',
+      builder: (context, state) => const OwnerSettingsScreen(),
+    ),
   ],
   errorBuilder: (context, state) => Scaffold(
     body: Center(
@@ -57,83 +69,3 @@ final GoRouter appRouter = GoRouter(
     ),
   ),
 );
-
-/// Placeholder temporal para rutas en desarrollo paralelo
-class _RoutePlaceholder extends StatelessWidget {
-  final String title;
-  final String routePath;
-  final String subtitle;
-
-  const _RoutePlaceholder({
-    required this.title,
-    required this.routePath,
-    required this.subtitle,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colors = theme.colorScheme;
-
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(title),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () {
-            if (context.canPop()) {
-              context.pop();
-            } else {
-              context.go('/login');
-            }
-          },
-        ),
-      ),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: colors.primaryContainer,
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  Icons.construction_rounded,
-                  size: 40,
-                  color: colors.onPrimaryContainer,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                title,
-                style: theme.textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: colors.onSurface,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                subtitle,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: colors.onSurfaceVariant,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 24),
-              OutlinedButton(
-                onPressed: () => context.go('/login'),
-                child: const Text('Volver al Login'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-

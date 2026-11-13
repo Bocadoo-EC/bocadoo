@@ -3,12 +3,20 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/contracts/models.dart';
 import '../../../core/contracts/repositories.dart';
-import '../data/mock_owner_repo.dart';
+import '../data/repositories/owner_repository.dart';
+import '../domain/repositories/i_owner_repository.dart';
 
-/// Repositorio del Dueño. Hoy es el mock; para pasar al backend real basta
-/// con sobrescribir este provider (p. ej. con `ApiOwnerRepository`).
+/// Repositorio compartido del Dueño (escaneo + menú).
+/// Para pasar al backend real basta con reemplazar [OwnerRepository] por la
+/// implementación real sin tocar las pantallas.
+final _sharedOwnerRepository = OwnerRepository();
+
 final ownerRepositoryProvider = Provider<IOwnerRepository>(
-  (ref) => MockOwnerRepository(),
+  (ref) => _sharedOwnerRepository,
+);
+
+final ownerMenuRepositoryProvider = Provider<IOwnerMenuRepository>(
+  (ref) => _sharedOwnerRepository,
 );
 
 /// Restaurante de la caja actual (mock; el backend lo entregará con la sesión).
@@ -124,11 +132,11 @@ class OwnerController extends Notifier<OwnerState> {
       state = ok
           ? OwnerSuccess(current.result, redeemed: true)
           : OwnerError(
-              'No se pudo confirmar el canje (¿ya se descontó?).',
+              'No se pudo registrar el almuerzo (¿ya se contó?).',
               result: current.result,
             );
     } catch (e) {
-      state = OwnerError('Error al confirmar el canje: $e',
+      state = OwnerError('Error al registrar el almuerzo: $e',
           result: current.result);
     } finally {
       _busy = false;

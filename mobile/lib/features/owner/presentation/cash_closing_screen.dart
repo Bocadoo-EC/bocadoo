@@ -1,5 +1,5 @@
-import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/contracts/models.dart';
@@ -127,7 +127,7 @@ class _CashClosingScreenState extends ConsumerState<CashClosingScreen> {
               Expanded(
                 child: _MetricCard(
                   icon: Icons.restaurant,
-                  label: 'Almuerzos canjeados hoy',
+                  label: 'Almuerzos validados hoy',
                   value: '${summary.lunchesRedeemedToday}',
                 ),
               ),
@@ -408,7 +408,7 @@ class _TransactionTile extends StatelessWidget {
   final TransactionItem item;
 
   IconData get _icon => switch (item.type) {
-        'Canje' => Icons.restaurant,
+        'Validado' => Icons.restaurant,
         'Venta Plan' => Icons.sell_outlined,
         _ => Icons.payments_outlined,
       };
@@ -417,7 +417,7 @@ class _TransactionTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = context.colorScheme;
-    final isRedeem = item.type == 'Canje';
+    final isRedeem = item.type == 'Validado';
 
     return ListTile(
       contentPadding: EdgeInsets.zero,

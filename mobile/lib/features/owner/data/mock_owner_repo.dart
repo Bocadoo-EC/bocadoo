@@ -103,7 +103,7 @@ class MockOwnerRepository implements IOwnerRepository {
       TransactionItem(
         id: redemption.id,
         customerName: student.name,
-        type: 'Canje',
+        type: 'Validado',
         amount: 0,
         paymentMethod: 'Plan',
         timestamp: now,
