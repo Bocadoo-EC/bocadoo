@@ -39,7 +39,7 @@ class _ScanResultScreenState extends ConsumerState<ScanResultScreen> {
     if (sold == true && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Plan vendido. Vuelve a escanear para canjear.'),
+          content: Text('Plan vendido. Vuelve a escanear para validar.'),
         ),
       );
     }
@@ -119,7 +119,7 @@ class _ScanResultScreenState extends ConsumerState<ScanResultScreen> {
                                 color: context.colorScheme.onPrimary,
                               ),
                             )
-                          : const Text('CONFIRMAR CANJE'),
+                          : const Text('CONFIRMAR VALIDACIÓN'),
                     ),
                     const SizedBox(height: 12),
                   ],
@@ -201,7 +201,7 @@ class _ResultView {
         tone: _Tone.success,
         icon: Icons.check_circle,
         title: 'Almuerzo registrado',
-        detail: 'El canje quedó descontado del plan.',
+        detail: 'Almuerzo descontado del plan.',
         balanceLabel: balance,
       );
     }

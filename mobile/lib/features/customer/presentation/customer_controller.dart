@@ -3,7 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/contracts/models.dart';
 import '../../../core/contracts/repositories.dart';
+import '../../../core/network/api_client.dart';
+import '../../../core/network/api_config.dart';
 import '../data/mock_customer_repo.dart';
+import '../data/repositories/remote_customer_repository.dart';
 
 /// Estados posibles de la interfaz del Comensal
 enum CustomerStatus { initial, loading, success, error }
@@ -240,8 +243,12 @@ class CustomerController extends ChangeNotifier {
   }
 }
 
-/// Provider de Riverpod para el repositorio de Comensal
+/// Provider de Riverpod para el repositorio de Comensal (conmuta según [useRemoteApiProvider]).
 final customerRepositoryProvider = Provider<ICustomerRepository>((ref) {
+  final useRemote = ref.watch(useRemoteApiProvider);
+  if (useRemote) {
+    return RemoteCustomerRepository(dio: ref.watch(dioProvider));
+  }
   return MockCustomerRepository();
 });
 

@@ -3,13 +3,20 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/contracts/models.dart';
 import '../../../core/contracts/repositories.dart';
+import '../../../core/network/api_client.dart';
+import '../../../core/network/api_config.dart';
 import '../data/mock_owner_repo.dart';
+import '../data/repositories/remote_owner_repository.dart';
 
-/// Repositorio del Dueño. Hoy es el mock; para pasar al backend real basta
-/// con sobrescribir este provider (p. ej. con `ApiOwnerRepository`).
-final ownerRepositoryProvider = Provider<IOwnerRepository>(
-  (ref) => MockOwnerRepository(),
-);
+/// Repositorio del Dueño (conmuta entre mock local y API real según
+/// [useRemoteApiProvider]).
+final ownerRepositoryProvider = Provider<IOwnerRepository>((ref) {
+  final useRemote = ref.watch(useRemoteApiProvider);
+  if (useRemote) {
+    return RemoteOwnerRepository(dio: ref.watch(dioProvider));
+  }
+  return MockOwnerRepository();
+});
 
 /// Restaurante de la caja actual (mock; el backend lo entregará con la sesión).
 final ownerRestaurantIdProvider = Provider<String>((ref) => 'rest-001');

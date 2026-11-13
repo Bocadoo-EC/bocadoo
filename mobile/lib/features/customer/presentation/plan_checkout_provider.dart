@@ -1,15 +1,23 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/contracts/models.dart';
+import '../../../core/network/api_client.dart';
+import '../../../core/network/api_config.dart';
 import '../data/repositories/customer_plan_repository.dart';
+import '../data/repositories/remote_customer_repository.dart';
 import '../domain/models/plan_option.dart';
 import '../domain/repositories/i_plan_repository.dart';
 import 'customer_controller.dart';
 
-/// Provider de Riverpod para el repositorio de paquetes del Comensal.
-final planRepositoryProvider = Provider<IPlanRepository>(
-  (ref) => CustomerPlanRepository(),
-);
+/// Provider de Riverpod para el repositorio de paquetes del Comensal
+/// (conmuta entre local y remoto según [useRemoteApiProvider]).
+final planRepositoryProvider = Provider<IPlanRepository>((ref) {
+  final useRemote = ref.watch(useRemoteApiProvider);
+  if (useRemote) {
+    return RemoteCustomerRepository(dio: ref.watch(dioProvider));
+  }
+  return CustomerPlanRepository();
+});
 
 /// Opciones de paquetes disponibles (5, 10 y 20 almuerzos).
 final planOptionsProvider =

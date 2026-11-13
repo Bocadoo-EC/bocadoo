@@ -128,7 +128,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         Text(
                           'tu almuerzo, más fácil',
                           style: TextStyle(
-                            fontSize: 12,
+                            fontSize: 13,
                             fontWeight: FontWeight.w600,
                             color: colors.onSurfaceVariant,
                           ),
@@ -276,10 +276,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                           ),
                           Text(
                             isCustomer
-                                ? 'Canjea en segundos sin filas ni tarjetas'
+                                ? 'Valida en segundos sin filas ni tarjetas'
                                 : 'Escanea códigos QR y cuadra tu caja diaria',
                             style: TextStyle(
-                              fontSize: 12,
+                              fontSize: 13,
                               color: colors.onSurfaceVariant,
                             ),
                           ),

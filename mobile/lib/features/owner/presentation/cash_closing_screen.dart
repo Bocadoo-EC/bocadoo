@@ -127,7 +127,7 @@ class _CashClosingScreenState extends ConsumerState<CashClosingScreen> {
               Expanded(
                 child: _MetricCard(
                   icon: Icons.restaurant,
-                  label: 'Almuerzos canjeados hoy',
+                  label: 'Almuerzos validados hoy',
                   value: '${summary.lunchesRedeemedToday}',
                 ),
               ),
@@ -155,7 +155,7 @@ class _CashClosingScreenState extends ConsumerState<CashClosingScreen> {
             children: [
               Expanded(
                 child: Text(
-                  'Transacciones de hoy',
+                  'Movimientos de hoy',
                   style: theme.textTheme.titleMedium
                       ?.copyWith(fontWeight: FontWeight.w800),
                 ),

@@ -1,3 +1,15 @@
+import 'package:flutter_riverpod/legacy.dart';
+
+/// Interruptor global de entorno: `false` usa repositorios locales/offline y
+/// `true` conmuta toda la app a la API real en Render (`bck-bocadoo`).
+const bool kUseRemoteApi = bool.fromEnvironment(
+  'USE_REMOTE_API',
+  defaultValue: false,
+);
+
+/// Provider global para conmutar en tiempo de ejecución entre modo local y API real.
+final useRemoteApiProvider = StateProvider<bool>((ref) => kUseRemoteApi);
+
 /// Configuración de endpoints y red para Bocadoo (`bck-bocadoo`).
 class ApiConfig {
   ApiConfig._();
