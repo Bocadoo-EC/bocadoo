@@ -10,16 +10,12 @@ import '../local_customer_cache.dart';
 
 /// Implementación remota de [ICustomerRepository] e [IPlanRepository]
 /// conectada a `bck-bocadoo` (`/v1`).
-class RemoteCustomerRepository
-    implements ICustomerRepository, IPlanRepository {
+class RemoteCustomerRepository implements ICustomerRepository, IPlanRepository {
   final Dio _dio;
   final LocalCustomerCache _cache;
 
-  RemoteCustomerRepository({
-    required Dio dio,
-    LocalCustomerCache? cache,
-  })  : _dio = dio,
-        _cache = cache ?? LocalCustomerCache();
+  RemoteCustomerRepository({required this._dio, LocalCustomerCache? cache})
+    : _cache = cache ?? LocalCustomerCache();
 
   @override
   Future<CustomerPass> getActivePass({String? userId}) async {
@@ -43,9 +39,9 @@ class RemoteCustomerRepository
         '${ApiConfig.customerPass}/refresh-qr',
         data: {'passId': passId},
       );
-      final token = (response.data?['qrToken'] ??
-          response.data?['qr_token'] ??
-          '') as String;
+      final token =
+          (response.data?['qrToken'] ?? response.data?['qr_token'] ?? '')
+              as String;
       final cached = await _cache.getPass();
       if (cached != null && cached.id == passId && token.isNotEmpty) {
         await _cache.savePass(cached.copyWith(qrToken: token));
@@ -129,8 +125,9 @@ class RemoteCustomerRepository
     try {
       final response = await _dio.get<dynamic>(
         ApiConfig.customerPlans,
-        queryParameters:
-            restaurantId != null ? {'restaurantId': restaurantId} : null,
+        queryParameters: restaurantId != null
+            ? {'restaurantId': restaurantId}
+            : null,
       );
       final list = _extractList(response.data);
       return list.map(_parsePlanOption).toList();
@@ -171,10 +168,7 @@ class RemoteCustomerRepository
     try {
       await _dio.post<void>(
         '${ApiConfig.customerPlans}/claims',
-        data: {
-          'recordId': recordId,
-          'claimType': claimType.name,
-        },
+        data: {'recordId': recordId, 'claimType': claimType.name},
       );
     } on DioException catch (e) {
       throw NetworkException.fromDioException(e);
@@ -200,10 +194,12 @@ class RemoteCustomerRepository
       'id': map['id'] ?? map['passId'] ?? '',
       'userId': map['userId'] ?? map['user_id'] ?? '',
       'studentName': map['studentName'] ?? map['student_name'] ?? '',
-      'studentCareer': map['studentCareer'] ?? map['student_career'] ?? 'Estudiante',
+      'studentCareer':
+          map['studentCareer'] ?? map['student_career'] ?? 'Estudiante',
       'planName': map['planName'] ?? map['plan_name'] ?? 'Plan Bocadoo',
       'totalLunches': map['totalLunches'] ?? map['total_lunches'] ?? 0,
-      'remainingLunches': map['remainingLunches'] ?? map['remaining_lunches'] ?? 0,
+      'remainingLunches':
+          map['remainingLunches'] ?? map['remaining_lunches'] ?? 0,
       'expiresAt': map['expiresAt'] ?? map['expires_at'] ?? '',
       'qrToken': map['qrToken'] ?? map['qr_token'] ?? '',
       'restaurantId': map['restaurantId'] ?? map['restaurant_id'] ?? '',
@@ -235,10 +231,11 @@ class RemoteCustomerRepository
       imageUrl: (map['imageUrl'] ?? map['image_url'] ?? '') as String,
       logoUrl: (map['logoUrl'] ?? map['logo_url']) as String?,
       singleLunchPrice:
-          ((map['singleLunchPrice'] ?? map['single_lunch_price'] as num?) ?? 3.5)
+          ((map['singleLunchPrice'] ?? map['single_lunch_price'] as num?) ??
+                  3.5)
               .toDouble(),
-      planLunchPrice:
-          (map['planLunchPrice'] ?? map['plan_lunch_price'] as num?)?.toDouble(),
+      planLunchPrice: (map['planLunchPrice'] ?? map['plan_lunch_price'] as num?)
+          ?.toDouble(),
       occupancy: (map['occupancy'] ?? 'Libre') as String,
       isOpen: (map['isOpen'] ?? map['is_open'] ?? true) as bool,
       categories: categories,
@@ -288,4 +285,3 @@ class RemoteCustomerRepository
     );
   }
 }
-

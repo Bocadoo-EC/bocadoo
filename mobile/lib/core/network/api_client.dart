@@ -49,8 +49,7 @@ class NetworkException implements Exception {
       final problemStatus = (data['status'] as num?)?.toInt() ?? status;
       final title = data['title'] as String?;
       final detail = data['detail'] as String?;
-      final requestId =
-          (data['requestId'] ?? data['request_id']) as String?;
+      final requestId = (data['requestId'] ?? data['request_id']) as String?;
 
       final resolvedMessage = _resolveSpanishMessage(
         statusCode: problemStatus,
@@ -113,7 +112,7 @@ class TokenStorage {
   String? _memoryRefreshToken;
 
   TokenStorage({FlutterSecureStorage? storage})
-      : _storage = storage ?? const FlutterSecureStorage();
+    : _storage = storage ?? const FlutterSecureStorage();
 
   Future<String?> getAccessToken() async {
     try {
@@ -172,25 +171,25 @@ class AuthQueuedInterceptor extends QueuedInterceptor {
   final VoidCallback? onSessionExpired;
 
   AuthQueuedInterceptor({
-    required TokenStorage tokenStorage,
+    required this._tokenStorage,
     required Dio retryDio,
     Dio? refreshDio,
     this.onSessionExpired,
-  })  : _tokenStorage = tokenStorage,
-        _retryDio = retryDio,
-        _refreshDio = refreshDio ??
-            Dio(
-              BaseOptions(
-                baseUrl: retryDio.options.baseUrl,
-                connectTimeout: ApiConfig.connectTimeout,
-                receiveTimeout: ApiConfig.receiveTimeout,
-                sendTimeout: ApiConfig.sendTimeout,
-                headers: const {
-                  'Content-Type': 'application/json',
-                  'Accept': 'application/json, application/problem+json',
-                },
-              ),
-            );
+  }) : _retryDio = retryDio,
+       _refreshDio =
+           refreshDio ??
+           Dio(
+             BaseOptions(
+               baseUrl: retryDio.options.baseUrl,
+               connectTimeout: ApiConfig.connectTimeout,
+               receiveTimeout: ApiConfig.receiveTimeout,
+               sendTimeout: ApiConfig.sendTimeout,
+               headers: const {
+                 'Content-Type': 'application/json',
+                 'Accept': 'application/json, application/problem+json',
+               },
+             ),
+           );
 
   @override
   Future<void> onRequest(
@@ -311,11 +310,13 @@ class IdempotencyInterceptor extends Interceptor {
     final method = options.method.toUpperCase();
     final path = options.path.toLowerCase();
 
-    final requiresIdempotency = method == 'POST' &&
+    final requiresIdempotency =
+        method == 'POST' &&
         !path.startsWith('/auth') &&
         _idempotentPathFragments.any(path.contains);
 
-    if (requiresIdempotency && !options.headers.containsKey('Idempotency-Key')) {
+    if (requiresIdempotency &&
+        !options.headers.containsKey('Idempotency-Key')) {
       options.headers['Idempotency-Key'] = generateUuidV4();
     }
     handler.next(options);
@@ -341,12 +342,7 @@ class Rfc9457ErrorInterceptor extends Interceptor {
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) {
     final mapped = NetworkException.fromDioException(err);
-    handler.next(
-      err.copyWith(
-        error: mapped,
-        message: mapped.message,
-      ),
-    );
+    handler.next(err.copyWith(error: mapped, message: mapped.message));
   }
 }
 
@@ -360,20 +356,21 @@ class ApiClient {
     TokenStorage? tokenStorage,
     Dio? customDio,
     VoidCallback? onSessionExpired,
-  })  : tokenStorage = tokenStorage ?? TokenStorage(),
-        dio = customDio ??
-            Dio(
-              BaseOptions(
-                baseUrl: ApiConfig.baseUrl,
-                connectTimeout: ApiConfig.connectTimeout,
-                receiveTimeout: ApiConfig.receiveTimeout,
-                sendTimeout: ApiConfig.sendTimeout,
-                headers: const {
-                  'Content-Type': 'application/json',
-                  'Accept': 'application/json, application/problem+json',
-                },
-              ),
-            ) {
+  }) : tokenStorage = tokenStorage ?? TokenStorage(),
+       dio =
+           customDio ??
+           Dio(
+             BaseOptions(
+               baseUrl: ApiConfig.baseUrl,
+               connectTimeout: ApiConfig.connectTimeout,
+               receiveTimeout: ApiConfig.receiveTimeout,
+               sendTimeout: ApiConfig.sendTimeout,
+               headers: const {
+                 'Content-Type': 'application/json',
+                 'Accept': 'application/json, application/problem+json',
+               },
+             ),
+           ) {
     dio.interceptors.addAll([
       IdempotencyInterceptor(),
       AuthQueuedInterceptor(
@@ -396,4 +393,3 @@ final apiClientProvider = Provider<ApiClient>((ref) {
 final dioProvider = Provider<Dio>((ref) {
   return ref.watch(apiClientProvider).dio;
 });
-

@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -32,10 +32,7 @@ class _ScanResultScreenState extends ConsumerState<ScanResultScreen> {
   Future<void> _sellPlan(ScanResult result) async {
     final name = result.studentName;
     if (name == null) return;
-    final sold = await showSellPlanModal(
-      context,
-      studentIdentifier: name,
-    );
+    final sold = await showSellPlanModal(context, studentIdentifier: name);
     if (sold == true && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -84,7 +81,8 @@ class _ScanResultScreenState extends ConsumerState<ScanResultScreen> {
     );
 
     final canConfirm = state is OwnerSuccess && !redeemed;
-    final canSell = result != null &&
+    final canSell =
+        result != null &&
         result.actionRequired == 'VENDER_PLAN' &&
         result.studentName != null &&
         !redeemed;
@@ -190,7 +188,8 @@ class _ResultView {
       );
     }
 
-    final balance = (result.remainingLunches != null &&
+    final balance =
+        (result.remainingLunches != null &&
             result.totalLunches != null &&
             result.isValid)
         ? '${result.remainingLunches}/${result.totalLunches} restantes'
@@ -314,8 +313,7 @@ class _ResultCard extends StatelessWidget {
           if (view.balanceLabel != null) ...[
             const SizedBox(height: 16),
             Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
               decoration: BoxDecoration(
                 color: fg.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
@@ -356,8 +354,11 @@ class _StudentAvatar extends StatelessWidget {
   final Color foreground;
 
   String get _initials {
-    final parts =
-        name.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
+    final parts = name
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((p) => p.isNotEmpty)
+        .toList();
     if (parts.isEmpty) return '?';
     final first = parts.first[0];
     final second = parts.length > 1 ? parts[1][0] : '';
@@ -368,10 +369,8 @@ class _StudentAvatar extends StatelessWidget {
   Widget build(BuildContext context) {
     final initials = Text(
       _initials,
-      style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-            color: foreground,
-            fontWeight: FontWeight.w800,
-          ),
+      style: Theme.of(context).textTheme.headlineSmall
+          ?.copyWith(color: foreground, fontWeight: FontWeight.w800),
     );
     return CircleAvatar(
       radius: 36,

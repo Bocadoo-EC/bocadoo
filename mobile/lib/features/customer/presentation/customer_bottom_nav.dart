@@ -24,9 +24,14 @@ class CustomerBottomNav extends StatelessWidget {
       selectedIcon: Icons.restaurant_rounded,
     ),
     BocadooNavItem(
-      label: 'Ajustes',
-      icon: Icons.settings_outlined,
-      selectedIcon: Icons.settings_rounded,
+      label: 'Planes',
+      icon: Icons.confirmation_number_outlined,
+      selectedIcon: Icons.confirmation_number_rounded,
+    ),
+    BocadooNavItem(
+      label: 'Yo',
+      icon: Icons.person_outline_rounded,
+      selectedIcon: Icons.person_rounded,
     ),
   ];
 
@@ -43,6 +48,8 @@ class CustomerBottomNav extends StatelessWidget {
           case 1:
             context.go('/customer/restaurants');
           case 2:
+            context.go('/customer/plans');
+          case 3:
             context.go('/customer/profile');
         }
       },

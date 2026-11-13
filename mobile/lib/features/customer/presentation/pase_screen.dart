@@ -111,6 +111,31 @@ class _PaseScreenState extends ConsumerState<PaseScreen> {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final bColor = context.bocadooColors;
+    final authUser = ref.watch(authProvider).user;
+    final displayFirstName =
+        ((authUser?.fullName.trim().isNotEmpty ?? false)
+                ? authUser!.fullName.trim()
+                : pass.studentName.trim())
+            .split(' ')
+            .first;
+    final isExpiredOrEmpty =
+        pass.remainingLunches <= 0 || pass.expiresAt.isBefore(DateTime.now());
+    final isExpiringSoon = !isExpiredOrEmpty &&
+        (pass.remainingLunches <= 3 ||
+            pass.expiresAt.difference(DateTime.now()).inDays <= 3);
+    final (
+      String badgeLabel,
+      Color badgeBg,
+      Color badgeFg,
+    ) = isExpiredOrEmpty
+        ? ('AGOTADO', bColor.dangerContainer, bColor.danger)
+        : isExpiringSoon
+            ? (
+                'POR VENCER',
+                colors.primaryContainer,
+                colors.onPrimaryContainer,
+              )
+            : ('PLAN ACTIVO', bColor.successContainer, bColor.success);
     final progress = pass.totalLunches > 0
         ? (pass.remainingLunches / pass.totalLunches).clamp(0.0, 1.0)
         : 0.0;
@@ -150,7 +175,7 @@ class _PaseScreenState extends ConsumerState<PaseScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Hola, ${pass.studentName.split(' ').first}',
+                              'Hola, $displayFirstName',
                               style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w600,
@@ -177,7 +202,7 @@ class _PaseScreenState extends ConsumerState<PaseScreen> {
                           vertical: 5,
                         ),
                         decoration: BoxDecoration(
-                          color: bColor.successContainer,
+                          color: badgeBg,
                           borderRadius:
                               BorderRadius.circular(AppTheme.buttonRadius),
                         ),
@@ -188,17 +213,17 @@ class _PaseScreenState extends ConsumerState<PaseScreen> {
                               width: 7,
                               height: 7,
                               decoration: BoxDecoration(
-                                color: bColor.success,
+                                color: badgeFg,
                                 shape: BoxShape.circle,
                               ),
                             ),
                             const SizedBox(width: 6),
                             Text(
-                              'PLAN ACTIVO',
+                              badgeLabel,
                               style: TextStyle(
-                                fontSize: 11,
+                                fontSize: 13,
                                 fontWeight: FontWeight.w800,
-                                color: bColor.success,
+                                color: badgeFg,
                               ),
                             ),
                           ],
@@ -207,7 +232,10 @@ class _PaseScreenState extends ConsumerState<PaseScreen> {
                       const SizedBox(width: 4),
                       IconButton(
                         tooltip: 'Cerrar sesión',
-                        onPressed: () => context.go('/login'),
+                        onPressed: () async {
+                          await ref.read(authProvider.notifier).logout();
+                          if (context.mounted) context.go('/login');
+                        },
                         icon: Icon(
                           Icons.logout_rounded,
                           color: colors.onPrimary,
@@ -244,10 +272,10 @@ class _PaseScreenState extends ConsumerState<PaseScreen> {
                           Flexible(
                             child: Text(
                               uiState.isOffline
-                                  ? 'Modo Offline · Código guardado'
+                                  ? 'Sin conexión · Pase guardado'
                                   : uiState.errorMessage!,
                               style: TextStyle(
-                                fontSize: 12,
+                                fontSize: 13,
                                 fontWeight: FontWeight.w600,
                                 color: colors.onPrimary,
                               ),
@@ -680,7 +708,7 @@ class _PaseScreenState extends ConsumerState<PaseScreen> {
                                 Text(
                                   _formatRecordDate(item.date),
                                   style: TextStyle(
-                                    fontSize: 12,
+                                    fontSize: 13,
                                     fontWeight: FontWeight.w600,
                                     color: colors.onSurfaceVariant,
                                   ),
@@ -703,7 +731,7 @@ class _PaseScreenState extends ConsumerState<PaseScreen> {
                               Text(
                                 'Quedan ${item.remainingAfter}',
                                 style: TextStyle(
-                                  fontSize: 11,
+                                  fontSize: 13,
                                   fontWeight: FontWeight.w600,
                                   color: colors.onSurfaceVariant,
                                 ),

@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/theme/app_theme.dart';
@@ -33,12 +33,13 @@ class SellPlanModal extends ConsumerStatefulWidget {
 }
 
 class _SellPlanModalState extends ConsumerState<SellPlanModal> {
-  /// Mismo valor por defecto que `OwnerStore.defaultLunchPrice`.
-  static const double _unitPrice = 3.50;
-  static const List<int> _plans = [10, 20, 30];
+  /// Precio unitario oficial del almuerzo por paquete ($2,75 -> 20 = $55,00).
+  static const double _unitPrice = 2.75;
+  static const List<int> _plans = [5, 10, 20];
 
-  late final TextEditingController _id =
-      TextEditingController(text: widget.initialIdentifier ?? '');
+  late final TextEditingController _id = TextEditingController(
+    text: widget.initialIdentifier ?? '',
+  );
   int _lunches = 10;
   String _method = 'Efectivo';
   bool _saving = false;
@@ -56,7 +57,7 @@ class _SellPlanModalState extends ConsumerState<SellPlanModal> {
   Future<void> _confirm() async {
     final identifier = _id.text.trim();
     if (identifier.isEmpty) {
-      setState(() => _idError = 'Ingresa el ID o la cédula del estudiante.');
+      setState(() => _idError = 'Ingresa el nombre o cédula del comensal.');
       return;
     }
     setState(() {
@@ -65,7 +66,9 @@ class _SellPlanModalState extends ConsumerState<SellPlanModal> {
       _error = null;
     });
     try {
-      final ok = await ref.read(ownerRepositoryProvider).sellPlan(
+      final ok = await ref
+          .read(ownerRepositoryProvider)
+          .sellPlan(
             studentIdentifier: identifier,
             lunchCount: _lunches,
             paymentMethod: _method,
@@ -109,8 +112,9 @@ class _SellPlanModalState extends ConsumerState<SellPlanModal> {
           children: [
             Text(
               'Vender plan',
-              style: theme.textTheme.titleLarge
-                  ?.copyWith(fontWeight: FontWeight.w800),
+              style: theme.textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.w800,
+              ),
             ),
             const SizedBox(height: 20),
             TextField(
@@ -118,7 +122,7 @@ class _SellPlanModalState extends ConsumerState<SellPlanModal> {
               enabled: !_saving,
               textInputAction: TextInputAction.done,
               decoration: InputDecoration(
-                labelText: 'ID / Cédula del estudiante',
+                labelText: 'Nombre o cédula del comensal',
                 prefixIcon: const Icon(Icons.badge_outlined),
                 errorText: _idError,
               ),
@@ -129,35 +133,44 @@ class _SellPlanModalState extends ConsumerState<SellPlanModal> {
             const SizedBox(height: 20),
             Text('Plan', style: theme.textTheme.labelLarge),
             const SizedBox(height: 8),
-            SegmentedButton<int>(
-              showSelectedIcon: false,
-              segments: [
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
                 for (final n in _plans)
-                  ButtonSegment(value: n, label: Text('$n almuerzos')),
+                  ChoiceChip(
+                    label: Text('$n almuerzos'),
+                    selected: _lunches == n,
+                    onSelected: _saving
+                        ? null
+                        : (_) => setState(() => _lunches = n),
+                  ),
               ],
-              selected: {_lunches},
-              onSelectionChanged:
-                  _saving ? null : (s) => setState(() => _lunches = s.first),
             ),
             const SizedBox(height: 20),
             Text('Método de pago', style: theme.textTheme.labelLarge),
             const SizedBox(height: 8),
-            SegmentedButton<String>(
-              segments: const [
-                ButtonSegment(
-                  value: 'Efectivo',
-                  label: Text('Efectivo'),
-                  icon: Icon(Icons.payments_outlined),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                ChoiceChip(
+                  avatar: const Icon(Icons.payments_outlined, size: 18),
+                  label: const Text('Efectivo'),
+                  selected: _method == 'Efectivo',
+                  onSelected: _saving
+                      ? null
+                      : (_) => setState(() => _method = 'Efectivo'),
                 ),
-                ButtonSegment(
-                  value: 'Transferencia',
-                  label: Text('Transferencia'),
-                  icon: Icon(Icons.swap_horiz),
+                ChoiceChip(
+                  avatar: const Icon(Icons.swap_horiz, size: 18),
+                  label: const Text('Transferencia'),
+                  selected: _method == 'Transferencia',
+                  onSelected: _saving
+                      ? null
+                      : (_) => setState(() => _method = 'Transferencia'),
                 ),
               ],
-              selected: {_method},
-              onSelectionChanged:
-                  _saving ? null : (s) => setState(() => _method = s.first),
             ),
             const SizedBox(height: 20),
             Container(
@@ -190,8 +203,9 @@ class _SellPlanModalState extends ConsumerState<SellPlanModal> {
               const SizedBox(height: 12),
               Text(
                 _error!,
-                style: theme.textTheme.bodyMedium
-                    ?.copyWith(color: scheme.error),
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: scheme.error,
+                ),
               ),
             ],
             const SizedBox(height: 24),

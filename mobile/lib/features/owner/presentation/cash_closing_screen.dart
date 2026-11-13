@@ -1,7 +1,9 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/auth/auth_models.dart';
+import '../../../core/auth/auth_provider.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/theme/app_theme.dart';
 import 'owner_controller.dart';
@@ -34,9 +36,8 @@ class _CashClosingScreenState extends ConsumerState<CashClosingScreen> {
   Future<void> _sellPlan() async {
     final sold = await showSellPlanModal(context);
     if (sold == true && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Venta registrada.')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Venta registrada.')));
     }
   }
 
@@ -50,7 +51,7 @@ class _CashClosingScreenState extends ConsumerState<CashClosingScreen> {
           diff == 0
               ? 'La caja cuadra: ${OwnerFormat.money(counted)} en cajón.'
               : '${diff < 0 ? 'Faltan' : 'Sobran'} '
-                  '${OwnerFormat.money(diff.abs())} respecto a lo esperado.',
+                    '${OwnerFormat.money(diff.abs())} respecto a lo esperado.',
         ),
         actions: [
           TextButton(
@@ -69,6 +70,65 @@ class _CashClosingScreenState extends ConsumerState<CashClosingScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isCashier =
+        ref.watch(authProvider).user?.role == AuthRole.cashier;
+    if (isCashier) {
+      final theme = Theme.of(context);
+      final colors = theme.colorScheme;
+      return Scaffold(
+        appBar: AppBar(
+          leading: IconButton(
+            tooltip: 'Volver',
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () =>
+                context.canPop() ? context.pop() : context.go('/owner/scanner'),
+          ),
+          title: const Text('Cierre de caja'),
+        ),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Card(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.lock_outline_rounded,
+                      size: 48,
+                      color: colors.primary,
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Solo el dueño puede cerrar caja',
+                      style: theme.textTheme.titleLarge,
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'En tu turno puedes cobrar almuerzos, vender planes y atender pedidos. El arqueo del cajón le corresponde al dueño.',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: colors.onSurfaceVariant,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 20),
+                    FilledButton(
+                      onPressed: () => context.canPop()
+                          ? context.pop()
+                          : context.go('/owner/scanner'),
+                      child: const Text('Volver a caja'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
     final async = ref.watch(dailySummaryProvider);
 
     return Scaffold(
@@ -156,8 +216,9 @@ class _CashClosingScreenState extends ConsumerState<CashClosingScreen> {
               Expanded(
                 child: Text(
                   'Movimientos de hoy',
-                  style: theme.textTheme.titleMedium
-                      ?.copyWith(fontWeight: FontWeight.w800),
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
               ),
               TextButton.icon(
@@ -173,13 +234,17 @@ class _CashClosingScreenState extends ConsumerState<CashClosingScreen> {
               padding: const EdgeInsets.symmetric(vertical: 32),
               child: Column(
                 children: [
-                  Icon(Icons.receipt_long_outlined,
-                      size: 40, color: scheme.onSurfaceVariant),
+                  Icon(
+                    Icons.receipt_long_outlined,
+                    size: 40,
+                    color: scheme.onSurfaceVariant,
+                  ),
                   const SizedBox(height: 8),
                   Text(
                     'Aún no hay movimientos hoy.',
-                    style: theme.textTheme.bodyMedium
-                        ?.copyWith(color: scheme.onSurfaceVariant),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
                   ),
                 ],
               ),
@@ -318,8 +383,8 @@ class _CashCountCard extends StatelessWidget {
     final (Color bg, Color fg, String label) = balanced
         ? (tokens.successContainer, tokens.onSuccessContainer, 'Caja cuadra')
         : difference > 0
-            ? (scheme.primaryContainer, scheme.onPrimaryContainer, 'Sobrante')
-            : (tokens.dangerContainer, tokens.onDangerContainer, 'Faltante');
+        ? (scheme.primaryContainer, scheme.onPrimaryContainer, 'Sobrante')
+        : (tokens.dangerContainer, tokens.onDangerContainer, 'Faltante');
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -333,8 +398,9 @@ class _CashCountCard extends StatelessWidget {
         children: [
           Text(
             'Arqueo de efectivo',
-            style: theme.textTheme.titleSmall
-                ?.copyWith(fontWeight: FontWeight.w800),
+            style: theme.textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w800,
+            ),
           ),
           const SizedBox(height: 12),
           Row(
@@ -343,13 +409,17 @@ class _CashCountCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Esperado en Bocadoo',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                            color: scheme.onSurfaceVariant)),
+                    Text(
+                      'Esperado en Bocadoo',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
                     Text(
                       OwnerFormat.money(expected),
-                      style: theme.textTheme.titleLarge
-                          ?.copyWith(fontWeight: FontWeight.w900),
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w900,
+                      ),
                     ),
                   ],
                 ),
@@ -360,12 +430,13 @@ class _CashCountCard extends StatelessWidget {
                   controller: controller,
                   enabled: enabled,
                   textAlign: TextAlign.end,
-                  keyboardType:
-                      const TextInputType.numberWithOptions(decimal: true),
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
                   decoration: InputDecoration(
                     labelText: 'Efectivo en cajón',
                     prefixText: r'$ ',
-                    hintText: expected.toStringAsFixed(2),
+                    hintText: expected.toStringAsFixed(2).replaceAll('.', ','),
                   ),
                   onChanged: (_) => onChanged(),
                 ),
@@ -382,16 +453,22 @@ class _CashCountCard extends StatelessWidget {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(label,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                        color: fg, fontWeight: FontWeight.w700)),
+                Text(
+                  label,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: fg,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
                 Text(
                   balanced
                       ? OwnerFormat.money(0)
                       : '${difference > 0 ? '+' : '-'}'
-                          '${OwnerFormat.money(difference.abs())}',
-                  style: theme.textTheme.bodyLarge
-                      ?.copyWith(color: fg, fontWeight: FontWeight.w900),
+                            '${OwnerFormat.money(difference.abs())}',
+                  style: theme.textTheme.bodyLarge?.copyWith(
+                    color: fg,
+                    fontWeight: FontWeight.w900,
+                  ),
                 ),
               ],
             ),
@@ -408,16 +485,17 @@ class _TransactionTile extends StatelessWidget {
   final TransactionItem item;
 
   IconData get _icon => switch (item.type) {
-        'Canje' => Icons.restaurant,
-        'Venta Plan' => Icons.sell_outlined,
-        _ => Icons.payments_outlined,
-      };
+    'Canje' => Icons.restaurant,
+    'Venta Plan' => Icons.sell_outlined,
+    _ => Icons.payments_outlined,
+  };
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = context.colorScheme;
     final isRedeem = item.type == 'Canje';
+    final displayType = isRedeem ? 'Almuerzo validado' : item.type;
 
     return ListTile(
       contentPadding: EdgeInsets.zero,
@@ -431,9 +509,10 @@ class _TransactionTile extends StatelessWidget {
         style: theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w700),
       ),
       subtitle: Text(
-        '${item.type} · ${OwnerFormat.time(item.timestamp)}',
-        style: theme.textTheme.bodySmall
-            ?.copyWith(color: scheme.onSurfaceVariant),
+        '$displayType · ${OwnerFormat.time(item.timestamp)}',
+        style: theme.textTheme.bodySmall?.copyWith(
+          color: scheme.onSurfaceVariant,
+        ),
       ),
       trailing: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -441,13 +520,15 @@ class _TransactionTile extends StatelessWidget {
         children: [
           Text(
             isRedeem ? '1 almuerzo' : OwnerFormat.money(item.amount),
-            style: theme.textTheme.bodyLarge
-                ?.copyWith(fontWeight: FontWeight.w900),
+            style: theme.textTheme.bodyLarge?.copyWith(
+              fontWeight: FontWeight.w900,
+            ),
           ),
           Text(
             item.paymentMethod,
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: scheme.onSurfaceVariant),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+            ),
           ),
         ],
       ),
@@ -477,9 +558,9 @@ class _ClosedBanner extends StatelessWidget {
             child: Text(
               'Caja cerrada correctamente',
               style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    color: tokens.onSuccessContainer,
-                    fontWeight: FontWeight.w800,
-                  ),
+                color: tokens.onSuccessContainer,
+                fontWeight: FontWeight.w800,
+              ),
             ),
           ),
         ],
@@ -505,19 +586,19 @@ class _ErrorView extends StatelessWidget {
           children: [
             Icon(Icons.error_outline, size: 48, color: scheme.error),
             const SizedBox(height: 12),
-            Text('No se pudo calcular el total del turno.',
-                textAlign: TextAlign.center,
-                style: Theme.of(context)
-                    .textTheme
-                    .titleMedium
-                    ?.copyWith(fontWeight: FontWeight.w700)),
+            Text(
+              'No se pudo calcular el total del turno.',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.titleMedium
+                  ?.copyWith(fontWeight: FontWeight.w700),
+            ),
             const SizedBox(height: 4),
-            Text(message,
-                textAlign: TextAlign.center,
-                style: Theme.of(context)
-                    .textTheme
-                    .bodySmall
-                    ?.copyWith(color: scheme.onSurfaceVariant)),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: scheme.onSurfaceVariant),
+            ),
             const SizedBox(height: 20),
             OutlinedButton(onPressed: onRetry, child: const Text('Reintentar')),
           ],

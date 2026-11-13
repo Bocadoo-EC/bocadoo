@@ -3,10 +3,16 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../features/auth/presentation/login_screen.dart';
+import '../../features/customer/presentation/customer_plans_screen.dart';
 import '../../features/customer/presentation/customer_profile_screen.dart';
 import '../../features/customer/presentation/pase_screen.dart';
 import '../../features/customer/presentation/restaurants_screen.dart';
 import '../../features/owner/presentation/cash_closing_screen.dart';
+import '../../features/owner/presentation/owner_menu_screen.dart';
+import '../../features/owner/presentation/owner_metrics_screen.dart';
+import '../../features/owner/presentation/owner_orders_screen.dart';
+import '../../features/owner/presentation/owner_plans_screen.dart';
+import '../../features/owner/presentation/owner_settings_screen.dart';
 import '../../features/owner/presentation/scan_result_screen.dart';
 import '../../features/owner/presentation/scanner_screen.dart';
 import '../auth/auth_models.dart';
@@ -71,6 +77,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const RestaurantsScreen(),
       ),
       GoRoute(
+        path: '/customer/plans',
+        name: 'customer_plans',
+        builder: (context, state) => const CustomerPlansScreen(),
+      ),
+      GoRoute(
         path: '/customer/profile',
         name: 'customer_profile',
         builder: (context, state) => const CustomerProfileScreen(),
@@ -80,6 +91,31 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         path: '/owner/scanner',
         name: 'owner_scanner',
         builder: (context, state) => const ScannerScreen(),
+      ),
+      GoRoute(
+        path: '/owner/menu',
+        name: 'owner_menu',
+        builder: (context, state) => const OwnerMenuScreen(),
+      ),
+      GoRoute(
+        path: '/owner/plans',
+        name: 'owner_plans',
+        builder: (context, state) => const OwnerPlansScreen(),
+      ),
+      GoRoute(
+        path: '/owner/metrics',
+        name: 'owner_metrics',
+        builder: (context, state) => const OwnerMetricsScreen(),
+      ),
+      GoRoute(
+        path: '/owner/orders',
+        name: 'owner_orders',
+        builder: (context, state) => const OwnerOrdersScreen(),
+      ),
+      GoRoute(
+        path: '/owner/settings',
+        name: 'owner_settings',
+        builder: (context, state) => const OwnerSettingsScreen(),
       ),
       GoRoute(
         path: '/owner/scan-result',

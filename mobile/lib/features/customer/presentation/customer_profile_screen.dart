@@ -33,6 +33,13 @@ class _CustomerProfileScreenState extends ConsumerState<CustomerProfileScreen> {
       builder: (context, _) {
         final uiState = controller.state;
         final pass = uiState.pass;
+        final authUser = ref.watch(authProvider).user;
+        final displayName = (authUser?.fullName.trim().isNotEmpty ?? false)
+            ? authUser!.fullName
+            : (pass?.studentName ?? 'Comensal Bocadoo');
+        final displaySubtitle = (authUser?.email.trim().isNotEmpty ?? false)
+            ? authUser!.email
+            : (pass?.studentCareer ?? 'Cuenta Bocadoo');
         final theme = Theme.of(context);
         final colors = theme.colorScheme;
 
@@ -65,7 +72,7 @@ class _CustomerProfileScreenState extends ConsumerState<CustomerProfileScreen> {
                         radius: 28,
                         backgroundColor: colors.primaryContainer,
                         child: Text(
-                          _initials(pass?.studentName ?? 'Carlos Mejía'),
+                          _initials(displayName),
                           style: theme.textTheme.titleLarge?.copyWith(
                             color: colors.onPrimaryContainer,
                             fontWeight: FontWeight.w800,
@@ -78,12 +85,12 @@ class _CustomerProfileScreenState extends ConsumerState<CustomerProfileScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              pass?.studentName ?? 'Carlos Mejía',
+                              displayName,
                               style: theme.textTheme.titleLarge,
                             ),
                             const SizedBox(height: 2),
                             Text(
-                              pass?.studentCareer ?? 'Ing. de Sistemas · PUCE',
+                              displaySubtitle,
                               style: theme.textTheme.bodySmall,
                             ),
                             if (pass != null) ...[
@@ -171,7 +178,7 @@ class _CustomerProfileScreenState extends ConsumerState<CustomerProfileScreen> {
               ),
             ],
           ),
-          bottomNavigationBar: const CustomerBottomNav(currentIndex: 2),
+          bottomNavigationBar: const CustomerBottomNav(currentIndex: 3),
         );
       },
     );

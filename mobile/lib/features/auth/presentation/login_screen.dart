@@ -23,11 +23,21 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _restaurantController = TextEditingController();
+  final _basePriceController = TextEditingController(text: '2,75');
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
 
+  static const List<String> _zones = [
+    'La Floresta',
+    'González Suárez',
+    'Iñaquito',
+    'Centro Histórico',
+    'Cumbayá',
+  ];
+
   _AuthMode _mode = _AuthMode.login;
   AuthRole _selectedRole = AuthRole.customer;
+  String _selectedZone = _zones.first;
   bool _obscurePassword = true;
   String? _localError;
 
@@ -35,9 +45,75 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   void dispose() {
     _nameController.dispose();
     _restaurantController.dispose();
+    _basePriceController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
+  }
+
+  void _showForgotPasswordModal() {
+    final resetEmail = TextEditingController(text: _emailController.text.trim());
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      builder: (sheetCtx) {
+        final theme = Theme.of(sheetCtx);
+        final colors = theme.colorScheme;
+        return Padding(
+          padding: EdgeInsets.fromLTRB(
+            24,
+            8,
+            24,
+            MediaQuery.of(sheetCtx).viewInsets.bottom + 24,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Recuperar contraseña',
+                style: theme.textTheme.titleLarge,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Ingresa el correo de tu cuenta y te enviaremos un enlace para restablecer tu acceso.',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: colors.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: resetEmail,
+                keyboardType: TextInputType.emailAddress,
+                decoration: const InputDecoration(
+                  labelText: 'Correo electrónico',
+                  prefixIcon: Icon(Icons.alternate_email_rounded),
+                ),
+              ),
+              const SizedBox(height: 20),
+              BocadooButton(
+                label: 'Enviar enlace',
+                icon: Icons.send_rounded,
+                onPressed: () {
+                  Navigator.of(sheetCtx).pop();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'Si tu correo está registrado, recibirás instrucciones en breve.',
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    ).whenComplete(resetEmail.dispose);
   }
 
   void _switchMode(_AuthMode mode) {
@@ -287,7 +363,59 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               return null;
                             },
                           ),
+                          const SizedBox(height: 16),
+                          Text(
+                            'Precio habitual del almuerzo (USD)',
+                            style: theme.textTheme.bodySmall,
+                          ),
+                          const SizedBox(height: 6),
+                          TextFormField(
+                            controller: _basePriceController,
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
+                            textInputAction: TextInputAction.next,
+                            decoration: const InputDecoration(
+                              hintText: 'Ej. 2,75',
+                              prefixIcon: Icon(Icons.attach_money_rounded),
+                            ),
+                            validator: (value) {
+                              if (!isRegister ||
+                                  _selectedRole != AuthRole.owner) {
+                                return null;
+                              }
+                              final parsed = double.tryParse(
+                                (value ?? '').trim().replaceAll(',', '.'),
+                              );
+                              if (parsed == null || parsed <= 0) {
+                                return 'Ingresa un precio válido (ej. 2,75).';
+                              }
+                              return null;
+                            },
+                          ),
                         ],
+                        const SizedBox(height: 16),
+                        Text(
+                          _selectedRole == AuthRole.owner
+                              ? 'Zona del local'
+                              : 'Tu zona habitual',
+                          style: theme.textTheme.bodySmall,
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: _zones
+                              .map(
+                                (z) => ChoiceChip(
+                                  label: Text(z),
+                                  selected: _selectedZone == z,
+                                  onSelected: (_) =>
+                                      setState(() => _selectedZone = z),
+                                ),
+                              )
+                              .toList(),
+                        ),
                       ],
 
                       const SizedBox(height: 18),
@@ -394,6 +522,22 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         isLoading: authState.isLoading,
                         onPressed: _submit,
                       ),
+                      if (!isRegister) ...[
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.center,
+                          child: TextButton(
+                            onPressed: _showForgotPasswordModal,
+                            child: Text(
+                              '¿Olvidaste tu contraseña?',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: colors.primary,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),

@@ -10,7 +10,7 @@ import '../../domain/models/scan_status.dart';
 class RemoteOwnerRepository implements IOwnerRepository {
   final Dio _dio;
 
-  RemoteOwnerRepository({required Dio dio}) : _dio = dio;
+  RemoteOwnerRepository({required this._dio});
 
   @override
   Future<ScanResult> validateQrCode(String rawPayload) async {
@@ -72,9 +72,9 @@ class RemoteOwnerRepository implements IOwnerRepository {
       final rawTx = data['transactions'];
       final transactions = rawTx is List
           ? rawTx
-              .whereType<Map<String, dynamic>>()
-              .map(_parseTransactionItem)
-              .toList()
+                .whereType<Map<String, dynamic>>()
+                .map(_parseTransactionItem)
+                .toList()
           : const <TransactionItem>[];
 
       final dateRaw = data['date'] as String?;
@@ -82,15 +82,17 @@ class RemoteOwnerRepository implements IOwnerRepository {
         date: dateRaw != null
             ? (DateTime.tryParse(dateRaw) ?? DateTime.now())
             : DateTime.now(),
-        lunchesRedeemedToday: (data['lunchesRedeemedToday'] ??
-            data['lunches_redeemed_today'] ??
-            0) as int,
+        lunchesRedeemedToday:
+            (data['lunchesRedeemedToday'] ??
+                    data['lunches_redeemed_today'] ??
+                    0)
+                as int,
         plansSoldToday:
             (data['plansSoldToday'] ?? data['plans_sold_today'] ?? 0) as int,
-        totalIncomeToday: ((data['totalIncomeToday'] ??
-                data['total_income_today'] as num?) ??
-            0.0)
-            .toDouble(),
+        totalIncomeToday:
+            ((data['totalIncomeToday'] ?? data['total_income_today'] as num?) ??
+                    0.0)
+                .toDouble(),
         cashCounted:
             ((data['cashCounted'] ?? data['cash_counted'] as num?) ?? 0.0)
                 .toDouble(),
@@ -110,7 +112,9 @@ class RemoteOwnerRepository implements IOwnerRepository {
   }
 
   @override
-  Future<List<TransactionItem>> getTodayTransactions(String restaurantId) async {
+  Future<List<TransactionItem>> getTodayTransactions(
+    String restaurantId,
+  ) async {
     try {
       final summary = await getDailyClosingSummary(restaurantId);
       return summary.transactions;
@@ -134,4 +138,3 @@ class RemoteOwnerRepository implements IOwnerRepository {
     );
   }
 }
-

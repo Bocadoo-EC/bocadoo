@@ -20,12 +20,10 @@ class AuthRepository {
   AuthUser? _memoryUser;
 
   AuthRepository({
-    required Dio dio,
-    required TokenStorage tokenStorage,
+    required this._dio,
+    required this._tokenStorage,
     FlutterSecureStorage? storage,
-  })  : _dio = dio,
-        _tokenStorage = tokenStorage,
-        _storage = storage ?? const FlutterSecureStorage();
+  }) : _storage = storage ?? const FlutterSecureStorage();
 
   /// Restaura la sesión persistida si existe un `publicId` y rol válidos.
   Future<AuthUser?> restoreSession() async {
@@ -62,10 +60,7 @@ class AuthRepository {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
         ApiConfig.login,
-        data: {
-          'email': email.trim(),
-          'password': password,
-        },
+        data: {'email': email.trim(), 'password': password},
         options: Options(extra: const {'skipAuth': true}),
       );
 
@@ -110,40 +105,37 @@ class AuthRepository {
   }
 
   /// Activa una sesión local de demostración/offline sin requerir servidor.
-  Future<AuthUser> loginDemo({
-    required AuthRole role,
-    String? email,
-  }) async {
+  Future<AuthUser> loginDemo({required AuthRole role, String? email}) async {
     final user = switch (role) {
       AuthRole.customer => AuthUser(
-          publicId: '00000000-0000-4000-8000-000000000001',
-          email: email?.trim().isNotEmpty == true
-              ? email!.trim()
-              : 'carlos.mejia@email.com',
-          fullName: 'Carlos Mejía',
-          role: AuthRole.customer,
-          isOfflineDemo: true,
-        ),
+        publicId: '00000000-0000-4000-8000-000000000001',
+        email: email?.trim().isNotEmpty == true
+            ? email!.trim()
+            : 'carlos.mejia@email.com',
+        fullName: 'Carlos Mejía',
+        role: AuthRole.customer,
+        isOfflineDemo: true,
+      ),
       AuthRole.owner => AuthUser(
-          publicId: '00000000-0000-4000-8000-000000000002',
-          email: email?.trim().isNotEmpty == true
-              ? email!.trim()
-              : 'maria@lacuchara.ec',
-          fullName: 'María López',
-          role: AuthRole.owner,
-          restaurantId: 'rest-001',
-          isOfflineDemo: true,
-        ),
+        publicId: '00000000-0000-4000-8000-000000000002',
+        email: email?.trim().isNotEmpty == true
+            ? email!.trim()
+            : 'maria@lacuchara.ec',
+        fullName: 'María López',
+        role: AuthRole.owner,
+        restaurantId: 'rest-001',
+        isOfflineDemo: true,
+      ),
       AuthRole.cashier => AuthUser(
-          publicId: '00000000-0000-4000-8000-000000000003',
-          email: email?.trim().isNotEmpty == true
-              ? email!.trim()
-              : 'caja@lacuchara.ec',
-          fullName: 'Caja Principal',
-          role: AuthRole.cashier,
-          restaurantId: 'rest-001',
-          isOfflineDemo: true,
-        ),
+        publicId: '00000000-0000-4000-8000-000000000003',
+        email: email?.trim().isNotEmpty == true
+            ? email!.trim()
+            : 'caja@lacuchara.ec',
+        fullName: 'Caja Principal',
+        role: AuthRole.cashier,
+        restaurantId: 'rest-001',
+        isOfflineDemo: true,
+      ),
     };
 
     await _saveUser(user);
@@ -203,4 +195,3 @@ class AuthRepository {
     } catch (_) {}
   }
 }
-

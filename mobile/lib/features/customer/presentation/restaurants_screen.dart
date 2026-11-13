@@ -395,7 +395,7 @@ class _RestaurantsScreenState extends ConsumerState<RestaurantsScreen> {
                           Text(
                             'Con tu plan',
                             style: TextStyle(
-                              fontSize: 11,
+                              fontSize: 13,
                               fontWeight: FontWeight.w700,
                               color: colors.onPrimaryContainer,
                             ),
@@ -432,7 +432,7 @@ class _RestaurantsScreenState extends ConsumerState<RestaurantsScreen> {
                           Text(
                             'Almuerzo suelto',
                             style: TextStyle(
-                              fontSize: 11,
+                              fontSize: 13,
                               fontWeight: FontWeight.w700,
                               color: colors.onSecondaryContainer,
                             ),
@@ -583,7 +583,7 @@ class _RestaurantCard extends StatelessWidget {
                       child: Text(
                         restaurant.isOpen ? 'Abierto' : 'Cerrado',
                         style: TextStyle(
-                          fontSize: 12,
+                          fontSize: 13,
                           fontWeight: FontWeight.w800,
                           color: restaurant.isOpen
                               ? bColor.success
@@ -617,7 +617,7 @@ class _RestaurantCard extends StatelessWidget {
                           Text(
                             restaurant.occupancy,
                             style: TextStyle(
-                              fontSize: 12,
+                              fontSize: 13,
                               fontWeight: FontWeight.w700,
                               color: colors.onSurface,
                             ),
@@ -787,7 +787,7 @@ class _MenuCategorySection extends StatelessWidget {
                             child: Text(
                               'Opción veggie',
                               style: TextStyle(
-                                fontSize: 11,
+                                fontSize: 13,
                                 fontWeight: FontWeight.w700,
                                 color: bColor.success,
                               ),
@@ -811,7 +811,7 @@ class _MenuCategorySection extends StatelessWidget {
                       child: Text(
                         'Agotado',
                         style: TextStyle(
-                          fontSize: 11,
+                          fontSize: 13,
                           fontWeight: FontWeight.w800,
                           color: colors.onErrorContainer,
                         ),

@@ -131,11 +131,11 @@ class OwnerController extends Notifier<OwnerState> {
       state = ok
           ? OwnerSuccess(current.result, redeemed: true)
           : OwnerError(
-              'No se pudo confirmar el canje (¿ya se descontó?).',
+              'No se pudo confirmar la validación (¿ya se descontó?).',
               result: current.result,
             );
     } catch (e) {
-      state = OwnerError('Error al confirmar el canje: $e',
+      state = OwnerError('Error al confirmar la validación: $e',
           result: current.result);
     } finally {
       _busy = false;

@@ -1,12 +1,14 @@
-import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:material_ui/material_ui.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
-import '../../../core/contracts/qr_parser.dart';
+import '../../../core/auth/auth_models.dart';
+import '../../../core/auth/auth_provider.dart';
 import '../../../core/theme/app_theme.dart';
+import 'owner_bottom_nav.dart';
 import 'owner_controller.dart';
+import 'sell_plan_modal.dart';
 
 /// Ruta de la pantalla de resultado (definida en `core/router/app_router.dart`).
 const String _scanResultRoute = '/owner/scan-result';
@@ -106,12 +108,13 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
     }
   }
 
-  Future<void> _openSimulator() async {
+  Future<void> _openPassCardSheet() async {
     _paused = true;
     final token = await showModalBottomSheet<String>(
       context: context,
+      isScrollControlled: true,
       showDragHandle: true,
-      builder: (_) => const _SimulatorSheet(),
+      builder: (_) => const _PassCardSheet(),
     );
     _paused = false;
     if (token != null && mounted) _submit(token);
@@ -173,6 +176,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
                 _TopBar(
                   camera: _camera,
                   onClose: _close,
+                  showCashClosing:
+                      ref.watch(authProvider).user?.role != AuthRole.cashier,
                 ),
                 const Spacer(),
                 const SizedBox(height: _frameSize),
@@ -183,14 +188,30 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
                   padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
                   child: Column(
                     children: [
-                      if (kDebugMode) ...[
-                        OutlinedButton.icon(
-                          onPressed: processing ? null : _openSimulator,
-                          icon: const Icon(Icons.bug_report_outlined),
-                          label: const Text('Simular Escaneo'),
-                        ),
-                        const SizedBox(height: 12),
-                      ],
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: processing
+                                  ? null
+                                  : _openPassCardSheet,
+                              icon: const Icon(Icons.credit_card_rounded),
+                              label: const Text('Pasar cartulina'),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: processing
+                                  ? null
+                                  : () => showSellPlanModal(context),
+                              icon: const Icon(Icons.add_card_rounded),
+                              label: const Text('Vender plan'),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
                       ElevatedButton.icon(
                         onPressed: processing ? null : _openManualEntry,
                         icon: const Icon(Icons.keyboard_alt_outlined),
@@ -204,15 +225,21 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
           ),
         ],
       ),
+      bottomNavigationBar: const OwnerBottomNav(currentRoute: '/owner/scanner'),
     );
   }
 }
 
 class _TopBar extends StatelessWidget {
-  const _TopBar({required this.camera, required this.onClose});
+  const _TopBar({
+    required this.camera,
+    required this.onClose,
+    required this.showCashClosing,
+  });
 
   final MobileScannerController camera;
   final VoidCallback onClose;
+  final bool showCashClosing;
 
   @override
   Widget build(BuildContext context) {
@@ -235,21 +262,23 @@ class _TopBar extends StatelessWidget {
               'Escanear QR',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    color: scheme.surface,
-                    fontWeight: FontWeight.w700,
-                  ),
+                color: scheme.surface,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
-          IconButton.filled(
-            tooltip: 'Cierre de caja',
-            style: IconButton.styleFrom(
-              backgroundColor: scheme.surface,
-              foregroundColor: scheme.onSurface,
+          if (showCashClosing) ...[
+            IconButton.filled(
+              tooltip: 'Cierre de caja',
+              style: IconButton.styleFrom(
+                backgroundColor: scheme.surface,
+                foregroundColor: scheme.onSurface,
+              ),
+              onPressed: () => context.push('/owner/cash-closing'),
+              icon: const Icon(Icons.point_of_sale),
             ),
-            onPressed: () => context.push('/owner/cash-closing'),
-            icon: const Icon(Icons.point_of_sale),
-          ),
-          const SizedBox(width: 8),
+            const SizedBox(width: 8),
+          ],
           ValueListenableBuilder<MobileScannerState>(
             valueListenable: camera,
             builder: (context, value, _) {
@@ -280,10 +309,8 @@ class _StatusHint extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = context.colorScheme;
-    final style = Theme.of(context).textTheme.bodyLarge?.copyWith(
-          color: scheme.surface,
-          fontWeight: FontWeight.w600,
-        );
+    final style = Theme.of(context).textTheme.bodyLarge
+        ?.copyWith(color: scheme.surface, fontWeight: FontWeight.w600);
     if (processing) {
       return Row(
         mainAxisSize: MainAxisSize.min,
@@ -326,17 +353,18 @@ class _CameraError extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.no_photography_outlined,
-                  size: 48, color: scheme.surface),
+              Icon(
+                Icons.no_photography_outlined,
+                size: 48,
+                color: scheme.surface,
+              ),
               const SizedBox(height: 16),
               Text(
-                denied
-                    ? 'Sin permiso de cámara'
-                    : 'No se pudo abrir la cámara',
+                denied ? 'Sin permiso de cámara' : 'No se pudo abrir la cámara',
                 style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      color: scheme.surface,
-                      fontWeight: FontWeight.w700,
-                    ),
+                  color: scheme.surface,
+                  fontWeight: FontWeight.w700,
+                ),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 8),
@@ -344,9 +372,8 @@ class _CameraError extends StatelessWidget {
                 denied
                     ? 'Activa el permiso en Ajustes o ingresa el código manualmente.'
                     : 'Ingresa el código manualmente para continuar.',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: scheme.surface,
-                    ),
+                style: Theme.of(context).textTheme.bodyMedium
+                    ?.copyWith(color: scheme.surface),
                 textAlign: TextAlign.center,
               ),
             ],
@@ -357,43 +384,80 @@ class _CameraError extends StatelessWidget {
   }
 }
 
-/// Hoja con tokens de prueba (solo debug / emulador).
-class _SimulatorSheet extends StatelessWidget {
-  const _SimulatorSheet();
+/// Hoja para descontar un almuerzo manualmente ("Pasar cartulina").
+class _PassCardSheet extends StatefulWidget {
+  const _PassCardSheet();
+
+  @override
+  State<_PassCardSheet> createState() => _PassCardSheetState();
+}
+
+class _PassCardSheetState extends State<_PassCardSheet> {
+  final TextEditingController _code = TextEditingController();
+  String? _error;
+
+  @override
+  void dispose() {
+    _code.dispose();
+    super.dispose();
+  }
+
+  void _confirm() {
+    final value = _code.text.trim();
+    if (value.isEmpty) {
+      setState(() => _error = 'Ingresa el código o identificador del comensal.');
+      return;
+    }
+    Navigator.pop(context, value);
+  }
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final scheme = context.colorScheme;
-    return SafeArea(
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        24,
+        4,
+        24,
+        24 + MediaQuery.viewInsetsOf(context).bottom,
+      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          ListTile(
-            leading: Icon(Icons.check_circle_outline, color: scheme.primary),
-            title: const Text('Token válido'),
-            subtitle: const Text('Camila Andrade (u1) · QR vigente'),
-            onTap: () => Navigator.pop(
-              context,
-              BocadooQrParser.generateQrPayload('u1'),
+          Text(
+            'Pasar cartulina',
+            style: theme.textTheme.titleLarge?.copyWith(
+              fontWeight: FontWeight.w800,
             ),
           ),
-          ListTile(
-            leading: Icon(Icons.timer_off_outlined, color: scheme.error),
-            title: const Text('Token expirado'),
-            subtitle: const Text('QR generado hace 5 minutos'),
-            onTap: () => Navigator.pop(
-              context,
-              BocadooQrParser.generateQrPayload(
-                'u1',
-                DateTime.now().subtract(const Duration(minutes: 5)),
-              ),
+          const SizedBox(height: 6),
+          Text(
+            'Registra el almuerzo cuando el comensal no pueda mostrar su cámara.',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: scheme.onSurfaceVariant,
             ),
           ),
-          ListTile(
-            leading: Icon(Icons.cancel_outlined, color: scheme.error),
-            title: const Text('Token inválido'),
-            subtitle: const Text('Formato no reconocido'),
-            onTap: () => Navigator.pop(context, 'INVALID'),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _code,
+            autofocus: true,
+            textInputAction: TextInputAction.done,
+            decoration: InputDecoration(
+              labelText: 'Código o identificador del pase',
+              hintText: 'BCD1.u1.…',
+              errorText: _error,
+            ),
+            onChanged: (_) {
+              if (_error != null) setState(() => _error = null);
+            },
+            onSubmitted: (_) => _confirm(),
+          ),
+          const SizedBox(height: 20),
+          ElevatedButton(
+            onPressed: _confirm,
+            child: const Text('Validar pase'),
           ),
         ],
       ),
