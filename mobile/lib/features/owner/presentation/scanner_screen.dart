@@ -182,6 +182,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
                 Padding(
                   padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
                   child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       if (kDebugMode) ...[
                         OutlinedButton.icon(
