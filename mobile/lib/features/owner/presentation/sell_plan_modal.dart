@@ -105,7 +105,7 @@ class _SellPlanModalState extends ConsumerState<SellPlanModal> {
       child: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
               'Vender plan',

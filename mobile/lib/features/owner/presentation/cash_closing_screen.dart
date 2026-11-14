@@ -365,7 +365,7 @@ class _CashCountCard extends StatelessWidget {
                   decoration: InputDecoration(
                     labelText: 'Efectivo en cajón',
                     prefixText: r'$ ',
-                    hintText: expected.toStringAsFixed(2),
+                    hintText: expected.toStringAsFixed(2).replaceAll('.', ','),
                   ),
                   onChanged: (_) => onChanged(),
                 ),
@@ -502,6 +502,7 @@ class _ErrorView extends StatelessWidget {
         padding: const EdgeInsets.all(32),
         child: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Icon(Icons.error_outline, size: 48, color: scheme.error),
             const SizedBox(height: 12),

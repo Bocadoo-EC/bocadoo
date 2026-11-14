@@ -106,6 +106,7 @@ class _ScanResultScreenState extends ConsumerState<ScanResultScreen> {
             Padding(
               padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   if (canConfirm) ...[
                     ElevatedButton(
