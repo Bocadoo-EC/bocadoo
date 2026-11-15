@@ -2,6 +2,7 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../../core/theme/app_theme.dart';
+import 'google_sign_in_flow.dart';
 
 enum _UserRole { customer, owner }
 
@@ -264,7 +265,7 @@ class _LoginScreenState extends State<LoginScreen> {
               const SizedBox(height: 16),
 
               OutlinedButton.icon(
-                onPressed: () => context.push('/auth/google', extra: isCustomer ? 'customer' : 'owner'),
+                onPressed: () => continueWithGoogle(context, role: isCustomer ? 'customer' : 'owner'),
                 icon: const Icon(Icons.g_mobiledata_rounded, size: 24),
                 label: const Text('Continuar con Google'),
               ),

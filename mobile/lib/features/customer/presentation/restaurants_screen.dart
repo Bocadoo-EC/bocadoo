@@ -160,7 +160,7 @@ class _RestaurantsScreenState extends ConsumerState<RestaurantsScreen> {
               _RestaurantCard(
                 restaurant: r,
                 onOpen: () => _openRestaurant(r),
-                onTable: () => context.push('/customer/mesa'),
+                onTable: () => context.push('/customer/mesa?restaurantId=${r.id}'),
                 onOrder: () => _quickOrder(controller, r),
                 onReserve: (o) => _reserve(controller, o),
               ),

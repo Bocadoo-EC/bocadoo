@@ -91,7 +91,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
     if (!mounted) return;
 
     final state = ref.read(ownerControllerProvider);
-    if (state is OwnerSuccess || state is OwnerError) {
+    if (state is OwnerSuccess || state is OwnerError || state is OwnerRedirect) {
       await _camera.stop();
       if (!mounted) return;
       if (context.canPop()) {
@@ -395,6 +395,18 @@ class _SimulatorSheet extends StatelessWidget {
                 DateTime.now().subtract(const Duration(minutes: 5)),
               ),
             ),
+          ),
+          ListTile(
+            leading: Icon(Icons.groups_outlined, color: scheme.primary),
+            title: const Text('Mesa M1234'),
+            subtitle: const Text('QR de mesa con amigos · abre Cobrar mesa'),
+            onTap: () => Navigator.pop(context, 'BCD-MESA-M1234'),
+          ),
+          ListTile(
+            leading: Icon(Icons.receipt_long_outlined, color: scheme.primary),
+            title: const Text('Preorden #43'),
+            subtitle: const Text('QR de pedido · abre Cobrar pedido'),
+            onTap: () => Navigator.pop(context, 'BCD-ORD-43'),
           ),
           ListTile(
             leading: Icon(Icons.cancel_outlined, color: scheme.error),

@@ -100,7 +100,7 @@ class _SellPlanSheetState extends ConsumerState<SellPlanSheet> {
     final templatesAsync = ref.watch(planTemplatesProvider);
     final clients = clientsAsync.value ?? const <OwnerClient>[];
     if (clientsAsync.hasValue) _prefill(clients);
-    final templates = templatesAsync.value ?? const <OwnerPlanTemplate>[];
+    final templates = [for (final t in templatesAsync.value ?? const <OwnerPlanTemplate>[]) if (t.active) t];
     final plan = templates.where((t) => t.id == _planId).firstOrNull ?? templates.firstOrNull;
 
     return Padding(

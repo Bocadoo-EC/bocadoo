@@ -57,6 +57,9 @@ abstract class ICustomerRepository {
   /// Cancela una preorden recién creada (deshacer)
   Future<bool> cancelPreorder(String orderNumber);
 
+  /// El comensal ya vio que su pedido fue entregado: deja de mostrarse.
+  Future<bool> acknowledgeOrder(String orderNumber);
+
   /// Planes que publica un local
   Future<List<PlanTemplate>> getPlanTemplates(String restaurantId);
 
@@ -68,6 +71,39 @@ abstract class ICustomerRepository {
 
   /// Cancela una solicitud de plan recién enviada (deshacer)
   Future<bool> cancelPlanRequest(String planId);
+
+  /// Crea la mesa con amigos del local para esa hora, o recupera la que ya existe (C9)
+  Future<SharedTable> openSharedTable({required String restaurantId, required String time});
+
+  /// Mesa por su ID, para la invitación (C7). `null` si ya expiró
+  Future<SharedTable?> getSharedTable(String tableId);
+
+  /// Cambia el modo de cobro de la mesa
+  Future<SharedTable> setTableMode(String tableId, TableMode mode);
+
+  /// Avisa a cocina que la mesa va en camino
+  Future<SharedTable> notifyKitchen(String tableId);
+
+  /// Un invitado se une a la mesa con su elección
+  Future<SharedTable> joinTable(
+    String tableId, {
+    required String name,
+    required String soup,
+    required String main,
+    required bool takeaway,
+  });
+
+  /// Perfil del comensal (C6)
+  Future<CustomerProfile> getProfile();
+
+  /// Almuerzo validado pendiente de calificar, si hay uno (C10)
+  Future<PendingFeedback?> getPendingFeedback();
+
+  /// Envía la calificación de un almuerzo validado
+  Future<bool> submitFeedback(String redemptionId, {required String tag, String? note});
+
+  /// Descarta la tarjeta de calificación de un almuerzo
+  Future<bool> dismissFeedback(String redemptionId);
 }
 
 /// Interfaz abstracta para operaciones del Dueño de Restaurante

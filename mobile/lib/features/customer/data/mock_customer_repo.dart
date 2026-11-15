@@ -1,6 +1,8 @@
+import '../../../core/config/support_config.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/contracts/qr_parser.dart';
 import '../../../core/contracts/repositories.dart';
+import '../../../core/demo/demo_store.dart';
 import 'local_customer_cache.dart';
 
 /// Implementación Mock de [ICustomerRepository] basada en los datos semilla del
@@ -10,7 +12,14 @@ class MockCustomerRepository implements ICustomerRepository {
   final LocalCustomerCache _cache;
   bool shouldThrowError;
 
-  ActiveOrder? _activeOrder;
+  /// Preórdenes, mesas y opiniones viven en [DemoStore] para que la caja del
+  /// dueño las vea (O5, O12, O15).
+  DemoStore get _store => DemoStore.instance;
+  Map<String, SharedTable> get _tables => _store.tables;
+  final DateTime _lastValidation = DateTime.now().subtract(const Duration(minutes: 30));
+  bool _feedbackClosed = false;
+
+  static const _hostName = 'Carlos Mejía';
   StampCard _cucharaStamps = const StampCard(
     restaurantId: 'r1',
     name: 'Club La Cuchara',
@@ -167,21 +176,209 @@ class MockCustomerRepository implements ICustomerRepository {
   @override
   Future<ActiveTable?> getActiveTable() async {
     // TODO: Conectar con provider de backend
-    await _simulateNetwork();
-    return const ActiveTable(
-      id: 'M1234',
-      restaurantName: 'La Cuchara de San Blas',
-      time: '13:00',
-      membersCount: 1,
-      url: 'https://bocadoo.ec/app/mesa/M1234',
+    final table = await openSharedTable(restaurantId: 'r1', time: '13:00');
+    return ActiveTable(
+      id: table.id,
+      restaurantName: table.restaurantName,
+      time: table.time,
+      membersCount: table.members.length,
+      url: table.qrPayload,
     );
+  }
+
+  static String _occupancyLabel(String occupancy) => switch (occupancy) {
+        'LLENO' => 'Lleno · Mejor llega un poco más tarde',
+        'MOVIDO' => 'Movido · Puede haber una espera corta',
+        _ => 'Fluido · Llegas y te sientas',
+      };
+
+  @override
+  Future<SharedTable> openSharedTable({required String restaurantId, required String time}) async {
+    // TODO: Conectar con provider de backend
+    await _simulateNetwork();
+    for (final t in _tables.values) {
+      if (t.restaurantId == restaurantId && t.time == time) return t;
+    }
+    final r = _allRestaurants.where((x) => x.id == restaurantId).firstOrNull ?? _allRestaurants.first;
+    final soups = [for (final m in r.soups) m.name];
+    final mains = [
+      for (final m in r.mains)
+        TableDish(id: m.id, name: m.name, price: m.price ?? r.singleLunchPrice, imageUrl: m.imageUrl, isVeggie: m.isVeggie),
+    ];
+    final id = _store.nextTableId();
+    final table = SharedTable(
+      id: id,
+      restaurantId: r.id,
+      restaurantName: r.name,
+      hostName: _hostName,
+      time: time,
+      qrPayload: 'BCD-MESA-$id',
+      // TODO: Definir el enlace de invitación de la app (ficha Fase 5, B12).
+      shareUrl: 'https://bocadoo.ec/app/comensal/mesa/$id',
+      occupancyLabel: _occupancyLabel(r.occupancy),
+      soups: soups,
+      mains: mains,
+      takeawaySurcharge: r.takeawaySurcharge,
+      members: [
+        TableMember(
+          id: 'mem-host',
+          name: _hostName,
+          isHost: true,
+          soup: soups.firstOrNull,
+          main: mains.firstOrNull?.name,
+        ),
+      ],
+    );
+    _tables[id] = table;
+    _store.changed();
+    return table;
+  }
+
+  @override
+  Future<SharedTable?> getSharedTable(String tableId) async {
+    // TODO: Conectar con provider de backend
+    if (_tables.isEmpty) await openSharedTable(restaurantId: 'r1', time: '13:00');
+    await _simulateNetwork();
+    return _tables[tableId.toUpperCase()];
+  }
+
+  SharedTable _update(String tableId, SharedTable Function(SharedTable t) change) {
+    final current = _tables[tableId.toUpperCase()];
+    if (current == null) throw Exception('La mesa ya no existe.');
+    final next = change(current);
+    _tables[current.id] = next;
+    _store.changed();
+    return next;
+  }
+
+  @override
+  Future<SharedTable> setTableMode(String tableId, TableMode mode) async {
+    // TODO: Conectar con provider de backend
+    await _simulateNetwork();
+    return _update(tableId, (t) => t.copyWith(mode: mode));
+  }
+
+  @override
+  Future<SharedTable> notifyKitchen(String tableId) async {
+    // TODO: Conectar con provider de backend
+    await _simulateNetwork();
+    return _update(tableId, (t) => t.copyWith(onTheWay: true));
+  }
+
+  @override
+  Future<SharedTable> joinTable(
+    String tableId, {
+    required String name,
+    required String soup,
+    required String main,
+    required bool takeaway,
+  }) async {
+    // TODO: Conectar con provider de backend
+    await _simulateNetwork();
+    return _update(
+      tableId,
+      (t) => t.copyWith(members: [
+        ...t.members,
+        TableMember(
+          id: 'mem-${t.members.length + 1}',
+          name: name,
+          soup: soup,
+          main: main,
+          takeaway: takeaway,
+        ),
+      ]),
+    );
+  }
+
+  @override
+  Future<CustomerProfile> getProfile() async {
+    // TODO: Conectar con provider de backend
+    await _simulateNetwork();
+    return const CustomerProfile(
+      name: _hostName,
+      phone: '0991234567',
+      habitualPlanName: 'Plan mensual ejecutivo',
+      habitualPlanIncludes: ['Sopa', 'Segundo', 'Bebida'],
+      // Se define al compilar (--dart-define), ver SupportConfig.
+      supportWhatsApp: SupportConfig.whatsApp,
+    );
+  }
+
+  @override
+  Future<PendingFeedback?> getPendingFeedback() async {
+    // TODO: Conectar con provider de backend
+    await _simulateNetwork();
+    if (_feedbackClosed) return null;
+    return PendingFeedback(
+      redemptionId: 'red-1',
+      restaurantId: 'r1',
+      restaurantName: 'La Cuchara de San Blas',
+      validatedAt: _lastValidation,
+    );
+  }
+
+  @override
+  Future<bool> submitFeedback(String redemptionId, {required String tag, String? note}) async {
+    // TODO: Conectar con provider de backend
+    await _simulateNetwork();
+    _feedbackClosed = true;
+    _store.feedback.insert(
+      0,
+      DemoFeedback(
+        id: _store.nextFeedbackId(),
+        restaurantId: 'r1',
+        dinerName: _hostName,
+        tag: tag,
+        note: note,
+        createdAt: DateTime.now(),
+      ),
+    );
+    _store.changed();
+    return true;
+  }
+
+  @override
+  Future<bool> dismissFeedback(String redemptionId) async {
+    // TODO: Conectar con provider de backend
+    await _simulateNetwork();
+    _feedbackClosed = true;
+    return true;
   }
 
   @override
   Future<ActiveOrder?> getActiveOrder() async {
     // TODO: Conectar con provider de backend
     await _simulateNetwork();
-    return _activeOrder;
+    final mine = _store.preorders.where((o) =>
+        o.dinerUserId == DemoStore.dinerUserId &&
+        (o.status == PreorderStatus.pending || o.status == PreorderStatus.delivered));
+    return mine.isEmpty ? null : _toActiveOrder(mine.last);
+  }
+
+  static ActiveOrder _toActiveOrder(DemoPreorder o) => ActiveOrder(
+        orderNumber: o.number,
+        restaurantName: o.restaurantName,
+        qrPayload: 'BCD-ORD-${o.number}',
+        status: o.status == PreorderStatus.delivered ? 'ENTREGADO' : 'PREPARANDO',
+        detail: o.detail,
+        soup: o.soup,
+        main: o.main,
+        takeaway: o.takeaway,
+        takeawaySurcharge: o.takeawaySurcharge,
+        singleLunchPrice: o.singleLunchPrice,
+        hasPlan: o.hasPlan,
+        expiresAt: o.expiresAt,
+        paidAmount: o.status == PreorderStatus.delivered ? o.amount : null,
+      );
+
+  @override
+  Future<bool> acknowledgeOrder(String orderNumber) async {
+    // TODO: Conectar con provider de backend
+    final order = _store.preorderByNumber(orderNumber);
+    if (order == null) return false;
+    order.status = PreorderStatus.acknowledged;
+    _store.changed();
+    return true;
   }
 
   @override
@@ -235,20 +432,45 @@ class MockCustomerRepository implements ICustomerRepository {
       if (takeaway) 'Para llevar',
     ].where((p) => p.isNotEmpty);
 
-    _activeOrder = ActiveOrder(
-      orderNumber: '42',
+    final number = _store.nextOrderNumber();
+    final breakfast = nameOf(breakfastId);
+    final offerItem = offerId == null ? null : restaurant?.offers.where((o) => o.id == offerId).firstOrNull;
+    final offer = offerItem?.title ?? '';
+    final soup = nameOf(soupId);
+    final main = nameOf(mainId);
+    final price = offerItem?.price ?? restaurant?.singleLunchPrice ?? 3.00;
+    final surcharge = restaurant?.takeawaySurcharge ?? 0.25;
+    final now = DateTime.now();
+    final hasPlan = restaurantId == 'r1' || restaurantId == 'r2';
+    final record = DemoPreorder(
+      number: number,
+      restaurantId: restaurantId,
       restaurantName: restaurant?.name ?? 'Restaurante',
-      qrPayload: 'BCD-ORD-42',
+      dinerUserId: DemoStore.dinerUserId,
+      dinerName: _hostName,
       detail: parts.join(' · '),
+      soup: soup.isEmpty ? null : soup,
+      main: main.isNotEmpty ? main : (breakfast.isNotEmpty ? breakfast : (offer.isEmpty ? null : offer)),
+      takeaway: takeaway,
+      takeawaySurcharge: surcharge,
+      singleLunchPrice: restaurant?.singleLunchPrice ?? 3.00,
+      hasPlan: hasPlan,
+      // Con plan prepagado no se cobra nada en caja.
+      amount: hasPlan ? 0 : price + (takeaway ? surcharge : 0),
+      createdAt: now,
+      expiresAt: now.add(const Duration(minutes: 30)),
     );
-    return _activeOrder!;
+    _store.preorders.add(record);
+    _store.changed();
+    return _toActiveOrder(record);
   }
 
   @override
   Future<bool> cancelPreorder(String orderNumber) async {
     // TODO: Conectar con provider de backend
     await _simulateNetwork();
-    _activeOrder = null;
+    _store.preorderByNumber(orderNumber)?.status = PreorderStatus.cancelled;
+    _store.changed();
     return true;
   }
 
@@ -305,6 +527,8 @@ class MockCustomerRepository implements ICustomerRepository {
       address: 'Av. 12 de Octubre N24-110 y La Católica',
       zone: 'Frente a la PUCE',
       distanceKm: 0.2,
+      latitude: -0.2092,
+      longitude: -78.4897,
       singleLunchPrice: 3.00,
       planLunchPrice: 2.75,
       occupancy: 'LIBRE',
@@ -344,6 +568,8 @@ class MockCustomerRepository implements ICustomerRepository {
       address: 'Calle Madrid 1159 y Coruña, La Floresta',
       zone: 'La Floresta',
       distanceKm: 0.8,
+      latitude: -0.2128,
+      longitude: -78.4863,
       singleLunchPrice: 3.25,
       planLunchPrice: 3.00,
       occupancy: 'MOVIDO',
@@ -372,6 +598,8 @@ class MockCustomerRepository implements ICustomerRepository {
       address: 'Av. Amazonas N22-48 y Calle Mariscal Foch',
       zone: 'La Mariscal',
       distanceKm: 1.4,
+      latitude: -0.2030,
+      longitude: -78.4925,
       singleLunchPrice: 3.50,
       planLunchPrice: 3.30,
       occupancy: 'LLENO',
@@ -406,6 +634,8 @@ class MockCustomerRepository implements ICustomerRepository {
       address: 'Av. Pampite y Vía Interoceánica, edif. Platinum Plaza',
       zone: 'Cumbayá',
       distanceKm: 3.2,
+      latitude: -0.1980,
+      longitude: -78.4350,
       singleLunchPrice: 3.75,
       planLunchPrice: 3.40,
       occupancy: 'LIBRE',
@@ -429,6 +659,8 @@ class MockCustomerRepository implements ICustomerRepository {
       address: 'Av. Rodrigo de Chávez OE1-24 y 5 de Junio',
       zone: 'Villaflora',
       distanceKm: 6.1,
+      latitude: -0.2450,
+      longitude: -78.5210,
       singleLunchPrice: 2.75,
       planLunchPrice: 2.50,
       occupancy: 'LIBRE',

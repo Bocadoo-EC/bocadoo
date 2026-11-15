@@ -2,6 +2,7 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/utils/external_links.dart';
 
 class OnboardingOwnerScreen extends StatefulWidget {
   // D4: precio ingresado en A5 (default $3.50)
@@ -303,13 +304,11 @@ class _OnboardingOwnerScreenState extends State<OnboardingOwnerScreen> {
         const SizedBox(height: 20),
         // Botón verde WhatsApp
         ElevatedButton.icon(
-          onPressed: () {
-            // TODO: Agregar url_launcher (paquete pendiente de aprobación) para abrir WhatsApp real
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-              content: const Text('Copia el enlace y envíalo por WhatsApp a tu ayudante.'),
-              action: SnackBarAction(label: 'OK', onPressed: () {}),
-            ));
-          },
+          onPressed: () => openExternal(
+            context,
+            whatsAppUri('Te invito a la caja de mi local en Bocadoo: $_inviteLink'),
+            failMessage: 'No se pudo abrir WhatsApp. Copia el enlace y envíalo a tu ayudante.',
+          ),
           icon: const Icon(Icons.send_rounded, size: 20),
           label: const Text('Enviar Invitación por WhatsApp'),
           style: ElevatedButton.styleFrom(

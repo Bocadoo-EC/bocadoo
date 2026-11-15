@@ -1,9 +1,12 @@
 import 'package:flutter_map/flutter_map.dart';
 import 'package:go_router/go_router.dart';
 import 'package:latlong2/latlong.dart';
+
+import '../../../core/location/location_service.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../../core/theme/app_theme.dart';
+import 'google_sign_in_flow.dart';
 
 // D7: mismas zonas que DINER_ZONES en store.tsx
 const _ownerZones = [
@@ -63,6 +66,19 @@ class _RegisterOwnerScreenState extends State<RegisterOwnerScreen> {
     _passCtrl.dispose();
     _confirmCtrl.dispose();
     super.dispose();
+  }
+
+  /// "Mi GPS": centra el mapa en la ubicación del teléfono.
+  Future<void> _useGps() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final (outcome, position) = await LocationService.current();
+    if (!mounted) return;
+    if (outcome == LocationOutcome.granted && position != null) {
+      _mapController.move(position, 16.0);
+      messenger.showSnackBar(const SnackBar(content: Text('Mapa centrado en tu ubicación')));
+    } else {
+      messenger.showSnackBar(const SnackBar(content: Text('No pudimos obtener tu ubicación. Elige tu zona.')));
+    }
   }
 
   void _selectZone(String z) {
@@ -277,9 +293,7 @@ class _RegisterOwnerScreenState extends State<RegisterOwnerScreen> {
                 ),
                 const SizedBox(width: 8),
                 OutlinedButton.icon(
-                  onPressed: () {
-                    // TODO: Conectar con GPS del dispositivo
-                  },
+                  onPressed: _useGps,
                   icon: const Icon(Icons.gps_fixed_rounded, size: 18),
                   label: const Text('Mi GPS'),
                   style: OutlinedButton.styleFrom(minimumSize: const Size(100, 56)),
@@ -493,7 +507,7 @@ class _RegisterOwnerScreenState extends State<RegisterOwnerScreen> {
               const SizedBox(height: 12),
 
               OutlinedButton.icon(
-                onPressed: () => context.push('/auth/google', extra: 'owner'),
+                onPressed: () => continueWithGoogle(context, role: 'owner'),
                 icon: const Icon(Icons.g_mobiledata_rounded, size: 24),
                 label: const Text('Registrar con Google Workspace'),
               ),

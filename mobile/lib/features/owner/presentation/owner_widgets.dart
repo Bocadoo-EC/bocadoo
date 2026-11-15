@@ -117,6 +117,185 @@ class OwnerChoice extends StatelessWidget {
   }
 }
 
+/// Control de segmentos en cápsula (Hoy/Mis platos, Planes/Clientes, pestañas).
+/// [filledSelected] pinta el segmento activo en morado (pestañas de Métricas).
+class OwnerSegmented extends StatelessWidget {
+  const OwnerSegmented({
+    super.key,
+    required this.labels,
+    required this.index,
+    required this.onChanged,
+    this.icons,
+    this.filledSelected = false,
+  });
+
+  final List<String> labels;
+  final List<IconData>? icons;
+  final int index;
+  final ValueChanged<int> onChanged;
+  final bool filledSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: filledSelected ? colors.secondaryContainer : Theme.of(context).scaffoldBackgroundColor,
+        borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+        border: filledSelected ? null : Border.all(color: colors.outlineVariant),
+      ),
+      child: Row(children: [
+        for (var i = 0; i < labels.length; i++)
+          Expanded(
+            child: Material(
+              color: i == index ? (filledSelected ? colors.primary : colors.surface) : colors.surface.withValues(alpha: 0),
+              shape: const StadiumBorder(),
+              child: InkWell(
+                customBorder: const StadiumBorder(),
+                onTap: () => onChanged(i),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+                  child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    if (icons != null) ...[
+                      Icon(icons![i],
+                          size: 16,
+                          color: i == index
+                              ? (filledSelected ? colors.onPrimary : colors.primary)
+                              : colors.onSurface),
+                      const SizedBox(width: 6),
+                    ],
+                    Flexible(
+                      child: Text(
+                        labels[i],
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800,
+                          color: i == index
+                              ? (filledSelected ? colors.onPrimary : colors.primary)
+                              : (filledSelected ? colors.onSurface : colors.onSurfaceVariant),
+                        ),
+                      ),
+                    ),
+                  ]),
+                ),
+              ),
+            ),
+          ),
+      ]),
+    );
+  }
+}
+
+/// Botón secundario compacto para filas (los botones del tema ocupan todo el ancho).
+class OwnerSmallButton extends StatelessWidget {
+  const OwnerSmallButton({
+    super.key,
+    required this.label,
+    required this.onPressed,
+    this.icon,
+    this.tonal = true,
+  });
+
+  final String label;
+  final IconData? icon;
+  final VoidCallback? onPressed;
+  final bool tonal;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = ButtonStyle(
+      minimumSize: const WidgetStatePropertyAll(Size(0, 40)),
+      padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 14)),
+      textStyle: const WidgetStatePropertyAll(TextStyle(fontSize: 14, fontWeight: FontWeight.w800)),
+      side: tonal ? null : WidgetStatePropertyAll(BorderSide(color: context.colorScheme.outlineVariant)),
+    );
+    final text = Text(label, maxLines: 1, overflow: TextOverflow.ellipsis);
+    if (tonal) {
+      return icon == null
+          ? FilledButton.tonal(onPressed: onPressed, style: style, child: text)
+          : FilledButton.tonalIcon(onPressed: onPressed, style: style, icon: Icon(icon, size: 16), label: text);
+    }
+    return icon == null
+        ? OutlinedButton(onPressed: onPressed, style: style, child: text)
+        : OutlinedButton.icon(onPressed: onPressed, style: style, icon: Icon(icon, size: 16), label: text);
+  }
+}
+
+/// Badge de estado en mayúscula inicial (Borrador / Publicado / Activo).
+class OwnerBadge extends StatelessWidget {
+  const OwnerBadge({super.key, required this.label, required this.background, required this.foreground});
+
+  final String label;
+  final Color background;
+  final Color foreground;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(color: background, borderRadius: BorderRadius.circular(AppTheme.buttonRadius)),
+      child: Text(label, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: foreground)),
+    );
+  }
+}
+
+/// Error de carga con "Reintentar" (REGLAS_UX §6).
+class OwnerErrorView extends StatelessWidget {
+  const OwnerErrorView({super.key, required this.title, required this.message, required this.onRetry});
+
+  final String title;
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final b = context.bocadooColors;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(color: b.dangerContainer, borderRadius: BorderRadius.circular(AppTheme.cardRadius)),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Icon(Icons.error_outline_rounded, size: 36, color: b.onDangerContainer),
+            const SizedBox(height: 8),
+            Text(title,
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: b.onDangerContainer)),
+            const SizedBox(height: 4),
+            Text(message,
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: b.onDangerContainer)),
+            const SizedBox(height: 16),
+            OutlinedButton(onPressed: onRetry, child: const Text('Reintentar')),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// Carga con texto, centrada.
+class OwnerLoadingView extends StatelessWidget {
+  const OwnerLoadingView(this.text, {super.key});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const CircularProgressIndicator(),
+        const SizedBox(height: 12),
+        Text(text, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: context.colorScheme.onSurface)),
+      ]),
+    );
+  }
+}
+
 /// Contenedor con borde punteado (tarjeta "Escanear QR").
 class DashedBorderBox extends StatelessWidget {
   const DashedBorderBox({

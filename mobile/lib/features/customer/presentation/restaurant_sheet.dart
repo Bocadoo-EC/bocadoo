@@ -48,7 +48,7 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
   void _openTable() {
     final router = GoRouter.of(context);
     router.pop();
-    router.push('/customer/mesa');
+    router.push('/customer/mesa?restaurantId=${widget.restaurantId}');
   }
 
   @override

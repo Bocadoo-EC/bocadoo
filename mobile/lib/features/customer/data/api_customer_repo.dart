@@ -85,6 +85,9 @@ class ApiCustomerRepository implements ICustomerRepository {
   Future<bool> cancelPreorder(String orderNumber) async => _pending();
 
   @override
+  Future<bool> acknowledgeOrder(String orderNumber) async => _pending();
+
+  @override
   Future<List<PlanTemplate>> getPlanTemplates(String restaurantId) async => _pending();
 
   @override
@@ -95,5 +98,39 @@ class ApiCustomerRepository implements ICustomerRepository {
 
   @override
   Future<bool> cancelPlanRequest(String planId) async => _pending();
+
+  @override
+  Future<SharedTable> openSharedTable({required String restaurantId, required String time}) async => _pending();
+
+  @override
+  Future<SharedTable?> getSharedTable(String tableId) async => _pending();
+
+  @override
+  Future<SharedTable> setTableMode(String tableId, TableMode mode) async => _pending();
+
+  @override
+  Future<SharedTable> notifyKitchen(String tableId) async => _pending();
+
+  @override
+  Future<SharedTable> joinTable(
+    String tableId, {
+    required String name,
+    required String soup,
+    required String main,
+    required bool takeaway,
+  }) async =>
+      _pending();
+
+  @override
+  Future<CustomerProfile> getProfile() async => _pending();
+
+  @override
+  Future<PendingFeedback?> getPendingFeedback() async => _pending();
+
+  @override
+  Future<bool> submitFeedback(String redemptionId, {required String tag, String? note}) async => _pending();
+
+  @override
+  Future<bool> dismissFeedback(String redemptionId) async => _pending();
 }
 

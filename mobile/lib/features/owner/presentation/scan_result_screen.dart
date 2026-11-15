@@ -20,6 +20,17 @@ Future<void> openScannerFlow(BuildContext context, WidgetRef ref) async {
     await router.push('/owner/scanner');
     if (!context.mounted) return;
     final state = ref.read(ownerControllerProvider);
+    if (state is OwnerRedirect) {
+      // Mesa o preorden: se abre su pantalla de cobro (O5 / O12).
+      controller.reset();
+      await router.push(state.location);
+      if (context.mounted) {
+        ref.invalidate(dailySummaryProvider);
+        ref.invalidate(pendingTablesProvider);
+        ref.invalidate(ordersOnTheWayProvider);
+      }
+      return;
+    }
     if (state is! OwnerSuccess && state is! OwnerError) return;
     ref.invalidate(dailySummaryProvider);
 

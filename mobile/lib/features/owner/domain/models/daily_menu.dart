@@ -1,8 +1,5 @@
 import 'package:flutter/foundation.dart';
 
-/// Categorías fijas del menú del día.
-const List<String> kMenuCategories = ['Sopa', 'Fuerte', 'Jugo', 'Postre'];
-
 @immutable
 class DailyMenuCourse {
   const DailyMenuCourse({
@@ -10,24 +7,30 @@ class DailyMenuCourse {
     required this.name,
     required this.category,
     this.isSoldOut = false,
+    this.price,
   });
 
   final String id;
   final String name;
-  final String category; // 'Sopa', 'Fuerte', 'Jugo', 'Postre'
+  final String category; // 'Sopa', 'Fuerte', 'Jugo', 'Postre', 'Desayuno'
   final bool isSoldOut;
+
+  /// Solo para desayunos, que tienen precio propio.
+  final double? price;
 
   DailyMenuCourse copyWith({
     String? id,
     String? name,
     String? category,
     bool? isSoldOut,
+    double? price,
   }) {
     return DailyMenuCourse(
       id: id ?? this.id,
       name: name ?? this.name,
       category: category ?? this.category,
       isSoldOut: isSoldOut ?? this.isSoldOut,
+      price: price ?? this.price,
     );
   }
 }

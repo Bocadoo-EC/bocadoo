@@ -15,11 +15,54 @@ extension OwnerPayMethodX on OwnerPayMethod {
 
 @immutable
 class OwnerClient {
-  const OwnerClient({required this.id, required this.name, this.phone = ''});
+  const OwnerClient({
+    required this.id,
+    required this.name,
+    this.phone = '',
+    this.habitualPlan,
+    this.email = '',
+    this.notes = '',
+  });
 
   final String id;
   final String name;
   final String phone;
+  final String email;
+  final String notes;
+
+  /// Nombre del último plan que compró, si tiene alguno.
+  final String? habitualPlan;
+}
+
+enum PlanKind { semanal, quincenal, mensual, libre }
+
+enum PlanCoverage { almuerzo, desayuno, mixto }
+
+extension PlanCoverageX on PlanCoverage {
+  String get label => switch (this) {
+        PlanCoverage.almuerzo => 'Almuerzo',
+        PlanCoverage.desayuno => 'Desayuno',
+        PlanCoverage.mixto => 'Mixto',
+      };
+
+  /// Unidad en plural: "almuerzos", "desayunos" o "combos".
+  String get unit => switch (this) {
+        PlanCoverage.almuerzo => 'almuerzos',
+        PlanCoverage.desayuno => 'desayunos',
+        PlanCoverage.mixto => 'combos',
+      };
+
+  List<String> get includeOptions => switch (this) {
+        PlanCoverage.almuerzo => const ['Sopa', 'Segundo', 'Jugo', 'Postre'],
+        PlanCoverage.desayuno => const ['Plato principal', 'Bebida', 'Fruta'],
+        PlanCoverage.mixto => const ['Desayuno', 'Sopa', 'Segundo', 'Jugo'],
+      };
+
+  List<String> get defaultIncludes => switch (this) {
+        PlanCoverage.almuerzo => const ['Sopa', 'Segundo', 'Jugo'],
+        PlanCoverage.desayuno => const ['Plato principal', 'Bebida'],
+        PlanCoverage.mixto => const ['Desayuno', 'Sopa', 'Segundo'],
+      };
 }
 
 @immutable
@@ -30,6 +73,13 @@ class OwnerPlanTemplate {
     required this.lunches,
     required this.price,
     required this.validityDays,
+    this.kind = PlanKind.mensual,
+    this.coverage = PlanCoverage.almuerzo,
+    this.includes = const ['Sopa', 'Segundo', 'Jugo'],
+    this.days = const [1, 2, 3, 4, 5],
+    this.quota = 40,
+    this.visible = true,
+    this.active = true,
   });
 
   final String id;
@@ -37,8 +87,47 @@ class OwnerPlanTemplate {
   final int lunches;
   final double price;
   final int validityDays;
+  final PlanKind kind;
+  final PlanCoverage coverage;
+  final List<String> includes;
+
+  /// Días de consumo (1 = lunes … 7 = domingo).
+  final List<int> days;
+  final int quota;
+  final bool visible;
+  final bool active;
 
   double get perLunch => lunches == 0 ? 0 : price / lunches;
+
+  OwnerPlanTemplate copyWith({
+    String? id,
+    String? name,
+    int? lunches,
+    double? price,
+    int? validityDays,
+    PlanKind? kind,
+    PlanCoverage? coverage,
+    List<String>? includes,
+    List<int>? days,
+    int? quota,
+    bool? visible,
+    bool? active,
+  }) {
+    return OwnerPlanTemplate(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      lunches: lunches ?? this.lunches,
+      price: price ?? this.price,
+      validityDays: validityDays ?? this.validityDays,
+      kind: kind ?? this.kind,
+      coverage: coverage ?? this.coverage,
+      includes: includes ?? this.includes,
+      days: days ?? this.days,
+      quota: quota ?? this.quota,
+      visible: visible ?? this.visible,
+      active: active ?? this.active,
+    );
+  }
 }
 
 enum PosCategory { almuerzos, desayunos, carta, extras, bebidas }

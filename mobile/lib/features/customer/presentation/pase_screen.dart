@@ -8,8 +8,10 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/contracts/qr_parser.dart';
 import '../../../core/theme/app_theme.dart';
+import '../domain/feedback_rules.dart';
 import 'customer_controller.dart';
 import 'customer_widgets.dart';
+import 'feedback_card.dart';
 
 /// C1 · Mi Pase: QR del plan, preorden o mesa, sellos y últimos movimientos.
 class PaseScreen extends ConsumerStatefulWidget {
@@ -73,6 +75,10 @@ class _PaseScreenState extends ConsumerState<PaseScreen> {
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
                     _QrCard(state: s, controller: controller),
+                    if (shouldShowFeedback(s.pendingFeedback, DateTime.now())) ...[
+                      const SizedBox(height: 16),
+                      FeedbackCard(controller: controller),
+                    ],
                     if (s.stampCards[s.currentPass!.restaurantId] case final card?) ...[
                       const SizedBox(height: 16),
                       _StampSection(card: card, controller: controller),

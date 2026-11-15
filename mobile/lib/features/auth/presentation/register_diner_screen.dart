@@ -1,7 +1,10 @@
 import 'package:go_router/go_router.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/location_picker_map.dart';
+import 'google_sign_in_flow.dart';
 
 // D7: zonas exactas de store.tsx (DINER_ZONES)
 const _dimerZones = [
@@ -13,6 +16,17 @@ const _dimerZones = [
   'UDLA Granados',
   'EPN / Salesiana',
 ];
+
+/// Centro de cada zona, para ubicar el pin al elegirla.
+const _zoneCoords = <String, LatLng>{
+  'Frente a la PUCE': LatLng(-0.2105, -78.5020),
+  'La Floresta': LatLng(-0.2061, -78.4820),
+  'La Mariscal': LatLng(-0.2027, -78.4910),
+  'Centro Histórico': LatLng(-0.2200, -78.5120),
+  'Cumbayá': LatLng(-0.1920, -78.4320),
+  'UDLA Granados': LatLng(-0.1890, -78.4680),
+  'EPN / Salesiana': LatLng(-0.2130, -78.4950),
+};
 
 enum _PassStrength { none, weak, medium, strong }
 
@@ -30,6 +44,7 @@ class _RegisterDinerScreenState extends State<RegisterDinerScreen> {
   final _passCtrl = TextEditingController();
   final _confirmCtrl = TextEditingController();
   String _zone = _dimerZones[1]; // La Floresta por defecto (índice 1)
+  LatLng _location = _zoneCoords[_dimerZones[1]]!;
   bool _obscurePass = true;
   bool _obscureConfirm = true;
   bool _terms = true;
@@ -93,7 +108,13 @@ class _RegisterDinerScreenState extends State<RegisterDinerScreen> {
         duration: const Duration(seconds: 2),
       ));
       // D1: flujo A4 → A6 → C2
-      context.go('/auth/bienvenida/comensal', extra: {'nombre': nombre, 'zona': _zone});
+      // TODO: Conectar con provider de backend (guardar la ubicación fijada).
+      context.go('/auth/bienvenida/comensal', extra: {
+        'nombre': nombre,
+        'zona': _zone,
+        'lat': _location.latitude.toString(),
+        'lng': _location.longitude.toString(),
+      });
     }
   }
 
@@ -237,6 +258,17 @@ class _RegisterDinerScreenState extends State<RegisterDinerScreen> {
                 }).toList(),
               ),
 
+              const SizedBox(height: 14),
+
+              _Label('TU UBICACIÓN EXACTA'),
+              const SizedBox(height: 8),
+              LocationPickerMap(
+                zones: _zoneCoords,
+                selectedZone: _zone,
+                onZoneSelected: (z) => setState(() => _zone = z),
+                onLocationChanged: (p) => _location = p,
+              ),
+
               const SizedBox(height: 16),
 
               _Label('CONTRASEÑA'),
@@ -349,7 +381,7 @@ class _RegisterDinerScreenState extends State<RegisterDinerScreen> {
               const SizedBox(height: 12),
 
               OutlinedButton.icon(
-                onPressed: () => context.push('/auth/google', extra: 'customer'),
+                onPressed: () => continueWithGoogle(context, role: 'customer'),
                 icon: const Icon(Icons.g_mobiledata_rounded, size: 24),
                 label: const Text('Registrarme con Google'),
               ),

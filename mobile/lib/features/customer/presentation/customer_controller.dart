@@ -33,6 +33,7 @@ class CustomerUiState {
   final Map<String, StampCard> stampCards;
   final ActiveTable? activeTable;
   final ActiveOrder? activeOrder;
+  final PendingFeedback? pendingFeedback;
   final List<ActivityItem> recentActivity;
   final List<Restaurant> restaurants;
   final String searchQuery;
@@ -52,6 +53,7 @@ class CustomerUiState {
     this.stampCards = const {},
     this.activeTable,
     this.activeOrder,
+    this.pendingFeedback,
     this.recentActivity = const [],
     this.restaurants = const [],
     this.searchQuery = '',
@@ -142,6 +144,7 @@ class CustomerUiState {
     ActiveTable? activeTable,
     ActiveOrder? activeOrder,
     bool clearActiveOrder = false,
+    bool clearPendingFeedback = false,
     List<ActivityItem>? recentActivity,
     List<Restaurant>? restaurants,
     String? searchQuery,
@@ -162,6 +165,7 @@ class CustomerUiState {
       stampCards: stampCards ?? this.stampCards,
       activeTable: activeTable ?? this.activeTable,
       activeOrder: clearActiveOrder ? null : activeOrder ?? this.activeOrder,
+      pendingFeedback: clearPendingFeedback ? null : pendingFeedback,
       recentActivity: recentActivity ?? this.recentActivity,
       restaurants: restaurants ?? this.restaurants,
       searchQuery: searchQuery ?? this.searchQuery,
@@ -209,6 +213,7 @@ class CustomerController extends ChangeNotifier {
       final table = await _repository.getActiveTable();
       final order = await _repository.getActiveOrder();
       final activity = await _repository.getRecentActivity();
+      final feedback = await _repository.getPendingFeedback();
       final stamps = <String, StampCard>{};
       for (final p in passes) {
         final card = await _repository.getStampCard(p.restaurantId);
@@ -223,6 +228,7 @@ class CustomerController extends ChangeNotifier {
         stampCards: stamps,
         activeTable: table,
         activeOrder: order,
+        pendingFeedback: feedback,
         recentActivity: activity,
         restaurants: restaurants,
         searchQuery: _state.searchQuery,
@@ -245,6 +251,31 @@ class CustomerController extends ChangeNotifier {
         ));
       }
     }
+  }
+
+  /// Vuelve a leer lo que puede cambiar desde la caja (pedido entregado,
+  /// mesa cobrada) sin mostrar carga. Lo llama el marco al entrar.
+  Future<void> refreshLive() async {
+    if (_state.status != CustomerStatus.success) return;
+    try {
+      final order = await _repository.getActiveOrder();
+      final table = await _repository.getActiveTable();
+      _emit(_state.copyWith(
+        activeOrder: order,
+        clearActiveOrder: order == null,
+        activeTable: table,
+      ));
+    } catch (_) {
+      // Se conserva lo que ya se mostraba.
+    }
+  }
+
+  /// El comensal cerró el aviso "Entregado": el pedido deja de mostrarse.
+  Future<void> acknowledgeDelivery() async {
+    final order = _state.activeOrder;
+    if (order == null || !order.isDelivered) return;
+    _emit(_state.copyWith(clearActiveOrder: true));
+    await _repository.acknowledgeOrder(order.orderNumber);
   }
 
   /// Regenera el QR rotativo del plan en pantalla (anti-captura).
@@ -308,7 +339,7 @@ class CustomerController extends ChangeNotifier {
     String? offerId,
     bool takeaway = false,
   }) async {
-    if (_state.activeOrder != null) return false;
+    if (_state.activeOrder != null && !_state.activeOrder!.isDelivered) return false;
     final order = await _repository.preorder(
       restaurantId: restaurant.id,
       soupId: soupId,
@@ -356,6 +387,34 @@ class CustomerController extends ChangeNotifier {
       await _repository.cancelPlanRequest(plan.id);
     });
     return true;
+  }
+
+  /// C9 actualiza la mesa que muestra Mi Pase (QR de mesa y conteo).
+  void syncTable(SharedTable table) {
+    _emit(_state.copyWith(
+      activeTable: ActiveTable(
+        id: table.id,
+        restaurantName: table.restaurantName,
+        time: table.time,
+        membersCount: table.members.length,
+        url: table.qrPayload,
+      ),
+    ));
+  }
+
+  /// C10: una etiqueta de un toque. La tarjeta se oculta al enviar.
+  Future<bool> submitFeedback(String tag) async {
+    final f = _state.pendingFeedback;
+    if (f == null) return false;
+    _emit(_state.copyWith(clearPendingFeedback: true));
+    return _repository.submitFeedback(f.redemptionId, tag: tag);
+  }
+
+  Future<void> dismissFeedback() async {
+    final f = _state.pendingFeedback;
+    if (f == null) return;
+    _emit(_state.copyWith(clearPendingFeedback: true));
+    await _repository.dismissFeedback(f.redemptionId);
   }
 
   Future<void> undo() async {

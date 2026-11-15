@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/contracts/models.dart';
 import '../../../core/contracts/repositories.dart';
@@ -7,6 +8,9 @@ import '../data/mock_owner_repo.dart';
 import '../data/repositories/owner_repository.dart';
 import '../domain/models/cash_models.dart';
 import '../domain/models/daily_menu.dart';
+import '../domain/models/extras_models.dart';
+import '../domain/models/menu_models.dart';
+import '../domain/models/metrics_models.dart';
 import '../domain/repositories/i_owner_repository.dart';
 
 /// Un solo mock compartido para que escaneo, caja, menú y cierre vean los
@@ -26,8 +30,98 @@ final ownerCashRepositoryProvider = Provider<IOwnerCashRepository>(
   (ref) => _sharedMock,
 );
 
+final ownerCatalogRepositoryProvider = Provider<IOwnerCatalogRepository>(
+  (ref) => _sharedOwnerRepository,
+);
+
+final ownerMetricsRepositoryProvider = Provider<IOwnerMetricsRepository>(
+  (ref) => _sharedMock,
+);
+
+final ownerOrdersRepositoryProvider = Provider<IOwnerOrdersRepository>((ref) => _sharedMock);
+
+final ownerTablesRepositoryProvider = Provider<IOwnerTablesRepository>((ref) => _sharedMock);
+
+final ownerFeedbackRepositoryProvider = Provider<IOwnerFeedbackRepository>((ref) => _sharedMock);
+
+final ownerSettingsRepositoryProvider = Provider<IOwnerSettingsRepository>((ref) => _sharedMock);
+
+/// O12 · Preórdenes por cobrar y entregar.
+final activeOrdersProvider = FutureProvider.autoDispose<List<OwnerOrder>>((ref) {
+  return ref.read(ownerOrdersRepositoryProvider).getActiveOrders(ref.read(ownerRestaurantIdProvider));
+});
+
+/// Mesas con amigos por cobrar (banner de Caja).
+final pendingTablesProvider = FutureProvider.autoDispose<List<PendingTable>>((ref) {
+  return ref.read(ownerTablesRepositoryProvider).getPendingTables(ref.read(ownerRestaurantIdProvider));
+});
+
+/// O15 · Opiniones.
+final opinionsProvider = FutureProvider.autoDispose<List<OwnerOpinion>>((ref) {
+  return ref.read(ownerFeedbackRepositoryProvider).getOpinions(ref.read(ownerRestaurantIdProvider));
+});
+
+/// O16 · Datos y logo del local.
+final localInfoProvider = FutureProvider.autoDispose<LocalInfo>((ref) {
+  return ref.read(ownerSettingsRepositoryProvider).getLocalInfo(ref.read(ownerRestaurantIdProvider));
+});
+
+const _roleStorageKey = 'bocadoo-owner-role';
+
+/// Rol de este dispositivo (O16). Se guarda en el teléfono.
+final ownerRoleProvider = NotifierProvider<OwnerRoleNotifier, OwnerRole>(OwnerRoleNotifier.new);
+
+class OwnerRoleNotifier extends Notifier<OwnerRole> {
+  bool _changed = false;
+
+  @override
+  OwnerRole build() {
+    _load();
+    return OwnerRole.owner;
+  }
+
+  Future<void> _load() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_roleStorageKey);
+      if (_changed || raw == null) return;
+      state = raw == 'cashier' ? OwnerRole.cashier : OwnerRole.owner;
+    } catch (_) {
+      // Sin almacenamiento (pruebas): queda como dueño.
+    }
+  }
+
+  Future<void> set(OwnerRole role) async {
+    _changed = true;
+    state = role;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_roleStorageKey, role == OwnerRole.cashier ? 'cashier' : 'owner');
+    } catch (_) {
+      // Se mantiene solo en memoria.
+    }
+  }
+}
+
 /// Restaurante de la caja actual (mock; el backend lo entregará con la sesión).
 final ownerRestaurantIdProvider = Provider<String>((ref) => 'rest-001');
+
+/// Nombre del local (mock; el backend lo entregará con la sesión).
+final ownerRestaurantNameProvider = Provider<String>((ref) => 'La Cuchara de San Blas');
+
+final catalogDishesProvider = FutureProvider.autoDispose<List<CatalogDish>>((ref) {
+  return ref.read(ownerCatalogRepositoryProvider).getDishes(ref.read(ownerRestaurantIdProvider));
+});
+
+final planClientCountsProvider = FutureProvider.autoDispose<Map<String, int>>((ref) {
+  return ref.read(ownerCashRepositoryProvider).getPlanClientCounts(ref.read(ownerRestaurantIdProvider));
+});
+
+final metricsProvider = FutureProvider.autoDispose.family<OwnerMetrics, MetricsPeriod>((ref, period) {
+  return ref
+      .read(ownerMetricsRepositoryProvider)
+      .getMetrics(ref.read(ownerRestaurantIdProvider), period: period);
+});
 
 /// Resumen del turno. Se recarga con `ref.invalidate`.
 final dailySummaryProvider =
@@ -118,6 +212,14 @@ class OwnerSuccess extends OwnerState {
   final bool redeemed;
 }
 
+/// El QR no es un pase: es una mesa (`BCD-MESA-…`) o una preorden
+/// (`BCD-ORD-…`). Caja abre [location] al cerrar el escáner.
+class OwnerRedirect extends OwnerState {
+  const OwnerRedirect(this.location);
+
+  final String location;
+}
+
 /// Pase rechazado (con [result]) o error inesperado (solo [message]).
 class OwnerError extends OwnerState {
   const OwnerError(this.message, {this.result});
@@ -146,12 +248,26 @@ class OwnerController extends Notifier<OwnerState> {
     state = const OwnerIdle();
   }
 
-  /// Valida un QR leído por la cámara o ingresado a mano y, si el pase es
-  /// válido, descuenta el almuerzo.
+  /// Prefijos de los QR que no son pases (escáner universal de Caja).
+  static const tablePrefix = 'BCD-MESA-';
+  static const orderPrefix = 'BCD-ORD-';
+
+  /// Valida un QR leído por la cámara o ingresado a mano. Reconoce los tres
+  /// formatos: pase de plan (descuenta el almuerzo), mesa y preorden.
   Future<void> onCodeDetected(String rawPayload) async {
-    if (_busy || state is OwnerSuccess || state is OwnerError) return;
+    if (_busy || state is OwnerSuccess || state is OwnerError || state is OwnerRedirect) return;
     final code = rawPayload.trim();
     if (code.isEmpty) return;
+
+    final upper = code.toUpperCase();
+    if (upper.startsWith(tablePrefix) && upper.length > tablePrefix.length) {
+      state = OwnerRedirect('/owner/cobrar-mesa/${upper.substring(tablePrefix.length)}');
+      return;
+    }
+    if (upper.startsWith(orderPrefix) && upper.length > orderPrefix.length) {
+      state = OwnerRedirect('/owner/pedidos?cobrar=${upper.substring(orderPrefix.length)}');
+      return;
+    }
 
     _busy = true;
     state = const OwnerScanning(isProcessing: true);

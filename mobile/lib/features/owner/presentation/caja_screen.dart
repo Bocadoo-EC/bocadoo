@@ -6,6 +6,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../../core/contracts/models.dart';
 import '../../../core/theme/app_theme.dart';
+import '../domain/models/extras_models.dart';
 import 'owner_controller.dart';
 import 'owner_format.dart';
 import 'owner_widgets.dart';
@@ -180,12 +181,25 @@ class _CajaBody extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colorScheme;
     final offer = ref.watch(activeOfferProvider).value;
+    final tables = ref.watch(pendingTablesProvider).value ?? const <PendingTable>[];
+    final isOwner = ref.watch(ownerRoleProvider) == OwnerRole.owner;
     final charges = summary.transactions.where((t) => t.amount > 0).take(20).toList();
     final total = charges.fold<double>(0, (sum, t) => sum + t.amount);
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
       children: [
+        for (final t in tables) ...[
+          _TableBanner(
+            table: t,
+            onTap: () async {
+              await context.push('/owner/cobrar-mesa/${t.id}');
+              ref.invalidate(pendingTablesProvider);
+              ref.invalidate(dailySummaryProvider);
+            },
+          ),
+          const SizedBox(height: 10),
+        ],
         _ScanCard(onTap: () => openScannerFlow(context, ref)),
         if (offer != null) ...[
           const SizedBox(height: 12),
@@ -218,17 +232,21 @@ class _CajaBody extends ConsumerWidget {
               onTap: () => context.push('/owner/oferta-flash'),
             ),
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _QuickTile(
-              icon: Icons.receipt_outlined,
-              label: 'Cuadre caja',
-              onTap: () => context.push('/owner/cash-closing'),
+          if (isOwner) ...[
+            const SizedBox(width: 8),
+            Expanded(
+              child: _QuickTile(
+                icon: Icons.receipt_outlined,
+                label: 'Cuadre caja',
+                onTap: () => context.push('/owner/cash-closing'),
+              ),
             ),
-          ),
+          ],
         ]),
-        const SizedBox(height: 12),
-        _NumbersCard(onTap: () => context.go('/owner/metricas')),
+        if (isOwner) ...[
+          const SizedBox(height: 12),
+          _NumbersCard(onTap: () => context.go('/owner/metricas')),
+        ],
         const SizedBox(height: 16),
         Row(children: [
           const Expanded(child: OwnerSectionLabel('Cobros de hoy')),
@@ -246,6 +264,46 @@ class _CajaBody extends ConsumerWidget {
         else
           for (final t in charges) _ChargeRow(item: t),
       ],
+    );
+  }
+}
+
+/// "Mesa #M1234 · 3 comensales · 13:00" con "Cobrar" (abre O5).
+class _TableBanner extends StatelessWidget {
+  const _TableBanner({required this.table, required this.onTap});
+
+  final PendingTable table;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    return Material(
+      color: colors.primaryContainer,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+        side: BorderSide(color: colors.primary),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+          child: Row(children: [
+            Icon(Icons.groups_rounded, color: colors.primary),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Mesa #${table.id} · ${table.members} comensales',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: colors.onPrimaryContainer)),
+                Text('${table.hostName} · ${table.time}',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.onPrimaryContainer)),
+              ]),
+            ),
+            OwnerSmallButton(label: 'Cobrar', onPressed: onTap),
+          ]),
+        ),
+      ),
     );
   }
 }
