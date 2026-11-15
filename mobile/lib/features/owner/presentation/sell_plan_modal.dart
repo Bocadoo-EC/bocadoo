@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/config/app_mode.dart';
 import '../../../core/theme/app_theme.dart';
 import '../domain/models/cash_models.dart';
 import 'owner_controller.dart';
@@ -70,9 +71,12 @@ class _SellPlanSheetState extends ConsumerState<SellPlanSheet> {
     );
     if (!mounted) return;
     if (saleId == null) {
+      final apiErr = AppMode.useMock
+          ? null
+          : ref.read(apiOwnerRepositoryProvider).consumeLastError();
       setState(() {
         _saving = false;
-        _error = 'No se pudo registrar la venta';
+        _error = apiErr ?? 'No se pudo registrar la venta';
       });
       return;
     }

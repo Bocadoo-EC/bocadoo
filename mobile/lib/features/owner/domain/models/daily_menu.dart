@@ -6,11 +6,13 @@ class DailyMenuCourse {
     required this.id,
     required this.name,
     required this.category,
+    this.dishId,
     this.isSoldOut = false,
     this.price,
   });
 
   final String id;
+  final String? dishId;
   final String name;
   final String category; // 'Sopa', 'Fuerte', 'Jugo', 'Postre', 'Desayuno'
   final bool isSoldOut;
@@ -20,6 +22,7 @@ class DailyMenuCourse {
 
   DailyMenuCourse copyWith({
     String? id,
+    String? dishId,
     String? name,
     String? category,
     bool? isSoldOut,
@@ -27,6 +30,7 @@ class DailyMenuCourse {
   }) {
     return DailyMenuCourse(
       id: id ?? this.id,
+      dishId: dishId ?? this.dishId,
       name: name ?? this.name,
       category: category ?? this.category,
       isSoldOut: isSoldOut ?? this.isSoldOut,

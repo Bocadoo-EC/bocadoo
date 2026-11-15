@@ -1,10 +1,16 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/config/app_mode.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/contracts/repositories.dart';
+import '../../../core/network/api_client.dart';
+import '../../../core/network/api_exception.dart';
+import '../../../core/network/polling.dart';
+import '../../../core/session/session_notifier.dart';
+import '../data/api_customer_repo.dart';
 import '../data/mock_customer_repo.dart';
 
 enum CustomerStatus { initial, loading, success, error }
@@ -142,6 +148,7 @@ class CustomerUiState {
     QrMode? selectedQrMode,
     Map<String, StampCard>? stampCards,
     ActiveTable? activeTable,
+    bool clearActiveTable = false,
     ActiveOrder? activeOrder,
     bool clearActiveOrder = false,
     bool clearPendingFeedback = false,
@@ -163,7 +170,7 @@ class CustomerUiState {
       passIndex: passIndex ?? this.passIndex,
       selectedQrMode: selectedQrMode ?? this.selectedQrMode,
       stampCards: stampCards ?? this.stampCards,
-      activeTable: activeTable ?? this.activeTable,
+      activeTable: clearActiveTable ? null : activeTable ?? this.activeTable,
       activeOrder: clearActiveOrder ? null : activeOrder ?? this.activeOrder,
       pendingFeedback: clearPendingFeedback ? null : pendingFeedback,
       recentActivity: recentActivity ?? this.recentActivity,
@@ -186,6 +193,10 @@ class CustomerController extends ChangeNotifier {
   CustomerUiState _state = const CustomerUiState();
   Timer? _undoTimer;
   Future<void> Function()? _undoAction;
+  LifecyclePollingController? _orderPoller;
+
+  /// Último mensaje de error en una acción (preorden o solicitud de plan).
+  String? lastActionError;
 
   CustomerController({ICustomerRepository? repository})
       : _repository = repository ?? MockCustomerRepository();
@@ -240,31 +251,57 @@ class CustomerController extends ChangeNotifier {
       if (_state.plansRestaurantId == null && restaurants.isNotEmpty) {
         await selectPlansRestaurant(restaurants.first.id);
       }
+      _syncOrderPolling(order, table: table);
     } catch (e) {
       if (_state.passes.isNotEmpty) {
         _emit(_state.copyWith(status: CustomerStatus.success, isOffline: true));
       } else {
+        final msg = e is ApiException
+            ? e.userMessage
+            : e.toString().replaceFirst('Exception: ', '');
         _emit(_state.copyWith(
           status: CustomerStatus.error,
           isOffline: false,
-          errorMessage: e.toString().replaceFirst('Exception: ', ''),
+          errorMessage: msg,
         ));
       }
     }
   }
 
   /// Vuelve a leer lo que puede cambiar desde la caja (pedido entregado,
-  /// mesa cobrada) sin mostrar carga. Lo llama el marco al entrar.
+  /// mesa cobrada) sin mostrar carga. Lo llama el marco al entrar y cada 5 s
+  /// mientras hay un pedido activo.
   Future<void> refreshLive() async {
     if (_state.status != CustomerStatus.success) return;
     try {
+      final previousOrder = _state.activeOrder;
+      final previousTable = _state.activeTable;
       final order = await _repository.getActiveOrder();
       final table = await _repository.getActiveTable();
+      final orderJustFinished = (previousOrder != null && order == null) ||
+          (order != null &&
+              order.isDelivered &&
+              !(previousOrder?.isDelivered ?? false));
+      final tableJustFinished = previousTable != null && table == null;
+
+      List<CustomerPass>? updatedPasses;
+      List<ActivityItem>? updatedActivity;
+      if (orderJustFinished || tableJustFinished) {
+        try {
+          updatedPasses = await _repository.getActivePasses();
+          updatedActivity = await _repository.getRecentActivity();
+        } catch (_) {}
+      }
+
       _emit(_state.copyWith(
+        passes: updatedPasses,
+        recentActivity: updatedActivity,
         activeOrder: order,
         clearActiveOrder: order == null,
         activeTable: table,
+        clearActiveTable: table == null,
       ));
+      _syncOrderPolling(order, table: table);
     } catch (_) {
       // Se conserva lo que ya se mostraba.
     }
@@ -275,6 +312,7 @@ class CustomerController extends ChangeNotifier {
     final order = _state.activeOrder;
     if (order == null || !order.isDelivered) return;
     _emit(_state.copyWith(clearActiveOrder: true));
+    _syncOrderPolling(null);
     await _repository.acknowledgeOrder(order.orderNumber);
   }
 
@@ -339,21 +377,39 @@ class CustomerController extends ChangeNotifier {
     String? offerId,
     bool takeaway = false,
   }) async {
-    if (_state.activeOrder != null && !_state.activeOrder!.isDelivered) return false;
-    final order = await _repository.preorder(
-      restaurantId: restaurant.id,
-      soupId: soupId,
-      mainId: mainId,
-      breakfastId: breakfastId,
-      offerId: offerId,
-      takeaway: takeaway,
-    );
-    _emit(_state.copyWith(activeOrder: order, selectedQrMode: QrMode.preorden));
-    _startUndo('Pedido enviado · Deshacer', () async {
-      await _repository.cancelPreorder(order.orderNumber);
-      _emit(_state.copyWith(clearActiveOrder: true));
-    });
-    return true;
+    lastActionError = null;
+    if (_state.activeOrder != null && !_state.activeOrder!.isDelivered) {
+      lastActionError = 'Ya tienes una orden activa pendiente.';
+      return false;
+    }
+    try {
+      final order = await _repository.preorder(
+        restaurantId: restaurant.id,
+        soupId: soupId,
+        mainId: mainId,
+        breakfastId: breakfastId,
+        offerId: offerId,
+        takeaway: takeaway,
+      );
+      _emit(_state.copyWith(activeOrder: order, selectedQrMode: QrMode.preorden));
+      _syncOrderPolling(order);
+      _startUndo('Pedido enviado · Deshacer', () async {
+        try {
+          await _repository.cancelPreorder(order.orderNumber);
+          _emit(_state.copyWith(clearActiveOrder: true));
+          _syncOrderPolling(null);
+        } catch (_) {
+          await refreshLive();
+        }
+      });
+      return true;
+    } on ApiException catch (e) {
+      lastActionError = e.userMessage;
+      return false;
+    } catch (_) {
+      lastActionError = 'No pudimos enviar tu pedido. Inténtalo de nuevo.';
+      return false;
+    }
   }
 
   /// "Pedir" en la tarjeta de Dónde comer: primera sopa y segundo disponibles.
@@ -381,40 +437,60 @@ class CustomerController extends ChangeNotifier {
   }
 
   Future<bool> requestPlan(PlanTemplate plan) async {
-    final ok = await _repository.requestPlan(plan.id);
-    if (!ok) return false;
-    _startUndo('Plan solicitado · Deshacer', () async {
-      await _repository.cancelPlanRequest(plan.id);
-    });
-    return true;
+    lastActionError = null;
+    try {
+      final ok = await _repository.requestPlan(plan.id);
+      if (!ok) return false;
+      _startUndo('Plan solicitado · Deshacer', () async {
+        await _repository.cancelPlanRequest(plan.id);
+      });
+      return true;
+    } on ApiException catch (e) {
+      lastActionError = e.userMessage;
+      return false;
+    } catch (_) {
+      lastActionError = 'No pudimos enviar la solicitud. Inténtalo de nuevo.';
+      return false;
+    }
   }
 
   /// C9 actualiza la mesa que muestra Mi Pase (QR de mesa y conteo).
   void syncTable(SharedTable table) {
-    _emit(_state.copyWith(
-      activeTable: ActiveTable(
-        id: table.id,
-        restaurantName: table.restaurantName,
-        time: table.time,
-        membersCount: table.members.length,
-        url: table.qrPayload,
-      ),
-    ));
+    final activeTable = ActiveTable(
+      id: table.id,
+      restaurantName: table.restaurantName,
+      time: table.time,
+      membersCount: table.members.length,
+      url: table.qrPayload,
+    );
+    _emit(_state.copyWith(activeTable: activeTable));
+    _syncOrderPolling(_state.activeOrder, table: activeTable);
   }
 
   /// C10: una etiqueta de un toque. La tarjeta se oculta al enviar.
   Future<bool> submitFeedback(String tag) async {
     final f = _state.pendingFeedback;
     if (f == null) return false;
+    lastActionError = null;
     _emit(_state.copyWith(clearPendingFeedback: true));
-    return _repository.submitFeedback(f.redemptionId, tag: tag);
+    try {
+      return await _repository.submitFeedback(f.redemptionId, tag: tag);
+    } on ApiException catch (e) {
+      lastActionError = e.userMessage;
+      return false;
+    } catch (_) {
+      lastActionError = 'No pudimos enviar tu calificación. Inténtalo más tarde.';
+      return false;
+    }
   }
 
   Future<void> dismissFeedback() async {
     final f = _state.pendingFeedback;
     if (f == null) return;
     _emit(_state.copyWith(clearPendingFeedback: true));
-    await _repository.dismissFeedback(f.redemptionId);
+    try {
+      await _repository.dismissFeedback(f.redemptionId);
+    } catch (_) {}
   }
 
   Future<void> undo() async {
@@ -444,15 +520,39 @@ class CustomerController extends ChangeNotifier {
     _emit(_state.copyWith(clearUndo: true));
   }
 
+  void _syncOrderPolling(ActiveOrder? order, {ActiveTable? table}) {
+    final shouldPoll = (order != null && !order.isDelivered) || table != null;
+    if (shouldPoll) {
+      _orderPoller ??= LifecyclePollingController(
+        interval: const Duration(seconds: 5),
+        onTick: refreshLive,
+      );
+      if (!_orderPoller!.isRunning) {
+        try {
+          _orderPoller!.start();
+        } catch (_) {
+          // En pruebas unitarias sin WidgetsBinding inicializado se omite el ciclo.
+        }
+      }
+    } else {
+      _orderPoller?.stop();
+    }
+  }
+
   @override
   void dispose() {
     _undoTimer?.cancel();
+    _orderPoller?.dispose();
     super.dispose();
   }
 }
 
 final customerRepositoryProvider = Provider<ICustomerRepository>((ref) {
-  return MockCustomerRepository();
+  if (AppMode.useMock) return MockCustomerRepository();
+  return ApiCustomerRepository(
+    apiClient: ref.watch(apiClientProvider),
+    session: ref.watch(sessionProvider),
+  );
 });
 
 final customerControllerProvider = Provider<CustomerController>((ref) {

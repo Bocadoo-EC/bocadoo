@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/config/app_mode.dart';
 import '../../../core/theme/app_theme.dart';
 import '../domain/models/extras_models.dart';
 import 'owner_controller.dart';
@@ -85,7 +86,13 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
     if (!mounted) return;
     _refresh();
     if (!ok) {
-      showInfoSnackBar(messenger, 'No se pudo validar el pedido #${order.number}. Revisa el plan de ${order.dinerName}.');
+      final apiErr = AppMode.useMock
+          ? null
+          : ref.read(apiOwnerRepositoryProvider).consumeLastError();
+      showInfoSnackBar(
+        messenger,
+        apiErr ?? 'No se pudo validar el pedido #${order.number}. Revisa el plan de ${order.dinerName}.',
+      );
       return;
     }
     showUndoSnackBar(
@@ -111,7 +118,10 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
     if (!mounted) return;
     _refresh();
     if (!ok) {
-      showInfoSnackBar(messenger, 'No se pudo entregar el pedido #${order.number}');
+      final apiErr = AppMode.useMock
+          ? null
+          : ref.read(apiOwnerRepositoryProvider).consumeLastError();
+      showInfoSnackBar(messenger, apiErr ?? 'No se pudo entregar el pedido #${order.number}');
       return;
     }
     showUndoSnackBar(

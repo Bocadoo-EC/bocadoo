@@ -4,6 +4,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import '../../../core/config/app_mode.dart';
 import '../../../core/contracts/qr_parser.dart';
 import '../../../core/theme/app_theme.dart';
 import 'owner_controller.dart';
@@ -186,7 +187,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      if (kDebugMode) ...[
+                      if (kDebugMode && AppMode.useMock) ...[
                         OutlinedButton.icon(
                           onPressed: processing ? null : _openSimulator,
                           icon: const Icon(Icons.bug_report_outlined),

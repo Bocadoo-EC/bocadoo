@@ -1,23 +1,29 @@
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/network/api_exception.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/external_links.dart';
+import '../../../core/utils/formatters.dart';
+import '../data/auth_repository.dart';
 
-class OnboardingOwnerScreen extends StatefulWidget {
+class OnboardingOwnerScreen extends ConsumerStatefulWidget {
   // D4: precio ingresado en A5 (default $3.50)
   final double precioBase;
 
   const OnboardingOwnerScreen({super.key, required this.precioBase});
 
   @override
-  State<OnboardingOwnerScreen> createState() => _OnboardingOwnerScreenState();
+  ConsumerState<OnboardingOwnerScreen> createState() =>
+      _OnboardingOwnerScreenState();
 }
 
-class _OnboardingOwnerScreenState extends State<OnboardingOwnerScreen> {
+class _OnboardingOwnerScreenState extends ConsumerState<OnboardingOwnerScreen> {
   int _step = 1;
   int _puestos = 28;
   bool _anotarMesa = false;
+  bool _saving = false;
 
   // D5: enlace mock con TODO para backend
   static const _inviteLink = 'https://bocadoo.ec/app/unirse?rol=caja&rest=demo';
@@ -49,6 +55,90 @@ class _OnboardingOwnerScreenState extends State<OnboardingOwnerScreen> {
   String _fmt(double v) {
     final rounded = (v * 100).round() / 100;
     return '\$${rounded.toStringAsFixed(2)}';
+  }
+
+  Future<void> _savePlansAndContinue() async {
+    setState(() => _saving = true);
+    try {
+      await ref.read(authRepositoryProvider).saveSuggestedPlans([
+        SuggestedPlanInput(
+          tipo: 'SEMANAL',
+          nombre: 'Plan Semanal',
+          almuerzos: 5,
+          precioCentavos: Money.toCents(_total(5)),
+          vigenciaDias: 7,
+        ),
+        SuggestedPlanInput(
+          tipo: 'QUINCENAL',
+          nombre: 'Plan Quincenal',
+          almuerzos: 10,
+          precioCentavos: Money.toCents(_total(10)),
+          vigenciaDias: 15,
+        ),
+        SuggestedPlanInput(
+          tipo: 'MENSUAL',
+          nombre: 'Plan Mensual',
+          almuerzos: 20,
+          precioCentavos: Money.toCents(_total(20)),
+          vigenciaDias: 30,
+        ),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _step = 2;
+      });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.userMessage)),
+      );
+    }
+  }
+
+  Future<void> _saveCapacityAndContinue() async {
+    setState(() => _saving = true);
+    try {
+      await ref.read(authRepositoryProvider).updateOnboardingCapacity(
+            seats: _puestos,
+            askTableOnCheckout: _anotarMesa,
+          );
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _step = 3;
+      });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.userMessage)),
+      );
+    }
+  }
+
+  Future<void> _finishOnboarding() async {
+    setState(() => _saving = true);
+    bool activated = false;
+    try {
+      activated =
+          await ref.read(authRepositoryProvider).completeOwnerOnboarding();
+    } on ApiException {
+      activated = false;
+    }
+    if (!mounted) return;
+    setState(() => _saving = false);
+    if (!activated) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Tu local quedó en borrador. Completa tu menú para publicarlo.',
+          ),
+        ),
+      );
+    }
+    context.go('/owner/caja');
   }
 
   @override
@@ -153,11 +243,17 @@ class _OnboardingOwnerScreenState extends State<OnboardingOwnerScreen> {
         ),
         const SizedBox(height: 24),
         ElevatedButton.icon(
-          onPressed: () {
-            // TODO: Conectar con provider de backend (guardar planes sugeridos)
-            setState(() => _step = 2);
-          },
-          icon: const Icon(Icons.check_rounded, size: 20),
+          onPressed: _saving ? null : _savePlansAndContinue,
+          icon: _saving
+              ? SizedBox(
+                  height: 18,
+                  width: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: cs.onPrimary,
+                  ),
+                )
+              : const Icon(Icons.check_rounded, size: 20),
           label: const Text('Usar estos planes'),
         ),
         const SizedBox(height: 12),
@@ -257,11 +353,17 @@ class _OnboardingOwnerScreenState extends State<OnboardingOwnerScreen> {
         ),
         const SizedBox(height: 24),
         ElevatedButton(
-          onPressed: () {
-            // TODO: Conectar con provider de backend (guardar aforo y configuración)
-            setState(() => _step = 3);
-          },
-          child: const Text('Continuar a invitar ayudante'),
+          onPressed: _saving ? null : _saveCapacityAndContinue,
+          child: _saving
+              ? SizedBox(
+                  height: 20,
+                  width: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: cs.onPrimary,
+                  ),
+                )
+              : const Text('Continuar a invitar ayudante'),
         ),
       ],
     );
@@ -318,11 +420,17 @@ class _OnboardingOwnerScreenState extends State<OnboardingOwnerScreen> {
         ),
         const SizedBox(height: 12),
         ElevatedButton(
-          onPressed: () {
-            // TODO: Conectar con provider de backend (finalizar onboarding del dueño)
-            context.go('/owner/caja');
-          },
-          child: const Text('¡Listo, abrir terminal de restaurante!'),
+          onPressed: _saving ? null : _finishOnboarding,
+          child: _saving
+              ? SizedBox(
+                  height: 20,
+                  width: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: cs.onPrimary,
+                  ),
+                )
+              : const Text('¡Listo, abrir terminal de restaurante!'),
         ),
       ],
     );

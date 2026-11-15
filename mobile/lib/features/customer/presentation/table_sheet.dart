@@ -5,8 +5,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/config/api_capabilities.dart';
+import '../../../core/config/app_mode.dart';
 import '../../../core/contracts/models.dart';
+import '../../../core/network/api_exception.dart';
+import '../../../core/network/polling.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/utils/formatters.dart';
 import 'customer_controller.dart';
 import 'customer_widgets.dart' show CustomerErrorView;
 import 'social_widgets.dart';
@@ -31,7 +36,9 @@ class _TableSheetState extends ConsumerState<TableSheet> {
   bool _failed = false;
   bool _busy = false;
   bool _copied = false;
+  String? _errorMsg;
   Timer? _copiedTimer;
+  LifecyclePollingController? _poller;
 
   String get _restaurantId =>
       widget.restaurantId ?? ref.read(customerControllerProvider).state.currentPass?.restaurantId ?? 'r1';
@@ -45,27 +52,97 @@ class _TableSheetState extends ConsumerState<TableSheet> {
   @override
   void dispose() {
     _copiedTimer?.cancel();
+    _poller?.dispose();
     super.dispose();
+  }
+
+  void _startPolling() {
+    _poller ??= LifecyclePollingController(
+      interval: const Duration(seconds: 8),
+      onTick: _pollTable,
+    );
+    if (!_poller!.isRunning) {
+      try {
+        _poller!.start();
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _pollTable() async {
+    final current = _table;
+    if (current == null || !mounted) return;
+    try {
+      final latest = await ref
+          .read(customerRepositoryProvider)
+          .getSharedTable(current.id);
+      if (!mounted) return;
+      if (latest == null) {
+        _poller?.stop();
+        await ref.read(customerControllerProvider).refreshLive();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            behavior: SnackBarBehavior.floating,
+            content: Text('La mesa fue cerrada en caja'),
+          ),
+        );
+        if (Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
+        }
+        return;
+      }
+      ref.read(customerControllerProvider).syncTable(latest);
+      setState(() => _table = latest);
+    } catch (_) {}
+  }
+
+  bool _isPastSlot(String hhmm) {
+    final parts = hhmm.split(':');
+    if (parts.length != 2) return false;
+    return EcuadorTime.todayAtUtc(hhmm).isBefore(DateTime.now().toUtc());
   }
 
   Future<void> _open() async {
     setState(() {
       _loading = true;
       _failed = false;
+      _errorMsg = null;
     });
     try {
-      final table = await ref.read(customerRepositoryProvider).openSharedTable(restaurantId: _restaurantId, time: _time);
+      final repo = ref.read(customerRepositoryProvider);
+      final active = ref.read(customerControllerProvider).state.activeTable;
+      SharedTable? table;
+      if (active != null &&
+          (widget.restaurantId == null || _table == null) &&
+          active.time == _time) {
+        table = await repo.getSharedTable(active.id);
+      }
+      table ??= await repo.openSharedTable(
+        restaurantId: _restaurantId,
+        time: _time,
+      );
       if (!mounted) return;
       ref.read(customerControllerProvider).syncTable(table);
       setState(() {
         _table = table;
+        _time = table!.time;
         _loading = false;
       });
+      _startPolling();
+    } on ApiException catch (e) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _failed = true;
+          _errorMsg = e.userMessage;
+        });
+      }
     } catch (_) {
       if (mounted) {
         setState(() {
           _loading = false;
           _failed = true;
+          _errorMsg = 'No pudimos preparar tu mesa.';
         });
       }
     }
@@ -82,6 +159,11 @@ class _TableSheetState extends ConsumerState<TableSheet> {
       if (done != null) {
         messenger.showSnackBar(SnackBar(behavior: SnackBarBehavior.floating, content: Text(done)));
       }
+    } on ApiException catch (e) {
+      messenger.showSnackBar(SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text(e.userMessage),
+      ));
     } catch (_) {
       messenger.showSnackBar(const SnackBar(
         behavior: SnackBarBehavior.floating,
@@ -94,7 +176,7 @@ class _TableSheetState extends ConsumerState<TableSheet> {
 
   void _invite(SharedTable t) {
     final text = '¡Vamos a almorzar juntos en ${t.restaurantName} a las ${t.time}! '
-        'Elige tu plato y únete a nuestra mesa aquí: ${t.shareUrl}';
+        'Únete a nuestra mesa: ${t.shareUrl} (código: ${t.id})';
     openExternal(context, whatsAppUri(text), failMessage: 'No se pudo abrir WhatsApp');
   }
 
@@ -132,7 +214,7 @@ class _TableSheetState extends ConsumerState<TableSheet> {
               : _failed || t == null
                   ? CustomerErrorView(
                       title: 'Error al crear mesa',
-                      message: 'No pudimos preparar tu mesa.',
+                      message: _errorMsg ?? 'No pudimos preparar tu mesa.',
                       onRetry: _open,
                     )
                   : ListView(padding: const EdgeInsets.fromLTRB(16, 0, 16, 24), children: [
@@ -148,7 +230,11 @@ class _TableSheetState extends ConsumerState<TableSheet> {
                               label: time,
                               selected: _time == time,
                               radius: AppTheme.buttonRadius,
-                              onTap: _busy || _loading
+                              onTap: _busy ||
+                                      _loading ||
+                                      (!AppMode.useMock &&
+                                          _times.any((slot) => !_isPastSlot(slot)) &&
+                                          _isPastSlot(time))
                                   ? null
                                   : () {
                                       setState(() => _time = time);
@@ -167,7 +253,9 @@ class _TableSheetState extends ConsumerState<TableSheet> {
                             title: 'Cada quien lo suyo',
                             hint: 'Cada amigo con plan descuenta el suyo.',
                             selected: t.mode == TableMode.eachOwn,
-                            onTap: _busy ? null : () => _run(() => repo.setTableMode(t.id, TableMode.eachOwn)),
+                            onTap: _busy || !ApiCapabilities.sharedTableModeChange
+                                ? null
+                                : () => _run(() => repo.setTableMode(t.id, TableMode.eachOwn)),
                           ),
                         ),
                         const SizedBox(width: 8),
@@ -176,7 +264,9 @@ class _TableSheetState extends ConsumerState<TableSheet> {
                             title: 'Yo invito la mesa',
                             hint: 'Se descuentan de mi plan y gano un sello por cada uno.',
                             selected: t.mode == TableMode.hostPays,
-                            onTap: _busy ? null : () => _run(() => repo.setTableMode(t.id, TableMode.hostPays)),
+                            onTap: _busy || !ApiCapabilities.sharedTableModeChange
+                                ? null
+                                : () => _run(() => repo.setTableMode(t.id, TableMode.hostPays)),
                           ),
                         ),
                       ]),
@@ -208,7 +298,7 @@ class _TableSheetState extends ConsumerState<TableSheet> {
                       ),
                       Divider(height: 24, color: colors.outlineVariant),
                       _Members(table: t),
-                      if (!t.onTheWay) ...[
+                      if (ApiCapabilities.sharedTableNotifyKitchen && !t.onTheWay) ...[
                         const SizedBox(height: 18),
                         ElevatedButton(
                           onPressed: _busy

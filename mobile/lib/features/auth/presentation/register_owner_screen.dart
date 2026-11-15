@@ -1,11 +1,12 @@
 import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:latlong2/latlong.dart';
-
-import '../../../core/location/location_service.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/location/location_service.dart';
 import '../../../core/theme/app_theme.dart';
+import '../data/auth_repository.dart';
 import 'google_sign_in_flow.dart';
 
 // D7: mismas zonas que DINER_ZONES en store.tsx
@@ -29,14 +30,15 @@ const _zoneCoords = <String, LatLng>{
   'EPN / Salesiana': LatLng(-0.2130, -78.4950),
 };
 
-class RegisterOwnerScreen extends StatefulWidget {
+class RegisterOwnerScreen extends ConsumerStatefulWidget {
   const RegisterOwnerScreen({super.key});
 
   @override
-  State<RegisterOwnerScreen> createState() => _RegisterOwnerScreenState();
+  ConsumerState<RegisterOwnerScreen> createState() =>
+      _RegisterOwnerScreenState();
 }
 
-class _RegisterOwnerScreenState extends State<RegisterOwnerScreen> {
+class _RegisterOwnerScreenState extends ConsumerState<RegisterOwnerScreen> {
   final _restaurantCtrl = TextEditingController();
   final _ownerNameCtrl = TextEditingController();
   final _rucCtrl = TextEditingController();
@@ -103,8 +105,8 @@ class _RegisterOwnerScreenState extends State<RegisterOwnerScreen> {
     if (_whatsappCtrl.text.trim().length < 9) {
       errs['whatsapp'] = 'Ingresa el WhatsApp del restaurante (ej: 0987654321).';
     }
-    if (_passCtrl.text.length < 6) {
-      errs['pass'] = 'La contraseña debe tener al menos 6 caracteres.';
+    if (_passCtrl.text.length < 10) {
+      errs['pass'] = 'La contraseña debe tener mínimo 10 caracteres.';
     } else if (_passCtrl.text != _confirmCtrl.text) {
       errs['confirm'] = 'Las contraseñas no coinciden.';
     }
@@ -121,11 +123,38 @@ class _RegisterOwnerScreenState extends State<RegisterOwnerScreen> {
   Future<void> _register() async {
     if (!_validate()) return;
     setState(() => _loading = true);
-    // TODO: Conectar con provider de backend
-    await Future.delayed(const Duration(milliseconds: 1200));
+    LatLng center = _zoneCoords[_zone] ?? const LatLng(-0.2105, -78.5020);
+    try {
+      center = _mapController.camera.center;
+    } catch (_) {}
+    final normalizedPrice = _priceCtrl.text.trim().replaceAll(',', '.');
+    final price = double.tryParse(normalizedPrice) ?? 3.50;
+
+    final result = await ref.read(authRepositoryProvider).registerOwner(
+          restaurantName: _restaurantCtrl.text.trim(),
+          ownerName: _ownerNameCtrl.text.trim(),
+          ruc: _rucCtrl.text.trim(),
+          email: _emailCtrl.text.trim(),
+          whatsapp: _whatsappCtrl.text.trim(),
+          address: _searchCtrl.text.trim(),
+          lat: center.latitude,
+          lng: center.longitude,
+          zone: _zone,
+          looseLunchPrice: price,
+          password: _passCtrl.text,
+        );
     if (!mounted) return;
     setState(() => _loading = false);
-    final price = double.tryParse(_priceCtrl.text) ?? 3.50;
+    if (!result.ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result.errorMessage ?? 'No pudimos registrar tu restaurante. Inténtalo de nuevo.',
+          ),
+        ),
+      );
+      return;
+    }
     // D4: pasar precio a A7 para calcular planes
     context.go('/auth/bienvenida/dueno', extra: price);
   }
@@ -417,7 +446,7 @@ class _RegisterOwnerScreenState extends State<RegisterOwnerScreen> {
                 obscureText: _obscurePass,
                 decoration: InputDecoration(
                   prefixIcon: Icon(Icons.lock_outline_rounded, color: cs.onSurfaceVariant),
-                  hintText: 'Mínimo 6 caracteres',
+                  hintText: 'Mínimo 10 caracteres',
                   errorText: _errors['pass'],
                   suffixIcon: IconButton(
                     icon: Icon(

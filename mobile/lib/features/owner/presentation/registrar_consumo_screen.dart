@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/config/api_capabilities.dart';
+import '../../../core/config/app_mode.dart';
 import '../../../core/theme/app_theme.dart';
 import '../domain/models/cash_models.dart';
 import '../domain/models/daily_menu.dart';
@@ -186,7 +188,7 @@ class _RegistrarConsumoScreenState extends ConsumerState<RegistrarConsumoScreen>
     final repo = ref.read(ownerCashRepositoryProvider);
     final saleId = await repo.registerPosSale(
       restaurantId: ref.read(ownerRestaurantIdProvider),
-      label: '$mesa · ${lines.fold<int>(0, (s, l) => s + l.qty)} ítems',
+      label: '$mesa · ${lines.fold<int>(0, (s, l) => s + l.qty)} productos',
       lines: [
         for (final l in lines)
           PosSaleLine(name: l.name, detail: l.detail, unitPrice: l.unitCents / 100, qty: l.qty, isLunch: l.isLunch),
@@ -197,7 +199,10 @@ class _RegistrarConsumoScreenState extends ConsumerState<RegistrarConsumoScreen>
     if (!mounted) return;
     setState(() => _charging = false);
     if (saleId == null) {
-      showInfoSnackBar(messenger, 'No se pudo registrar el cobro');
+      final apiErr = AppMode.useMock
+          ? null
+          : ref.read(apiOwnerRepositoryProvider).consumeLastError();
+      showInfoSnackBar(messenger, apiErr ?? 'No se pudo registrar el cobro');
       return;
     }
     container.invalidate(dailySummaryProvider);
@@ -1036,11 +1041,12 @@ class _TicketPanel extends StatelessWidget {
         ],
         const SizedBox(height: 8),
         Row(children: [
-          for (final (m, icon) in const [
-            (OwnerPayMethod.efectivo, Icons.payments_outlined),
-            (OwnerPayMethod.transferencia, Icons.account_balance_outlined),
-            (OwnerPayMethod.deuna, Icons.bolt_rounded),
-            (OwnerPayMethod.tarjeta, Icons.credit_card_rounded),
+          for (final (m, icon) in [
+            const (OwnerPayMethod.efectivo, Icons.payments_outlined),
+            const (OwnerPayMethod.transferencia, Icons.account_balance_outlined),
+            const (OwnerPayMethod.deuna, Icons.bolt_rounded),
+            if (ApiCapabilities.cardPayment)
+              const (OwnerPayMethod.tarjeta, Icons.credit_card_rounded),
           ]) ...[
             if (m != OwnerPayMethod.efectivo) const SizedBox(width: 6),
             Expanded(

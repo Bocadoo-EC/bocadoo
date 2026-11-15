@@ -1,29 +1,73 @@
+import 'dart:async';
+
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/config/app_mode.dart';
+import '../../../core/session/session_notifier.dart';
 import '../../../core/theme/app_theme.dart';
+import '../data/auth_repository.dart';
 import 'google_sign_in_flow.dart';
 
 enum _UserRole { customer, owner }
 
-class LoginScreen extends StatefulWidget {
+class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
 
   @override
-  State<LoginScreen> createState() => _LoginScreenState();
+  ConsumerState<LoginScreen> createState() => _LoginScreenState();
 }
 
-class _LoginScreenState extends State<LoginScreen> {
+class _LoginScreenState extends ConsumerState<LoginScreen> {
   _UserRole _role = _UserRole.customer;
   final _emailCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
   bool _obscure = true;
   bool _loading = false;
+  bool _warmingUp = false;
+  bool _showWarmUpNotice = false;
+  Timer? _warmUpTimer;
   String? _emailError;
   String? _passError;
+  String? _serverError;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final expired = sessionNotifier.expiredMessage;
+      if (expired != null && expired.isNotEmpty) {
+        sessionNotifier.clearExpiredMessage();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(expired)),
+        );
+      }
+    });
+
+    if (!AppMode.useMock) {
+      _warmingUp = true;
+      _warmUpTimer = Timer(const Duration(seconds: 4), () {
+        if (mounted && _warmingUp) {
+          setState(() => _showWarmUpNotice = true);
+        }
+      });
+      ref.read(authRepositoryProvider).warmUpHealth().whenComplete(() {
+        _warmUpTimer?.cancel();
+        if (mounted) {
+          setState(() {
+            _warmingUp = false;
+            _showWarmUpNotice = false;
+          });
+        }
+      });
+    }
+  }
 
   @override
   void dispose() {
+    _warmUpTimer?.cancel();
     _emailCtrl.dispose();
     _passCtrl.dispose();
     super.dispose();
@@ -34,6 +78,7 @@ class _LoginScreenState extends State<LoginScreen> {
       _role = r;
       _emailError = null;
       _passError = null;
+      _serverError = null;
     });
   }
 
@@ -49,6 +94,7 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() {
       _emailError = eErr;
       _passError = pErr;
+      _serverError = null;
     });
     return eErr == null && pErr == null;
   }
@@ -56,10 +102,19 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _login() async {
     if (!_validate()) return;
     setState(() => _loading = true);
-    // TODO: Conectar con provider de backend
-    await Future.delayed(const Duration(milliseconds: 700));
+    final expectedRole =
+        _role == _UserRole.customer ? AppRole.diner : AppRole.owner;
+    final result = await ref.read(authRepositoryProvider).login(
+          identifier: _emailCtrl.text.trim(),
+          password: _passCtrl.text,
+          expectedRole: expectedRole,
+        );
     if (!mounted) return;
     setState(() => _loading = false);
+    if (!result.ok) {
+      setState(() => _serverError = result.errorMessage);
+      return;
+    }
     if (_role == _UserRole.customer) {
       context.go('/customer/pase');
     } else {
@@ -250,6 +305,28 @@ class _LoginScreenState extends State<LoginScreen> {
                       )
                     : const Text('Iniciar sesión'),
               ),
+
+              if (_serverError != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  _serverError!,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: cs.error,
+                  ),
+                ),
+              ],
+
+              if (_showWarmUpNotice) ...[
+                const SizedBox(height: 8),
+                Text(
+                  'Despertando el servidor… puede tardar un momento.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
+                ),
+              ],
 
               const SizedBox(height: 20),
 

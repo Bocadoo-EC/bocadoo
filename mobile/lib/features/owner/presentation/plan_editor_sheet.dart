@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/network/api_exception.dart';
 import '../../../core/theme/app_theme.dart';
 import '../domain/models/cash_models.dart';
 
@@ -90,15 +91,25 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
     final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
     final container = ProviderScope.containerOf(context, listen: false);
-    final saved = await ref
-        .read(ownerCashRepositoryProvider)
-        .savePlanTemplate(ref.read(ownerRestaurantIdProvider), _plan.copyWith(name: name));
-    if (!mounted) return;
-    container
-      ..invalidate(planTemplatesProvider)
-      ..invalidate(planClientCountsProvider);
-    navigator.pop(true);
-    showInfoSnackBar(messenger, '${saved.name} (${OwnerFormat.money(saved.price)}) guardado');
+    try {
+      final saved = await ref
+          .read(ownerCashRepositoryProvider)
+          .savePlanTemplate(ref.read(ownerRestaurantIdProvider), _plan.copyWith(name: name));
+      if (!mounted) return;
+      container
+        ..invalidate(planTemplatesProvider)
+        ..invalidate(planClientCountsProvider);
+      navigator.pop(true);
+      showInfoSnackBar(messenger, '${saved.name} (${OwnerFormat.money(saved.price)}) guardado');
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      showInfoSnackBar(messenger, e.userMessage);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      showInfoSnackBar(messenger, 'No se pudo guardar el plan. Inténtalo de nuevo.');
+    }
   }
 
   @override

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../data/api_owner_repo.dart';
 import '../domain/models/cash_models.dart';
 import 'owner_controller.dart';
 import 'owner_widgets.dart';
@@ -66,7 +67,10 @@ class _CartulinaSheetState extends ConsumerState<CartulinaSheet> {
     if (!mounted) return;
     if (id == null) {
       setState(() => _saving = false);
-      showInfoSnackBar(messenger, 'Error al digitalizar: no se pudo registrar la cartulina.');
+      final msg = repo is ApiOwnerRepository
+          ? (repo.consumeLastError() ?? 'No se pudo registrar la cartulina.')
+          : 'Error al digitalizar: no se pudo registrar la cartulina.';
+      showInfoSnackBar(messenger, msg);
       return;
     }
     void refresh() {
@@ -80,8 +84,15 @@ class _CartulinaSheetState extends ConsumerState<CartulinaSheet> {
       messenger,
       label: 'Cartulina de $name digitalizada · le ${left == 1 ? 'queda 1 almuerzo' : 'quedan $left almuerzos'}',
       onUndo: () async {
-        await repo.undoPhysicalCard(id);
-        refresh();
+        final undone = await repo.undoPhysicalCard(id);
+        if (undone) {
+          refresh();
+        } else {
+          final err = repo is ApiOwnerRepository
+              ? (repo.consumeLastError() ?? 'No se pudo revertir la cartulina.')
+              : 'No se pudo revertir la cartulina.';
+          showInfoSnackBar(messenger, err);
+        }
       },
     );
   }

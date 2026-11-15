@@ -2,6 +2,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/network/api_exception.dart';
 import '../../../core/theme/app_theme.dart';
 import '../domain/models/cash_models.dart';
 import 'owner_controller.dart';
@@ -69,6 +70,10 @@ class _AddClientSheetState extends ConsumerState<AddClientSheet> {
           );
       if (!mounted) return;
       navigator.pop<AddedClient>((client: client, sellPlan: sellPlan));
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      showInfoSnackBar(messenger, e.userMessage);
     } catch (_) {
       if (!mounted) return;
       setState(() => _saving = false);

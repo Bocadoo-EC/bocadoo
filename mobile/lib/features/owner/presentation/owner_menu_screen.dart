@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/network/api_exception.dart';
 import '../../../core/theme/app_theme.dart';
+import '../data/api_owner_repo.dart';
 import '../domain/models/daily_menu.dart';
 import '../domain/models/menu_models.dart';
 import 'owner_controller.dart';
@@ -92,8 +94,25 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
       }
     });
     if (!_published) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final repo = ref.read(ownerMenuRepositoryProvider);
     // Se avisa al instante al POS y al comensal, sin volver a publicar.
-    await ref.read(ownerMenuRepositoryProvider).setCourseSoldOut(_rid, name, soldOut: soldOut);
+    final ok = await repo.setCourseSoldOut(_rid, name, soldOut: soldOut);
+    if (!mounted) return;
+    if (!ok) {
+      setState(() {
+        if (soldOut) {
+          _soldOut.remove(name);
+        } else {
+          _soldOut.add(name);
+        }
+      });
+      final msg = repo is ApiOwnerRepository
+          ? (repo.consumeLastError() ?? 'No se pudo actualizar el estado del plato.')
+          : 'No se pudo actualizar el estado del plato.';
+      showInfoSnackBar(messenger, msg);
+      return;
+    }
     ref.invalidate(posMenuProvider);
   }
 
@@ -137,14 +156,24 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
       if (ok) _published = true;
     });
     if (!ok) {
-      showInfoSnackBar(messenger, 'Error al publicar · No se pudo actualizar el menú de hoy.');
+      final msg = repo is ApiOwnerRepository
+          ? (repo.consumeLastError() ?? 'Error al publicar · No se pudo actualizar el menú de hoy.')
+          : 'Error al publicar · No se pudo actualizar el menú de hoy.';
+      showInfoSnackBar(messenger, msg);
       return;
     }
     container.invalidate(posMenuProvider);
     showUndoSnackBar(messenger, label: 'Menú publicado con éxito', onUndo: () async {
-      await repo.unpublishMenu(rid);
-      container.invalidate(posMenuProvider);
-      if (mounted) setState(() => _published = false);
+      final undone = await repo.unpublishMenu(rid);
+      if (undone) {
+        container.invalidate(posMenuProvider);
+        if (mounted) setState(() => _published = false);
+      } else {
+        final err = repo is ApiOwnerRepository
+            ? (repo.consumeLastError() ?? 'No se pudo deshacer la publicación.')
+            : 'No se pudo deshacer la publicación.';
+        showInfoSnackBar(messenger, err);
+      }
     });
   }
 
@@ -936,13 +965,20 @@ class _OptionsSheetState extends ConsumerState<_OptionsSheet> {
   Future<void> _addQuick() async {
     final name = _quick.text.trim();
     if (name.isEmpty) return;
-    await ref
-        .read(ownerCatalogRepositoryProvider)
-        .addDish(ref.read(ownerRestaurantIdProvider), name: name, kind: widget.kind);
-    if (!mounted) return;
-    ref.invalidate(catalogDishesProvider);
-    _quick.clear();
-    if (!_selected.contains(name)) _toggle(name);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref
+          .read(ownerCatalogRepositoryProvider)
+          .addDish(ref.read(ownerRestaurantIdProvider), name: name, kind: widget.kind);
+      if (!mounted) return;
+      ref.invalidate(catalogDishesProvider);
+      _quick.clear();
+      if (!_selected.contains(name)) _toggle(name);
+    } on ApiException catch (e) {
+      if (mounted) showInfoSnackBar(messenger, e.userMessage);
+    } catch (_) {
+      if (mounted) showInfoSnackBar(messenger, 'No se pudo agregar el plato.');
+    }
   }
 
   @override
@@ -1097,18 +1133,26 @@ class _BreakfastSheetState extends ConsumerState<_BreakfastSheet> {
       setState(() => _error = 'Escribe un precio válido, por ejemplo 2.50.');
       return;
     }
-    final dish = await ref.read(ownerCatalogRepositoryProvider).addDish(
-          ref.read(ownerRestaurantIdProvider),
-          name: name,
-          kind: DishKind.desayuno,
-          price: price,
-        );
-    if (!mounted) return;
-    ref.invalidate(catalogDishesProvider);
-    _name.clear();
-    _price.clear();
-    setState(() => _error = null);
-    _toggle(dish.id);
+    try {
+      final dish = await ref.read(ownerCatalogRepositoryProvider).addDish(
+            ref.read(ownerRestaurantIdProvider),
+            name: name,
+            kind: DishKind.desayuno,
+            price: price,
+          );
+      if (!mounted) return;
+      ref.invalidate(catalogDishesProvider);
+      _name.clear();
+      _price.clear();
+      setState(() => _error = null);
+      _toggle(dish.id);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _error = e.userMessage);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _error = 'No se pudo guardar el desayuno.');
+    }
   }
 
   @override
@@ -1200,11 +1244,20 @@ class _NewDishSheetState extends ConsumerState<_NewDishSheet> {
       return;
     }
     final navigator = Navigator.of(context);
-    await ref
-        .read(ownerCatalogRepositoryProvider)
-        .addDish(ref.read(ownerRestaurantIdProvider), name: name, kind: _kind);
-    ref.invalidate(catalogDishesProvider);
-    navigator.pop();
+    try {
+      await ref
+          .read(ownerCatalogRepositoryProvider)
+          .addDish(ref.read(ownerRestaurantIdProvider), name: name, kind: _kind);
+      if (!mounted) return;
+      ref.invalidate(catalogDishesProvider);
+      navigator.pop();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _error = e.userMessage);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _error = 'No se pudo guardar el plato.');
+    }
   }
 
   @override
@@ -1279,15 +1332,24 @@ class _NewCartaSheetState extends ConsumerState<_NewCartaSheet> {
     final price = double.tryParse(_price.text.trim().replaceAll(',', '.')) ?? 5.0;
     final desc = _desc.text.trim();
     final navigator = Navigator.of(context);
-    await ref.read(ownerCatalogRepositoryProvider).addDish(
-          ref.read(ownerRestaurantIdProvider),
-          name: name,
-          kind: DishKind.carta,
-          price: price,
-          description: desc.isEmpty ? 'Especialidad de la casa preparada al momento' : desc,
-        );
-    ref.invalidate(catalogDishesProvider);
-    navigator.pop();
+    try {
+      await ref.read(ownerCatalogRepositoryProvider).addDish(
+            ref.read(ownerRestaurantIdProvider),
+            name: name,
+            kind: DishKind.carta,
+            price: price,
+            description: desc.isEmpty ? 'Especialidad de la casa preparada al momento' : desc,
+          );
+      if (!mounted) return;
+      ref.invalidate(catalogDishesProvider);
+      navigator.pop();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _error = e.userMessage);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _error = 'No se pudo guardar el plato.');
+    }
   }
 
   @override

@@ -3,11 +3,15 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/config/api_capabilities.dart';
+import '../../../core/config/app_mode.dart';
 import '../../../core/config/support_config.dart';
+import '../../../core/session/session_notifier.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/external_links.dart';
 import '../../../core/widgets/appearance_selector.dart';
 import '../../../core/widgets/bocadoo_logo.dart';
+import '../data/api_owner_repo.dart';
 import '../domain/models/extras_models.dart';
 import '../domain/models/metrics_models.dart';
 import 'owner_controller.dart';
@@ -18,7 +22,21 @@ const _maxLogoBytes = 60 * 1024;
 
 class _StoreOpenNotifier extends Notifier<bool> {
   @override
-  bool build() => true;
+  bool build() {
+    final pos = ref.watch(posMenuProvider).value;
+    if (pos != null) return pos.isOpen;
+    if (!AppMode.useMock) {
+      final repo = ref.read(ownerMenuRepositoryProvider);
+      if (repo is ApiOwnerRepository) {
+        Future.microtask(() async {
+          final open = await repo.fetchStoreOpen();
+          state = open;
+        });
+      }
+    }
+    return true;
+  }
+
   void set(bool value) => state = value;
 }
 
@@ -102,7 +120,10 @@ class OwnerSettingsScreen extends ConsumerWidget {
               const _LocalCard(),
               const SizedBox(height: 24),
               OutlinedButton.icon(
-                onPressed: () => context.go('/login'),
+                onPressed: () async {
+                  await ref.read(sessionProvider).logout();
+                  if (context.mounted) context.go('/login');
+                },
                 style: OutlinedButton.styleFrom(
                   foregroundColor: context.bocadooColors.danger,
                   side: BorderSide(color: context.bocadooColors.dangerContainer),
@@ -165,11 +186,17 @@ class _RoleCard extends ConsumerWidget {
         const SizedBox(height: 10),
         Row(children: [
           Expanded(
-            child: OwnerChoice(
-              label: 'Dueño (Todo)',
-              icon: Icons.storefront_outlined,
-              selected: role == OwnerRole.owner,
-              onTap: () => notifier.set(OwnerRole.owner),
+            child: IgnorePointer(
+              ignoring: !ApiCapabilities.canSwitchToOwner,
+              child: Opacity(
+                opacity: ApiCapabilities.canSwitchToOwner ? 1.0 : 0.45,
+                child: OwnerChoice(
+                  label: 'Dueño (Todo)',
+                  icon: Icons.storefront_outlined,
+                  selected: role == OwnerRole.owner,
+                  onTap: () => notifier.set(OwnerRole.owner),
+                ),
+              ),
             ),
           ),
           const SizedBox(width: 8),
@@ -184,9 +211,11 @@ class _RoleCard extends ConsumerWidget {
         ]),
         const SizedBox(height: 10),
         Text(
-          role == OwnerRole.cashier
-              ? 'El cajero solo ve Caja, Cobrar, Vender y Pedidos en camino.'
-              : 'El dueño tiene acceso total a ventas, comisiones y cierre.',
+          !ApiCapabilities.canSwitchToOwner
+              ? 'Tu cuenta tiene rol de cajero en este local y solo ve Caja, Cobrar, Vender y Pedidos.'
+              : role == OwnerRole.cashier
+                  ? 'El cajero solo ve Caja, Cobrar, Vender y Pedidos en camino.'
+                  : 'El dueño tiene acceso total a ventas, reportes y cierre.',
           style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant),
         ),
       ]),
@@ -353,8 +382,29 @@ class _LogoCardState extends ConsumerState<_LogoCard> {
               alignment: Alignment.center,
               child: logo != null
                   ? Image.memory(logo, width: 60, height: 60, fit: BoxFit.cover)
-                  : Text(info?.monogram ?? '',
-                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: colors.onPrimaryContainer)),
+                  : (info?.logoUrl != null
+                      ? Image.network(
+                          info!.logoUrl!,
+                          width: 60,
+                          height: 60,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => Text(
+                            info.monogram,
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w900,
+                              color: colors.onPrimaryContainer,
+                            ),
+                          ),
+                        )
+                      : Text(
+                          info?.monogram ?? '',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w900,
+                            color: colors.onPrimaryContainer,
+                          ),
+                        )),
             ),
           ),
           const SizedBox(width: 14),
@@ -394,8 +444,20 @@ class _StoreOpenCard extends ConsumerWidget {
 
     Future<void> toggle(bool value) async {
       final messenger = ScaffoldMessenger.of(context);
+      final repo = ref.read(ownerMenuRepositoryProvider);
+      final rid = ref.read(ownerRestaurantIdProvider);
       ref.read(_storeOpenProvider.notifier).set(value);
-      await ref.read(ownerMenuRepositoryProvider).setStoreOpen(ref.read(ownerRestaurantIdProvider), isOpen: value);
+      final ok = await repo.setStoreOpen(rid, isOpen: value);
+      if (!context.mounted) return;
+      if (!ok) {
+        ref.read(_storeOpenProvider.notifier).set(!value);
+        final err = repo is ApiOwnerRepository
+            ? (repo.consumeLastError() ?? 'No se pudo cambiar el estado del local.')
+            : 'No se pudo cambiar el estado del local.';
+        showInfoSnackBar(messenger, err);
+        return;
+      }
+      ref.invalidate(posMenuProvider);
       showInfoSnackBar(messenger, value ? 'Local abierto' : 'Local cerrado');
     }
 

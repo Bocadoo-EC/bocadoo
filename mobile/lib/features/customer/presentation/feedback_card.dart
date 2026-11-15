@@ -14,9 +14,10 @@ class FeedbackCard extends StatelessWidget {
   Future<void> _send(BuildContext context, String tag) async {
     final messenger = ScaffoldMessenger.of(context);
     final ok = await controller.submitFeedback(tag);
+    final errorMsg = controller.lastActionError ?? 'Error al enviar calificación';
     messenger.showSnackBar(SnackBar(
       behavior: SnackBarBehavior.floating,
-      content: Text(ok ? '¡Gracias por tu opinión!' : 'Error al enviar calificación'),
+      content: Text(ok ? '¡Gracias por tu opinión!' : errorMsg),
     ));
   }
 

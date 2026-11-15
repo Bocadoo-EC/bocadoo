@@ -1,12 +1,16 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'core/router/app_router.dart';
+import 'core/session/session_notifier.dart';
 import 'core/theme/app_theme.dart';
 import 'core/theme/theme_provider.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  unawaited(sessionNotifier.loadFromStorage());
   runApp(
     const ProviderScope(
       child: BocadooApp(),

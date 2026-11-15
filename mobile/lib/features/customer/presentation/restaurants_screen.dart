@@ -7,6 +7,9 @@ import '../../../core/theme/app_theme.dart';
 import 'customer_controller.dart';
 import 'customer_widgets.dart';
 
+String? rLogoOrImage(Restaurant r) =>
+    r.imageUrl.isNotEmpty ? r.imageUrl : r.logoUrl;
+
 const _limitNotice = 'Límite: tienes una orden activa pendiente.';
 
 /// C2 · Dónde comer: buscador, filtros combinables y locales cercanos.
@@ -32,14 +35,16 @@ class _RestaurantsScreenState extends ConsumerState<RestaurantsScreen> {
   Future<void> _quickOrder(CustomerController controller, Restaurant r) async {
     final ok = await controller.quickOrder(r);
     if (!ok && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text(_limitNotice)));
+      final msg = controller.lastActionError ?? _limitNotice;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
     }
   }
 
   Future<void> _reserve(CustomerController controller, RestaurantOffer offer) async {
     final ok = await controller.reserveOffer(offer);
     if (!ok && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text(_limitNotice)));
+      final msg = controller.lastActionError ?? _limitNotice;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
     }
   }
 
@@ -451,7 +456,13 @@ class _PlanAvatar extends StatelessWidget {
         width: 84,
         child: Column(children: [
           Stack(clipBehavior: Clip.none, children: [
-            CoverImage(url: restaurant.imageUrl, name: restaurant.name, width: 56, height: 56, radius: 16),
+            CoverImage(
+              url: rLogoOrImage(restaurant),
+              name: restaurant.name,
+              width: 56,
+              height: 56,
+              radius: 16,
+            ),
             Positioned(
               right: -4,
               bottom: -4,
@@ -505,7 +516,13 @@ class _OfferTile extends StatelessWidget {
           child: Padding(
             padding: const EdgeInsets.all(12),
             child: Row(children: [
-              CoverImage(url: restaurant.imageUrl, name: restaurant.name, width: 48, height: 48, radius: 16),
+              CoverImage(
+                url: rLogoOrImage(restaurant),
+                name: restaurant.name,
+                width: 48,
+                height: 48,
+                radius: 16,
+              ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -601,7 +618,7 @@ class _RestaurantCard extends StatelessWidget {
           SizedBox(
             height: 112,
             child: Stack(fit: StackFit.expand, children: [
-              CoverImage(url: r.imageUrl, name: r.name),
+              CoverImage(url: rLogoOrImage(r), name: r.name),
               DecoratedBox(
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
@@ -622,7 +639,8 @@ class _RestaurantCard extends StatelessWidget {
                 child: Row(children: [
                   OccupancyChip(occupancy: r.occupancy),
                   const Spacer(),
-                  DistancePill(text: '${r.distanceKm} km · ${r.walkingMinutes} min'),
+                  if (r.hasLocation)
+                    DistancePill(text: '${r.distanceKm} km · ${r.walkingMinutes} min'),
                 ]),
               ),
               Positioned(

@@ -133,8 +133,15 @@ class _ScanResultDialogState extends ConsumerState<ScanResultDialog> {
     if (shown is OwnerError) {
       final r = shown.result;
       if (r == null) {
-        return const _View(_Tone.danger, Icons.qr_code_2_rounded, 'Código no legible', 'Vuelve a intentarlo.',
-            action: ScanDialogAction.scanAgain, actionLabel: 'Reintentar');
+        final msg = shown.message.trim();
+        return _View(
+          _Tone.danger,
+          Icons.qr_code_2_rounded,
+          msg.isNotEmpty ? msg : 'Código no legible',
+          'Vuelve a intentarlo.',
+          action: ScanDialogAction.scanAgain,
+          actionLabel: 'Reintentar',
+        );
       }
       if (r.isAlreadyRedeemed) {
         final at = r.redeemedAt;
@@ -145,6 +152,9 @@ class _ScanResultDialogState extends ConsumerState<ScanResultDialog> {
         return _View(_Tone.danger, Icons.cancel_outlined, r.title, r.supportingLine,
             action: ScanDialogAction.sellPlan,
             actionLabel: r.studentName != null ? 'Vender nuevo plan' : 'Vender plan');
+      }
+      if (r.actionRequired == 'NINGUNA') {
+        return _View(_Tone.danger, Icons.cancel_outlined, r.title, r.supportingLine);
       }
       return _View(_Tone.danger, Icons.cancel_outlined, r.title, r.supportingLine,
           action: ScanDialogAction.scanAgain, actionLabel: 'Volver a escanear');

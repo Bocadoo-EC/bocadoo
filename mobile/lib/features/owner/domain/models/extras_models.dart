@@ -9,6 +9,7 @@ enum OwnerRole { owner, cashier }
 @immutable
 class OwnerOrder {
   const OwnerOrder({
+    this.id,
     required this.number,
     required this.dinerName,
     required this.amount,
@@ -20,6 +21,7 @@ class OwnerOrder {
     this.validated = false,
   });
 
+  final String? id;
   final String number;
   final String dinerName;
   final String? soup;
@@ -154,14 +156,21 @@ class OwnerOpinion {
 /// Datos del local para Ajustes (O16).
 @immutable
 class LocalInfo {
-  const LocalInfo({required this.name, required this.address, required this.seats, this.logo});
+  const LocalInfo({
+    required this.name,
+    required this.address,
+    required this.seats,
+    this.logo,
+    this.logoUrl,
+  });
 
   final String name;
   final String address;
   final int seats;
 
-  /// Logo subido (JPEG/PNG en memoria); `null` = se muestra el monograma.
+  /// Logo subido (JPEG/PNG en memoria); `null` = se muestra el monograma o [logoUrl].
   final Uint8List? logo;
+  final String? logoUrl;
 
   /// Dos iniciales del nombre ("La Cuchara" → "LC").
   String get monogram {
@@ -170,4 +179,28 @@ class LocalInfo {
     if (words.length == 1) return words.first.substring(0, words.first.length.clamp(1, 2)).toUpperCase();
     return '${words[0][0]}${words[1][0]}'.toUpperCase();
   }
+}
+
+/// Solicitud de plan enviada por un comensal pendiente de cobro en caja (P-01).
+@immutable
+class OwnerPlanRequest {
+  const OwnerPlanRequest({
+    required this.id,
+    required this.clientId,
+    required this.clientName,
+    required this.planId,
+    required this.planName,
+    required this.price,
+    required this.lunches,
+    required this.createdAt,
+  });
+
+  final String id;
+  final String clientId;
+  final String clientName;
+  final String planId;
+  final String planName;
+  final double price;
+  final int lunches;
+  final DateTime createdAt;
 }

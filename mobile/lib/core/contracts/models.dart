@@ -144,6 +144,9 @@ class Restaurant {
   final double? latitude;
   final double? longitude;
 
+  /// Identificador URL (`slug`) devuelto por `/v1/restaurantes` para consultar detalle y planes.
+  final String? slug;
+
   const Restaurant({
     required this.id,
     required this.name,
@@ -170,6 +173,7 @@ class Restaurant {
     this.takeawaySurcharge = 0.25,
     this.latitude,
     this.longitude,
+    this.slug,
   });
 
   bool get hasLocation => latitude != null && longitude != null;
@@ -205,6 +209,7 @@ class Restaurant {
     bool? isOpen,
     List<String>? categories,
     List<MenuItem>? todayMenu,
+    String? slug,
   }) {
     return Restaurant(
       id: id ?? this.id,
@@ -232,6 +237,7 @@ class Restaurant {
       takeawaySurcharge: takeawaySurcharge,
       latitude: latitude,
       longitude: longitude,
+      slug: slug ?? this.slug,
     );
   }
 }
@@ -331,6 +337,7 @@ class ActiveTable {
 /// Preorden activa del comensal.
 @immutable
 class ActiveOrder {
+  final String? id;
   final String orderNumber;
   final String status; // PREPARANDO, LISTO, ENTREGADO
   final String restaurantName;
@@ -352,6 +359,7 @@ class ActiveOrder {
   bool get isDelivered => status == 'ENTREGADO';
 
   const ActiveOrder({
+    this.id,
     required this.orderNumber,
     required this.restaurantName,
     required this.qrPayload,

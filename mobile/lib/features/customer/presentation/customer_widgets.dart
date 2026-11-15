@@ -65,7 +65,16 @@ class CoverImage extends StatelessWidget {
     final fallback = Container(
       width: width,
       height: height,
-      color: colors.primaryContainer,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            colors.primaryContainer,
+            colors.primary.withValues(alpha: 0.22),
+          ],
+        ),
+      ),
       alignment: Alignment.center,
       child: Text(
         monogram(name),

@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/config/api_capabilities.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/external_links.dart';
 import '../domain/models/metrics_models.dart';
@@ -101,7 +102,7 @@ class _OwnerMetricsScreenState extends ConsumerState<OwnerMetricsScreen> {
                     ],
                   1 => [
                       _PendingCard(m: m),
-                      _ExpiredCard(m: m),
+                      if (ApiCapabilities.expiredLunchesReport) _ExpiredCard(m: m),
                       _SalesCard(m: m, period: _period, onPeriod: (p) => setState(() => _period = p)),
                     ],
                   _ => [

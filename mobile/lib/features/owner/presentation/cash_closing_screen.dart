@@ -3,8 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/config/app_mode.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/theme/app_theme.dart';
+import '../domain/models/extras_models.dart';
 import 'owner_controller.dart';
 import 'owner_format.dart';
 import 'owner_widgets.dart';
@@ -39,13 +41,25 @@ class _CashClosingScreenState extends ConsumerState<CashClosingScreen> {
     if (!mounted) return;
     setState(() => _closing = false);
     if (!ok) {
-      showInfoSnackBar(messenger, 'No se pudo cerrar el turno');
+      final apiErr = AppMode.useMock
+          ? null
+          : ref.read(apiOwnerRepositoryProvider).consumeLastError();
+      showInfoSnackBar(messenger, apiErr ?? 'No se pudo cerrar el turno');
       return;
     }
     container.invalidate(shiftClosedProvider);
+    final isOwner = ref.read(ownerRoleProvider) == OwnerRole.owner;
+    if (!isOwner) {
+      showInfoSnackBar(messenger, 'Turno cerrado correctamente');
+      return;
+    }
     showUndoSnackBar(messenger, label: 'Turno cerrado correctamente', onUndo: () async {
-      await repo.reopenShift(rid);
+      final reopened = await repo.reopenShift(rid);
       container.invalidate(shiftClosedProvider);
+      if (!reopened && !AppMode.useMock) {
+        final reopenErr = container.read(apiOwnerRepositoryProvider).consumeLastError();
+        if (reopenErr != null) showInfoSnackBar(messenger, reopenErr);
+      }
     });
   }
 
@@ -80,7 +94,11 @@ class _CashClosingScreenState extends ConsumerState<CashClosingScreen> {
                     style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: colors.onSurface)),
               ]),
               error: (_, _) => _ErrorView(onRetry: () => ref.invalidate(dailySummaryProvider)),
-              data: (s) => s.transactions.isEmpty ? const _EmptyView() : _content(s),
+              data: (s) => (s.transactions.isEmpty &&
+                      s.totalIncomeToday == 0 &&
+                      s.lunchesRedeemedToday == 0)
+                  ? const _EmptyView()
+                  : _content(s),
             ),
           ),
         ]),
@@ -92,9 +110,11 @@ class _CashClosingScreenState extends ConsumerState<CashClosingScreen> {
     final colors = context.colorScheme;
     final b = context.bocadooColors;
     final closed = ref.watch(shiftClosedProvider).value ?? false;
-    final transfers = s.transactions
-        .where((t) => t.paymentMethod != 'Efectivo' && t.paymentMethod != 'Plan')
-        .fold<double>(0, (sum, t) => sum + t.amount);
+    final transfers = AppMode.useMock
+        ? s.transactions
+            .where((t) => t.paymentMethod != 'Efectivo' && t.paymentMethod != 'Plan')
+            .fold<double>(0, (sum, t) => sum + t.amount)
+        : (s.totalIncomeToday - s.cashExpected).clamp(0.0, double.infinity);
     final empty = _counted.text.trim().isEmpty;
     final counted = empty ? s.cashExpected : (_countedValue ?? 0);
     final diff = ((counted - s.cashExpected) * 100).round();
@@ -146,15 +166,6 @@ class _CashClosingScreenState extends ConsumerState<CashClosingScreen> {
             iconFg: colors.primary,
             label: 'Transferencias',
             value: OwnerFormat.money(transfers),
-          ),
-          Divider(height: 1, color: colors.outlineVariant),
-          _MethodRow(
-            icon: Icons.percent_rounded,
-            iconBg: colors.primaryContainer,
-            iconFg: colors.onPrimaryContainer,
-            label: 'Comisión Bocadoo',
-            value: OwnerFormat.money(0),
-            valueColor: colors.primary,
           ),
         ]),
       ),

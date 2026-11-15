@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/config/api_capabilities.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/theme/app_theme.dart';
 import '../domain/models/extras_models.dart';
@@ -168,12 +169,15 @@ class _CobrarMesaSheetState extends ConsumerState<CobrarMesaSheet> {
         const OwnerSectionLabel('Modo de cobro'),
         const SizedBox(height: 8),
         IgnorePointer(
-          ignoring: _busy || p.settled,
-          child: OwnerSegmented(
-            labels: const ['Cada quien lo suyo', 'Yo invito la mesa'],
-            icons: const [Icons.person_outline_rounded, Icons.volunteer_activism_outlined],
-            index: p.mode == TableMode.hostPays ? 1 : 0,
-            onChanged: (i) => _setMode(i == 1 ? TableMode.hostPays : TableMode.eachOwn),
+          ignoring: _busy || p.settled || !ApiCapabilities.sharedTableModeChange,
+          child: Opacity(
+            opacity: ApiCapabilities.sharedTableModeChange ? 1.0 : 0.72,
+            child: OwnerSegmented(
+              labels: const ['Cada quien lo suyo', 'Yo invito la mesa'],
+              icons: const [Icons.person_outline_rounded, Icons.volunteer_activism_outlined],
+              index: p.mode == TableMode.hostPays ? 1 : 0,
+              onChanged: (i) => _setMode(i == 1 ? TableMode.hostPays : TableMode.eachOwn),
+            ),
           ),
         ),
         const SizedBox(height: 14),

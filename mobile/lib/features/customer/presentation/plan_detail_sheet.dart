@@ -28,7 +28,13 @@ class _PlanDetailSheetState extends ConsumerState<PlanDetailSheet> {
     final ok = await controller.requestPlan(plan);
     if (!mounted) return;
     setState(() => _sending = false);
-    if (!ok) return;
+    if (!ok) {
+      final error = controller.lastActionError;
+      if (error != null && error.isNotEmpty) {
+        messenger.showSnackBar(SnackBar(content: Text(error)));
+      }
+      return;
+    }
     router.pop();
     messenger.showSnackBar(SnackBar(
       behavior: SnackBarBehavior.floating,

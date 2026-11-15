@@ -35,13 +35,67 @@ import '../../features/customer/presentation/plan_detail_sheet.dart';
 import '../../features/customer/presentation/plans_screen.dart';
 import '../../features/customer/presentation/restaurant_sheet.dart';
 import '../../features/customer/presentation/restaurants_screen.dart';
+import '../config/app_mode.dart';
+import '../session/session_notifier.dart';
+
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
+String? _pendingInviteTableId;
 
 /// Configuración central de rutas de navegación con GoRouter. Las 34 pantallas
 /// del roadmap tienen su pantalla real; no quedan marcadores de "pendiente".
 final GoRouter appRouter = GoRouter(
   navigatorKey: _rootNavigatorKey,
   initialLocation: '/login',
+  refreshListenable: sessionNotifier,
+  redirect: (context, state) {
+    final uri = state.uri;
+    String? incomingInviteId;
+    if (uri.scheme == 'bocadoo' &&
+        uri.host == 'mesa' &&
+        uri.pathSegments.isNotEmpty) {
+      final candidate = uri.pathSegments.first.trim();
+      if (candidate.isNotEmpty) incomingInviteId = candidate;
+    }
+
+    if (AppMode.useMock) {
+      if (incomingInviteId != null) {
+        return '/customer/mesa/$incomingInviteId';
+      }
+      return null;
+    }
+
+    final path = uri.path;
+    final isPublic = path == '/login' || path.startsWith('/auth/');
+    if (!sessionNotifier.isAuthenticated) {
+      if (incomingInviteId != null) {
+        _pendingInviteTableId = incomingInviteId;
+        return '/login';
+      }
+      return isPublic ? null : '/login';
+    }
+
+    if (incomingInviteId != null) {
+      _pendingInviteTableId = null;
+      return '/customer/mesa/$incomingInviteId';
+    }
+
+    if (_pendingInviteTableId != null && _pendingInviteTableId!.isNotEmpty) {
+      final pending = _pendingInviteTableId!;
+      _pendingInviteTableId = null;
+      return '/customer/mesa/$pending';
+    }
+
+    if (path == '/login' || path == '/') {
+      if (sessionNotifier.preferredEntryRole == AppRole.diner) {
+        return '/customer/pase';
+      }
+      return sessionNotifier.hasRestaurant ? '/owner/caja' : '/customer/pase';
+    }
+    if (path.startsWith('/owner/') && !sessionNotifier.hasRestaurant) {
+      return '/customer/pase';
+    }
+    return null;
+  },
   routes: [
     GoRoute(
       path: '/login',

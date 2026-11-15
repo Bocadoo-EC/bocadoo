@@ -2,13 +2,14 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/config/api_capabilities.dart';
+import '../../../core/config/app_mode.dart';
 import '../../../core/theme/app_theme.dart';
 import '../domain/models/cash_models.dart';
 import 'owner_controller.dart';
 import 'owner_format.dart';
 import 'owner_widgets.dart';
 
-const _commission = 0.07;
 const _soloPlateDiscount = 0.50;
 const _weekDays = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 
@@ -119,9 +120,12 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
     final ok = await repo.publishOffer(rid, offer);
     if (!mounted) return;
     if (!ok) {
+      final apiErr = AppMode.useMock
+          ? null
+          : ref.read(apiOwnerRepositoryProvider).consumeLastError();
       setState(() {
         _sending = false;
-        _error = 'No se pudo publicar la oferta';
+        _error = apiErr ?? 'No se pudo publicar la oferta';
       });
       return;
     }
@@ -193,41 +197,43 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
               ]),
             ),
           ],
-          const SizedBox(height: 14),
-          Container(
-            padding: const EdgeInsets.all(4),
-            decoration: BoxDecoration(
-              color: colors.primaryContainer.withValues(alpha: 0.35),
-              borderRadius: BorderRadius.circular(22),
-              border: Border.all(color: colors.outlineVariant),
+          if (ApiCapabilities.flashScheduledOffer) ...[
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: colors.primaryContainer.withValues(alpha: 0.35),
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(color: colors.outlineVariant),
+              ),
+              child: Row(children: [
+                Expanded(
+                  child: _KindTab(
+                    icon: Icons.bolt_rounded,
+                    title: 'Flash de hoy',
+                    subtitle: 'Liquidación de excedentes',
+                    selected: _isFlash,
+                    onTap: () => setState(() {
+                      _kind = OfferKind.flash;
+                      _error = null;
+                    }),
+                  ),
+                ),
+                Expanded(
+                  child: _KindTab(
+                    icon: Icons.calendar_month_rounded,
+                    title: 'Horas muertas',
+                    subtitle: 'Promo programada',
+                    selected: !_isFlash,
+                    onTap: () => setState(() {
+                      _kind = OfferKind.programada;
+                      _error = null;
+                    }),
+                  ),
+                ),
+              ]),
             ),
-            child: Row(children: [
-              Expanded(
-                child: _KindTab(
-                  icon: Icons.bolt_rounded,
-                  title: 'Flash de hoy',
-                  subtitle: 'Liquidación de excedentes',
-                  selected: _isFlash,
-                  onTap: () => setState(() {
-                    _kind = OfferKind.flash;
-                    _error = null;
-                  }),
-                ),
-              ),
-              Expanded(
-                child: _KindTab(
-                  icon: Icons.calendar_month_rounded,
-                  title: 'Horas muertas',
-                  subtitle: 'Promo programada',
-                  selected: !_isFlash,
-                  onTap: () => setState(() {
-                    _kind = OfferKind.programada;
-                    _error = null;
-                  }),
-                ),
-              ),
-            ]),
-          ),
+          ],
           const SizedBox(height: 10),
           Text(
             _isFlash
@@ -277,7 +283,7 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
             ),
           ],
           const SizedBox(height: 8),
-          _InfoBox('Recibes ${OwnerFormat.money(newPrice * (1 - _commission))} por venta', centered: true),
+          _InfoBox('Precio de oferta: ${OwnerFormat.money(newPrice)} por plato', centered: true),
           const SizedBox(height: 14),
           const _Label('Cupos disponibles'),
           _OptionRow(
@@ -301,8 +307,6 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
             ),
           ] else
             const _InfoBox('La promo queda vigente 30 días. Puedes cancelarla cuando quieras.'),
-          const SizedBox(height: 10),
-          const _InfoBox('Publicar es gratis. Pagas el 7 % solo de lo que se venda.'),
           if (_error != null) ...[
             const SizedBox(height: 10),
             Text(_error!,

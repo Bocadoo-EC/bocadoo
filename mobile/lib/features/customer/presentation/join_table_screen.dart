@@ -2,7 +2,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/config/api_capabilities.dart';
+import '../../../core/config/app_mode.dart';
 import '../../../core/contracts/models.dart';
+import '../../../core/network/api_exception.dart';
+import '../../../core/session/session_notifier.dart';
 import '../../../core/theme/app_theme.dart';
 import 'customer_controller.dart';
 import 'customer_widgets.dart' show CustomerErrorView, formatMoney;
@@ -33,6 +37,12 @@ class _JoinTableScreenState extends ConsumerState<JoinTableScreen> {
   @override
   void initState() {
     super.initState();
+    if (!AppMode.useMock) {
+      final sessionName = ref.read(sessionProvider).userName?.trim() ?? '';
+      if (sessionName.isNotEmpty) {
+        _name.text = sessionName;
+      }
+    }
     _load();
   }
 
@@ -83,12 +93,16 @@ class _JoinTableScreenState extends ConsumerState<JoinTableScreen> {
             takeaway: _takeaway,
           );
       if (!mounted) return;
-      final controller = ref.read(customerControllerProvider);
-      if (controller.state.activeTable?.id == updated.id) controller.syncTable(updated);
+      ref.read(customerControllerProvider).syncTable(updated);
       setState(() {
         _table = updated;
         _joined = true;
       });
+    } on ApiException catch (e) {
+      messenger.showSnackBar(SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text(e.userMessage),
+      ));
     } catch (_) {
       messenger.showSnackBar(const SnackBar(
         behavior: SnackBarBehavior.floating,
@@ -164,34 +178,36 @@ class _JoinTableScreenState extends ConsumerState<JoinTableScreen> {
         ]),
       ),
       const SizedBox(height: 18),
-      Text('Elige tu almuerzo de hoy',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: colors.onSurface)),
-      const SizedBox(height: 10),
-      const SocialLabel('1. Sopa del día'),
-      const SizedBox(height: 6),
-      for (final s in t.soups) ...[
-        _OptionTile(
-          title: s,
-          selected: _soup == s,
-          onTap: _joined ? null : () => setState(() => _soup = s),
-        ),
-        const SizedBox(height: 8),
+      if (ApiCapabilities.sharedTableDishChoice) ...[
+        Text('Elige tu almuerzo de hoy',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: colors.onSurface)),
+        const SizedBox(height: 10),
+        const SocialLabel('1. Sopa del día'),
+        const SizedBox(height: 6),
+        for (final s in t.soups) ...[
+          _OptionTile(
+            title: s,
+            selected: _soup == s,
+            onTap: _joined ? null : () => setState(() => _soup = s),
+          ),
+          const SizedBox(height: 8),
+        ],
+        const SizedBox(height: 6),
+        const SocialLabel('2. Plato fuerte'),
+        const SizedBox(height: 6),
+        for (final m in t.mains) ...[
+          _OptionTile(
+            title: m.name,
+            price: formatMoney(m.price),
+            imageUrl: m.imageUrl,
+            veggie: m.isVeggie,
+            selected: _main == m.name,
+            onTap: _joined ? null : () => setState(() => _main = m.name),
+          ),
+          const SizedBox(height: 8),
+        ],
+        const SizedBox(height: 4),
       ],
-      const SizedBox(height: 6),
-      const SocialLabel('2. Plato fuerte'),
-      const SizedBox(height: 6),
-      for (final m in t.mains) ...[
-        _OptionTile(
-          title: m.name,
-          price: formatMoney(m.price),
-          imageUrl: m.imageUrl,
-          veggie: m.isVeggie,
-          selected: _main == m.name,
-          onTap: _joined ? null : () => setState(() => _main = m.name),
-        ),
-        const SizedBox(height: 8),
-      ],
-      const SizedBox(height: 4),
       Row(children: [
         Expanded(
           child: SocialChoice(
@@ -264,9 +280,13 @@ class _JoinTableScreenState extends ConsumerState<JoinTableScreen> {
               ),
             ]),
             const SizedBox(height: 8),
-            Text('Tu almuerzo ($_main) está reservado para las ${t.time}.',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: b.onSuccessContainer)),
+            Text(
+              (_main != null && _main!.isNotEmpty)
+                  ? 'Tu almuerzo ($_main) está reservado para las ${t.time}.'
+                  : 'Tu lugar en la mesa quedó reservado para las ${t.time}.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: b.onSuccessContainer),
+            ),
             Text('Se sumó al QR de la mesa de ${t.hostName}. No necesitas hacer fila en caja.',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: b.onSuccessContainer)),
@@ -280,7 +300,12 @@ class _JoinTableScreenState extends ConsumerState<JoinTableScreen> {
         )
       else
         ElevatedButton(
-          onPressed: _joining || _soup == null || _main == null ? null : () => _join(t),
+          onPressed: _joining ||
+                  (ApiCapabilities.sharedTableDishChoice &&
+                      ((t.soups.isNotEmpty && _soup == null) ||
+                          (t.mains.isNotEmpty && _main == null)))
+              ? null
+              : () => _join(t),
           child: _joining
               ? SizedBox(
                   width: 22,

@@ -4,6 +4,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/external_links.dart';
+import '../data/api_owner_repo.dart';
 import '../domain/models/extras_models.dart';
 import 'owner_controller.dart';
 import 'owner_widgets.dart';
@@ -71,7 +72,8 @@ class _OpinionesScreenState extends ConsumerState<OpinionesScreen> {
     if (!mounted) return;
     ref.invalidate(opinionsProvider);
     if (!ok) {
-      showInfoSnackBar(messenger, 'No se pudo enviar la respuesta');
+      final err = repo is ApiOwnerRepository ? repo.consumeLastError() : null;
+      showInfoSnackBar(messenger, err ?? 'No se pudo enviar la respuesta');
       return;
     }
     showUndoSnackBar(
@@ -80,8 +82,13 @@ class _OpinionesScreenState extends ConsumerState<OpinionesScreen> {
           ? 'Almuerzo repuesto a ${op.dinerName} (+1)'
           : 'Respuesta enviada a ${op.dinerName}',
       onUndo: () async {
-        await repo.undoReply(op.id);
-        if (mounted) ref.invalidate(opinionsProvider);
+        final undone = await repo.undoReply(op.id);
+        if (!mounted) return;
+        ref.invalidate(opinionsProvider);
+        if (!undone) {
+          final err = repo is ApiOwnerRepository ? repo.consumeLastError() : null;
+          showInfoSnackBar(messenger, err ?? 'No se pudo deshacer la respuesta');
+        }
       },
     );
   }

@@ -1,9 +1,11 @@
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/location_picker_map.dart';
+import '../data/auth_repository.dart';
 import 'google_sign_in_flow.dart';
 
 // D7: zonas exactas de store.tsx (DINER_ZONES)
@@ -30,14 +32,15 @@ const _zoneCoords = <String, LatLng>{
 
 enum _PassStrength { none, weak, medium, strong }
 
-class RegisterDinerScreen extends StatefulWidget {
+class RegisterDinerScreen extends ConsumerStatefulWidget {
   const RegisterDinerScreen({super.key});
 
   @override
-  State<RegisterDinerScreen> createState() => _RegisterDinerScreenState();
+  ConsumerState<RegisterDinerScreen> createState() =>
+      _RegisterDinerScreenState();
 }
 
-class _RegisterDinerScreenState extends State<RegisterDinerScreen> {
+class _RegisterDinerScreenState extends ConsumerState<RegisterDinerScreen> {
   final _nameCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
   final _phoneCtrl = TextEditingController();
@@ -63,8 +66,10 @@ class _RegisterDinerScreenState extends State<RegisterDinerScreen> {
 
   _PassStrength _strength(String pass) {
     if (pass.isEmpty) return _PassStrength.none;
-    if (pass.length < 6) return _PassStrength.weak;
-    if (pass.length < 9 || !RegExp(r'\d').hasMatch(pass)) return _PassStrength.medium;
+    if (pass.length < 10) return _PassStrength.weak;
+    if (pass.length < 12 || !RegExp(r'\d').hasMatch(pass)) {
+      return _PassStrength.medium;
+    }
     return _PassStrength.strong;
   }
 
@@ -79,8 +84,8 @@ class _RegisterDinerScreenState extends State<RegisterDinerScreen> {
     if (_phoneCtrl.text.trim().length < 9) {
       errs['phone'] = 'Ingresa un número celular ecuatoriano válido (ej: 0991234567).';
     }
-    if (_passCtrl.text.length < 6) {
-      errs['pass'] = 'La contraseña debe tener mínimo 6 caracteres.';
+    if (_passCtrl.text.length < 10) {
+      errs['pass'] = 'La contraseña debe tener mínimo 10 caracteres.';
     } else if (_passCtrl.text != _confirmCtrl.text) {
       errs['confirm'] = 'Las contraseñas no coinciden.';
     }
@@ -97,25 +102,38 @@ class _RegisterDinerScreenState extends State<RegisterDinerScreen> {
   Future<void> _register() async {
     if (!_validate()) return;
     setState(() => _loading = true);
-    // TODO: Conectar con provider de backend
-    await Future.delayed(const Duration(milliseconds: 1000));
+    final result = await ref.read(authRepositoryProvider).registerDiner(
+          name: _nameCtrl.text.trim(),
+          email: _emailCtrl.text.trim(),
+          password: _passCtrl.text,
+          phone: _phoneCtrl.text.trim(),
+          zone: _zone,
+          lat: _location.latitude,
+          lng: _location.longitude,
+        );
     if (!mounted) return;
     setState(() => _loading = false);
-    final nombre = _nameCtrl.text.trim().split(' ').first;
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('¡Bienvenido $nombre! Elige tu restaurante para activar tu primer plan.'),
-        duration: const Duration(seconds: 2),
-      ));
-      // D1: flujo A4 → A6 → C2
-      // TODO: Conectar con provider de backend (guardar la ubicación fijada).
-      context.go('/auth/bienvenida/comensal', extra: {
-        'nombre': nombre,
-        'zona': _zone,
-        'lat': _location.latitude.toString(),
-        'lng': _location.longitude.toString(),
-      });
+    if (!result.ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result.errorMessage ?? 'No pudimos crear tu cuenta. Inténtalo de nuevo.',
+          ),
+        ),
+      );
+      return;
     }
+    final nombre = _nameCtrl.text.trim().split(' ').first;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('¡Bienvenido $nombre! Elige tu restaurante para activar tu primer plan.'),
+      duration: const Duration(seconds: 2),
+    ));
+    context.go('/auth/bienvenida/comensal', extra: {
+      'nombre': nombre,
+      'zona': _zone,
+      'lat': _location.latitude.toString(),
+      'lng': _location.longitude.toString(),
+    });
   }
 
   @override
@@ -278,7 +296,7 @@ class _RegisterDinerScreenState extends State<RegisterDinerScreen> {
                 obscureText: _obscurePass,
                 decoration: InputDecoration(
                   prefixIcon: Icon(Icons.lock_outline_rounded, color: cs.onSurfaceVariant),
-                  hintText: 'Crea una contraseña segura',
+                  hintText: 'Mínimo 10 caracteres',
                   errorText: _errors['pass'],
                   suffixIcon: IconButton(
                     icon: Icon(

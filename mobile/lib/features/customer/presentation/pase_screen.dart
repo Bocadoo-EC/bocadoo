@@ -5,10 +5,14 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../../../core/config/api_capabilities.dart';
+import '../../../core/config/app_mode.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/contracts/qr_parser.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../auth/data/auth_repository.dart';
 import '../domain/feedback_rules.dart';
+import 'account_screen.dart' show customerProfileProvider;
 import 'customer_controller.dart';
 import 'customer_widgets.dart';
 import 'feedback_card.dart';
@@ -44,6 +48,17 @@ class _PaseScreenState extends ConsumerState<PaseScreen> {
     super.dispose();
   }
 
+  Future<void> _logout() async {
+    if (!AppMode.useMock) {
+      await ref.read(authRepositoryProvider).logout();
+      ref.invalidate(customerRepositoryProvider);
+      ref.invalidate(customerControllerProvider);
+      ref.invalidate(customerProfileProvider);
+    }
+    if (!mounted) return;
+    context.go('/login');
+  }
+
   @override
   Widget build(BuildContext context) {
     final controller = ref.watch(customerControllerProvider);
@@ -57,18 +72,18 @@ class _PaseScreenState extends ConsumerState<PaseScreen> {
         if (s.passes.isEmpty && s.isError) {
           return CustomerErrorView(
             title: 'Error al cargar pase',
-            message: 'No pudimos cargar tu pase.',
+            message: s.errorMessage ?? 'No pudimos cargar tu pase.',
             onRetry: controller.loadDashboard,
           );
         }
-        if (s.passes.isEmpty) return const _EmptyPase();
+        if (s.passes.isEmpty) return _EmptyPase(onLogout: _logout);
         return RefreshIndicator(
           onRefresh: () => controller.loadDashboard(silent: true),
           child: SingleChildScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.only(bottom: 96),
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              _Hero(state: s, controller: controller),
+              _Hero(state: s, controller: controller, onLogout: _logout),
               Transform.translate(
                 offset: const Offset(0, -48),
                 child: Padding(
@@ -107,8 +122,13 @@ String _modeLabel(QrMode mode, CustomerUiState s) => switch (mode) {
 class _Hero extends StatelessWidget {
   final CustomerUiState state;
   final CustomerController controller;
+  final VoidCallback onLogout;
 
-  const _Hero({required this.state, required this.controller});
+  const _Hero({
+    required this.state,
+    required this.controller,
+    required this.onLogout,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -171,7 +191,7 @@ class _Hero extends StatelessWidget {
           ),
           IconButton(
             tooltip: 'Cerrar sesión',
-            onPressed: () => context.go('/login'),
+            onPressed: onLogout,
             icon: Icon(Icons.logout_rounded, size: 20, color: fg),
           ),
         ]),
@@ -592,12 +612,22 @@ class _StampSection extends StatelessWidget {
       ),
       if (card.rewardsAvailable > 0) ...[
         const SizedBox(height: 12),
-        ElevatedButton(
-          onPressed: () => controller.claimReward(card.restaurantId),
-          child: Text(card.rewardsAvailable > 1
-              ? 'Reclamar premio (${card.rewardsAvailable} disponibles)'
-              : 'Reclamar premio'),
-        ),
+        if (ApiCapabilities.claimStampReward)
+          ElevatedButton(
+            onPressed: () => controller.claimReward(card.restaurantId),
+            child: Text(card.rewardsAvailable > 1
+                ? 'Reclamar premio (${card.rewardsAvailable} disponibles)'
+                : 'Reclamar premio'),
+          )
+        else
+          Text(
+            'Muéstralo en caja.',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: colors.primary,
+            ),
+          ),
       ],
     ]);
   }
@@ -733,7 +763,9 @@ class _RecentActivity extends StatelessWidget {
 }
 
 class _EmptyPase extends StatelessWidget {
-  const _EmptyPase();
+  final VoidCallback onLogout;
+
+  const _EmptyPase({required this.onLogout});
 
   @override
   Widget build(BuildContext context) {
@@ -746,7 +778,7 @@ class _EmptyPase extends StatelessWidget {
             alignment: Alignment.centerRight,
             child: IconButton(
               tooltip: 'Cerrar sesión',
-              onPressed: () => context.go('/login'),
+              onPressed: onLogout,
               icon: Icon(Icons.logout_rounded, color: colors.onSurface),
             ),
           ),
