@@ -5,10 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/contracts/models.dart';
 import '../../../core/contracts/repositories.dart';
-import '../../../core/network/api_client.dart';
-import '../../../core/network/api_config.dart';
 import '../data/mock_customer_repo.dart';
-import '../data/repositories/remote_customer_repository.dart';
 
 enum CustomerStatus { initial, loading, success, error }
 
@@ -455,10 +452,6 @@ class CustomerController extends ChangeNotifier {
 }
 
 final customerRepositoryProvider = Provider<ICustomerRepository>((ref) {
-  final useRemote = ref.watch(useRemoteApiProvider);
-  if (useRemote) {
-    return RemoteCustomerRepository(dio: ref.watch(dioProvider));
-  }
   return MockCustomerRepository();
 });
 

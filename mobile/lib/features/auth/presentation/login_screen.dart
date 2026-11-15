@@ -1,10 +1,6 @@
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
-import '../../../core/auth/auth_models.dart';
-import '../../../core/auth/auth_provider.dart';
-import '../../../core/network/api_config.dart';
 import '../../../core/theme/app_theme.dart';
 import 'google_sign_in_flow.dart';
 
@@ -14,7 +10,7 @@ class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
   @override
-  ConsumerState<LoginScreen> createState() => _LoginScreenState();
+  State<LoginScreen> createState() => _LoginScreenState();
 }
 
 class _LoginScreenState extends State<LoginScreen> {
@@ -96,7 +92,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   child: Icon(Icons.restaurant_menu_rounded, color: cs.onPrimary, size: 26),
                 ),
-                const SizedBox(height: 8),
+              ),
 
               const SizedBox(height: 20),
 

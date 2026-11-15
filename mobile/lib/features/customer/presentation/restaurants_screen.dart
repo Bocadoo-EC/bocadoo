@@ -4,7 +4,6 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../../core/contracts/models.dart';
 import '../../../core/theme/app_theme.dart';
-import 'customer_bottom_nav.dart';
 import 'customer_controller.dart';
 import 'customer_widgets.dart';
 
