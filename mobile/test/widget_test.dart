@@ -14,7 +14,8 @@ void main() {
     await tester.pumpAndSettle();
 
     // Verify that the login screen and Bocadoo branding are shown
-    expect(find.text('bocadoo'), findsOneWidget);
+    expect(find.text('Tu almuerzo,'), findsOneWidget);
+    expect(find.text('sin cartulinas.'), findsOneWidget);
     expect(find.text('Comensal'), findsOneWidget);
     expect(find.text('Dueño'), findsOneWidget);
   });
