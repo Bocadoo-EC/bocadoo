@@ -1,14 +1,31 @@
+import '../../../core/config/support_config.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/contracts/qr_parser.dart';
 import '../../../core/contracts/repositories.dart';
+import '../../../core/demo/demo_store.dart';
 import 'local_customer_cache.dart';
 
-/// Implementación Mock de [ICustomerRepository] basada en los datos y flujos
-/// oficiales del PMV Web (Quito / PUCE).
+/// Implementación Mock de [ICustomerRepository] basada en los datos semilla del
+/// prototipo React (`store.tsx`).
 class MockCustomerRepository implements ICustomerRepository {
   final Duration networkLatency;
   final LocalCustomerCache _cache;
   bool shouldThrowError;
+
+  /// Preórdenes, mesas y opiniones viven en [DemoStore] para que la caja del
+  /// dueño las vea (O5, O12, O15).
+  DemoStore get _store => DemoStore.instance;
+  Map<String, SharedTable> get _tables => _store.tables;
+  final DateTime _lastValidation = DateTime.now().subtract(const Duration(minutes: 30));
+  bool _feedbackClosed = false;
+
+  static const _hostName = 'Carlos Mejía';
+  StampCard _cucharaStamps = const StampCard(
+    restaurantId: 'r1',
+    name: 'Club La Cuchara',
+    current: 7,
+    goal: 10,
+  );
 
   MockCustomerRepository({
     this.networkLatency = const Duration(milliseconds: 400),
@@ -25,34 +42,52 @@ class MockCustomerRepository implements ICustomerRepository {
 
   @override
   Future<CustomerPass> getActivePass({String? userId}) async {
+    final passes = await getActivePasses(userId: userId);
+    return passes.first;
+  }
+
+  @override
+  Future<List<CustomerPass>> getActivePasses({String? userId}) async {
+    // TODO: Conectar con provider de backend
     await _simulateNetwork();
-
     final targetUserId = userId ?? 'u1';
-    final token = BocadooQrParser.generateQrPayload(targetUserId);
+    final now = DateTime.now();
 
-    final pass = CustomerPass(
-      id: 'sub-1',
-      userId: targetUserId,
-      studentName: 'Carlos Mejía',
-      studentCareer: 'Ing. de Sistemas · PUCE',
-      planName: 'Plan Mensual Ejecutivo',
-      totalLunches: 20,
-      remainingLunches: 14,
-      expiresAt: DateTime.now().add(const Duration(days: 29)),
-      status: 'ACTIVO',
-      qrToken: token,
-      restaurantId: 'r1',
-      restaurantName: 'La Cuchara de San Blas',
-      avatarUrl:
-          'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=300&q=80',
-    );
+    final passes = [
+      CustomerPass(
+        id: 'sub-1',
+        userId: targetUserId,
+        studentName: 'Carlos Mejía',
+        studentCareer: 'Ing. de Sistemas · PUCE',
+        planName: 'Plan mensual ejecutivo',
+        totalLunches: 20,
+        remainingLunches: 14,
+        expiresAt: now.add(const Duration(days: 27)),
+        qrToken: BocadooQrParser.generateQrPayload(targetUserId),
+        restaurantId: 'r1',
+        restaurantName: 'La Cuchara de San Blas',
+      ),
+      CustomerPass(
+        id: 'sub-2',
+        userId: targetUserId,
+        studentName: 'Carlos Mejía',
+        planName: 'Mensual Saludable',
+        totalLunches: 20,
+        remainingLunches: 6,
+        expiresAt: now.add(const Duration(days: 12)),
+        qrToken: BocadooQrParser.generateQrPayload(targetUserId),
+        restaurantId: 'r2',
+        restaurantName: 'Verde Limón',
+      ),
+    ];
 
-    await _cache.savePass(pass);
-    return pass;
+    await _cache.savePass(passes.first);
+    return passes;
   }
 
   @override
   Future<String> refreshQrToken(String passId) async {
+    // TODO: Conectar con provider de backend
     await _simulateNetwork();
     final newToken = BocadooQrParser.generateQrPayload('u1');
     final cached = await _cache.getPass();
@@ -67,318 +102,574 @@ class MockCustomerRepository implements ICustomerRepository {
     String? query,
     String? category,
   }) async {
+    // TODO: Conectar con provider de backend
     await _simulateNetwork();
-
-    final list = _allRestaurants;
-
-    return list.where((restaurant) {
-      final matchesQuery = query == null ||
-          query.trim().isEmpty ||
-          restaurant.name.toLowerCase().contains(query.toLowerCase()) ||
-          restaurant.zone.toLowerCase().contains(query.toLowerCase()) ||
-          restaurant.description.toLowerCase().contains(query.toLowerCase());
-
-      final matchesCategory = category == null ||
-          category.isEmpty ||
-          category == 'Todos' ||
-          restaurant.categories.contains(category);
-
-      return matchesQuery && matchesCategory;
-    }).toList();
+    return _allRestaurants;
   }
 
   @override
   Future<Restaurant?> getRestaurantById(String id) async {
+    // TODO: Conectar con provider de backend
     await _simulateNetwork();
-    try {
-      return _allRestaurants.firstWhere((r) => r.id == id);
-    } catch (_) {
-      return null;
+    for (final r in _allRestaurants) {
+      if (r.id == id) return r;
     }
+    return null;
   }
 
   @override
   Future<List<MenuItem>> getTodayMenu(String restaurantId) async {
-    await _simulateNetwork();
     final restaurant = await getRestaurantById(restaurantId);
-    return restaurant?.todayMenu ?? _defaultMenu;
+    return restaurant?.todayMenu ?? const [];
   }
 
   @override
   Future<List<ConsumptionRecord>> getConsumptionHistory(String passId) async {
+    // TODO: Conectar con provider de backend
     await _simulateNetwork();
-    final now = DateTime.now();
-
     return [
       ConsumptionRecord(
         id: 'red-1',
         passId: passId,
         restaurantName: 'La Cuchara de San Blas',
         restaurantId: 'r1',
-        date: now.subtract(const Duration(minutes: 25)),
+        date: DateTime.now().subtract(const Duration(minutes: 25)),
         description: 'Locro de papa + Seco de pollo tierno',
-        lunchesUsed: 1,
         remainingAfter: 14,
-        status: 'Validado',
-      ),
-      ConsumptionRecord(
-        id: 'red-2',
-        passId: passId,
-        restaurantName: 'La Cuchara de San Blas',
-        restaurantId: 'r1',
-        date: now.subtract(const Duration(days: 1, hours: 2)),
-        description: 'Sopa criolla + Chuleta al grill con menestra',
-        lunchesUsed: 1,
-        remainingAfter: 15,
-        status: 'Validado',
-      ),
-      ConsumptionRecord(
-        id: 'red-3',
-        passId: passId,
-        restaurantName: 'La Cuchara de San Blas',
-        restaurantId: 'r1',
-        date: now.subtract(const Duration(days: 2, hours: 1)),
-        description: 'Locro de papa + Bowl veggie de quinoa',
-        lunchesUsed: 1,
-        remainingAfter: 16,
-        status: 'Validado',
-      ),
-      ConsumptionRecord(
-        id: 'red-4',
-        passId: passId,
-        restaurantName: 'La Cuchara de San Blas',
-        restaurantId: 'r1',
-        date: now.subtract(const Duration(days: 5, hours: 3)),
-        description: 'Crema de verduras + Seco de carne',
-        lunchesUsed: 1,
-        remainingAfter: 17,
-        status: 'Validado',
-      ),
-      ConsumptionRecord(
-        id: 'red-5',
-        passId: passId,
-        restaurantName: 'La Cuchara de San Blas',
-        restaurantId: 'r1',
-        date: now.subtract(const Duration(days: 6, hours: 4)),
-        description: 'Sopa de fideo casera + Filete de pollo',
-        lunchesUsed: 1,
-        remainingAfter: 18,
-        status: 'Validado',
       ),
     ];
   }
 
   @override
-  Future<CustomerPass?> getCachedPass() async {
-    return _cache.getPass();
-  }
+  Future<CustomerPass?> getCachedPass() async => _cache.getPass();
 
   @override
   Future<void> saveCachedPass(CustomerPass pass) async {
     await _cache.savePass(pass);
   }
 
-  // --- Catálogo y Menús Semilla fieles al PMV Web ---
+  @override
+  Future<StampCard?> getStampCard(String restaurantId) async {
+    // TODO: Conectar con provider de backend
+    await _simulateNetwork();
+    return restaurantId == 'r1' ? _cucharaStamps : null;
+  }
 
-  static final List<MenuItem> _defaultMenu = [
-    const MenuItem(
-      id: 'd-sopa-1',
-      name: 'Locro de papa con queso y aguacate',
-      category: 'Sopa',
-      price: null, // Incluido en el almuerzo
-      isSoldOut: false,
-      isVeggie: true,
-      imageUrl:
-          'https://images.unsplash.com/photo-1547592166-23ac45744acd?auto=format&fit=crop&w=600&q=80',
-    ),
-    const MenuItem(
-      id: 'd-fuerte-1',
-      name: 'Seco de pollo tierno con maduro frito',
-      category: 'Plato Fuerte',
-      price: 3.00,
-      isSoldOut: false,
-      isVeggie: false,
-      imageUrl:
-          'https://images.unsplash.com/photo-1598515214211-89d3c73ae83b?auto=format&fit=crop&w=600&q=80',
-    ),
-    const MenuItem(
-      id: 'd-fuerte-2',
-      name: 'Chuleta ahumada al grill con menestra',
-      category: 'Plato Fuerte',
-      price: 3.25,
-      isSoldOut: false,
-      isVeggie: false,
-      imageUrl:
-          'https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=600&q=80',
-    ),
-    const MenuItem(
-      id: 'd-fuerte-3',
-      name: 'Bowl veggie de quinoa y champiñones',
-      category: 'Plato Fuerte',
-      price: 3.25,
-      isSoldOut: false,
-      isVeggie: true,
-      imageUrl:
-          'https://images.unsplash.com/photo-1512621776951-a57141f2eefd?auto=format&fit=crop&w=600&q=80',
-    ),
-    const MenuItem(
-      id: 'd-jugo-1',
-      name: 'Jugo natural de naranjilla',
-      category: 'Bebida',
-      price: null,
-      isSoldOut: false,
-      isVeggie: true,
-      imageUrl:
-          'https://images.unsplash.com/photo-1613478223719-2ab802602423?auto=format&fit=crop&w=600&q=80',
-    ),
-    const MenuItem(
-      id: 'd-postre-1',
-      name: 'Higos con queso fresco andino',
-      category: 'Postre',
-      price: 1.00,
-      isSoldOut: true,
-      isVeggie: true,
-      imageUrl:
-          'https://images.unsplash.com/photo-1551024709-8f23befc6f87?auto=format&fit=crop&w=600&q=80',
-    ),
+  @override
+  Future<bool> claimReward(String restaurantId) async {
+    // TODO: Conectar con provider de backend
+    await _simulateNetwork();
+    if (restaurantId != 'r1' || _cucharaStamps.rewardsAvailable == 0) {
+      return false;
+    }
+    _cucharaStamps = StampCard(
+      restaurantId: _cucharaStamps.restaurantId,
+      name: _cucharaStamps.name,
+      current: _cucharaStamps.current,
+      goal: _cucharaStamps.goal,
+      reward: _cucharaStamps.reward,
+      rewardsAvailable: _cucharaStamps.rewardsAvailable - 1,
+    );
+    return true;
+  }
+
+  @override
+  Future<ActiveTable?> getActiveTable() async {
+    // TODO: Conectar con provider de backend
+    final table = await openSharedTable(restaurantId: 'r1', time: '13:00');
+    return ActiveTable(
+      id: table.id,
+      restaurantName: table.restaurantName,
+      time: table.time,
+      membersCount: table.members.length,
+      url: table.qrPayload,
+    );
+  }
+
+  static String _occupancyLabel(String occupancy) => switch (occupancy) {
+        'LLENO' => 'Lleno · Mejor llega un poco más tarde',
+        'MOVIDO' => 'Movido · Puede haber una espera corta',
+        _ => 'Fluido · Llegas y te sientas',
+      };
+
+  @override
+  Future<SharedTable> openSharedTable({required String restaurantId, required String time}) async {
+    // TODO: Conectar con provider de backend
+    await _simulateNetwork();
+    for (final t in _tables.values) {
+      if (t.restaurantId == restaurantId && t.time == time) return t;
+    }
+    final r = _allRestaurants.where((x) => x.id == restaurantId).firstOrNull ?? _allRestaurants.first;
+    final soups = [for (final m in r.soups) m.name];
+    final mains = [
+      for (final m in r.mains)
+        TableDish(id: m.id, name: m.name, price: m.price ?? r.singleLunchPrice, imageUrl: m.imageUrl, isVeggie: m.isVeggie),
+    ];
+    final id = _store.nextTableId();
+    final table = SharedTable(
+      id: id,
+      restaurantId: r.id,
+      restaurantName: r.name,
+      hostName: _hostName,
+      time: time,
+      qrPayload: 'BCD-MESA-$id',
+      // TODO: Definir el enlace de invitación de la app (ficha Fase 5, B12).
+      shareUrl: 'https://bocadoo.ec/app/comensal/mesa/$id',
+      occupancyLabel: _occupancyLabel(r.occupancy),
+      soups: soups,
+      mains: mains,
+      takeawaySurcharge: r.takeawaySurcharge,
+      members: [
+        TableMember(
+          id: 'mem-host',
+          name: _hostName,
+          isHost: true,
+          soup: soups.firstOrNull,
+          main: mains.firstOrNull?.name,
+        ),
+      ],
+    );
+    _tables[id] = table;
+    _store.changed();
+    return table;
+  }
+
+  @override
+  Future<SharedTable?> getSharedTable(String tableId) async {
+    // TODO: Conectar con provider de backend
+    if (_tables.isEmpty) await openSharedTable(restaurantId: 'r1', time: '13:00');
+    await _simulateNetwork();
+    return _tables[tableId.toUpperCase()];
+  }
+
+  SharedTable _update(String tableId, SharedTable Function(SharedTable t) change) {
+    final current = _tables[tableId.toUpperCase()];
+    if (current == null) throw Exception('La mesa ya no existe.');
+    final next = change(current);
+    _tables[current.id] = next;
+    _store.changed();
+    return next;
+  }
+
+  @override
+  Future<SharedTable> setTableMode(String tableId, TableMode mode) async {
+    // TODO: Conectar con provider de backend
+    await _simulateNetwork();
+    return _update(tableId, (t) => t.copyWith(mode: mode));
+  }
+
+  @override
+  Future<SharedTable> notifyKitchen(String tableId) async {
+    // TODO: Conectar con provider de backend
+    await _simulateNetwork();
+    return _update(tableId, (t) => t.copyWith(onTheWay: true));
+  }
+
+  @override
+  Future<SharedTable> joinTable(
+    String tableId, {
+    required String name,
+    required String soup,
+    required String main,
+    required bool takeaway,
+  }) async {
+    // TODO: Conectar con provider de backend
+    await _simulateNetwork();
+    return _update(
+      tableId,
+      (t) => t.copyWith(members: [
+        ...t.members,
+        TableMember(
+          id: 'mem-${t.members.length + 1}',
+          name: name,
+          soup: soup,
+          main: main,
+          takeaway: takeaway,
+        ),
+      ]),
+    );
+  }
+
+  @override
+  Future<CustomerProfile> getProfile() async {
+    // TODO: Conectar con provider de backend
+    await _simulateNetwork();
+    return const CustomerProfile(
+      name: _hostName,
+      phone: '0991234567',
+      habitualPlanName: 'Plan mensual ejecutivo',
+      habitualPlanIncludes: ['Sopa', 'Segundo', 'Bebida'],
+      // Se define al compilar (--dart-define), ver SupportConfig.
+      supportWhatsApp: SupportConfig.whatsApp,
+    );
+  }
+
+  @override
+  Future<PendingFeedback?> getPendingFeedback() async {
+    // TODO: Conectar con provider de backend
+    await _simulateNetwork();
+    if (_feedbackClosed) return null;
+    return PendingFeedback(
+      redemptionId: 'red-1',
+      restaurantId: 'r1',
+      restaurantName: 'La Cuchara de San Blas',
+      validatedAt: _lastValidation,
+    );
+  }
+
+  @override
+  Future<bool> submitFeedback(String redemptionId, {required String tag, String? note}) async {
+    // TODO: Conectar con provider de backend
+    await _simulateNetwork();
+    _feedbackClosed = true;
+    _store.feedback.insert(
+      0,
+      DemoFeedback(
+        id: _store.nextFeedbackId(),
+        restaurantId: 'r1',
+        dinerName: _hostName,
+        tag: tag,
+        note: note,
+        createdAt: DateTime.now(),
+      ),
+    );
+    _store.changed();
+    return true;
+  }
+
+  @override
+  Future<bool> dismissFeedback(String redemptionId) async {
+    // TODO: Conectar con provider de backend
+    await _simulateNetwork();
+    _feedbackClosed = true;
+    return true;
+  }
+
+  @override
+  Future<ActiveOrder?> getActiveOrder() async {
+    // TODO: Conectar con provider de backend
+    await _simulateNetwork();
+    final mine = _store.preorders.where((o) =>
+        o.dinerUserId == DemoStore.dinerUserId &&
+        (o.status == PreorderStatus.pending || o.status == PreorderStatus.delivered));
+    return mine.isEmpty ? null : _toActiveOrder(mine.last);
+  }
+
+  static ActiveOrder _toActiveOrder(DemoPreorder o) => ActiveOrder(
+        orderNumber: o.number,
+        restaurantName: o.restaurantName,
+        qrPayload: 'BCD-ORD-${o.number}',
+        status: o.status == PreorderStatus.delivered ? 'ENTREGADO' : 'PREPARANDO',
+        detail: o.detail,
+        soup: o.soup,
+        main: o.main,
+        takeaway: o.takeaway,
+        takeawaySurcharge: o.takeawaySurcharge,
+        singleLunchPrice: o.singleLunchPrice,
+        hasPlan: o.hasPlan,
+        expiresAt: o.expiresAt,
+        paidAmount: o.status == PreorderStatus.delivered ? o.amount : null,
+      );
+
+  @override
+  Future<bool> acknowledgeOrder(String orderNumber) async {
+    // TODO: Conectar con provider de backend
+    final order = _store.preorderByNumber(orderNumber);
+    if (order == null) return false;
+    order.status = PreorderStatus.acknowledged;
+    _store.changed();
+    return true;
+  }
+
+  @override
+  Future<List<ActivityItem>> getRecentActivity() async {
+    // TODO: Conectar con provider de backend
+    await _simulateNetwork();
+    return const [
+      ActivityItem(
+        id: 'act-1',
+        name: 'La Cuchara de San Blas',
+        detail: 'Almuerzo consumido · 11:58',
+        value: '- 1',
+        kind: 'lunch',
+      ),
+      ActivityItem(
+        id: 'act-2',
+        name: 'La Cuchara de San Blas',
+        detail: 'Compra de plan · Transferencia',
+        value: r'$55,00',
+        kind: 'plan',
+      ),
+    ];
+  }
+
+  @override
+  Future<ActiveOrder> preorder({
+    required String restaurantId,
+    String? soupId,
+    String? mainId,
+    String? breakfastId,
+    String? offerId,
+    required bool takeaway,
+  }) async {
+    // TODO: Conectar con provider de backend
+    await _simulateNetwork();
+    final restaurant = await getRestaurantById(restaurantId);
+    final menu = restaurant?.todayMenu ?? const <MenuItem>[];
+    String nameOf(String? id) {
+      for (final m in menu) {
+        if (m.id == id) return m.name;
+      }
+      return '';
+    }
+
+    final parts = [
+      nameOf(breakfastId),
+      nameOf(soupId),
+      nameOf(mainId),
+      if (offerId != null)
+        restaurant?.offers.where((o) => o.id == offerId).firstOrNull?.title ?? '',
+      if (takeaway) 'Para llevar',
+    ].where((p) => p.isNotEmpty);
+
+    final number = _store.nextOrderNumber();
+    final breakfast = nameOf(breakfastId);
+    final offerItem = offerId == null ? null : restaurant?.offers.where((o) => o.id == offerId).firstOrNull;
+    final offer = offerItem?.title ?? '';
+    final soup = nameOf(soupId);
+    final main = nameOf(mainId);
+    final price = offerItem?.price ?? restaurant?.singleLunchPrice ?? 3.00;
+    final surcharge = restaurant?.takeawaySurcharge ?? 0.25;
+    final now = DateTime.now();
+    final hasPlan = restaurantId == 'r1' || restaurantId == 'r2';
+    final record = DemoPreorder(
+      number: number,
+      restaurantId: restaurantId,
+      restaurantName: restaurant?.name ?? 'Restaurante',
+      dinerUserId: DemoStore.dinerUserId,
+      dinerName: _hostName,
+      detail: parts.join(' · '),
+      soup: soup.isEmpty ? null : soup,
+      main: main.isNotEmpty ? main : (breakfast.isNotEmpty ? breakfast : (offer.isEmpty ? null : offer)),
+      takeaway: takeaway,
+      takeawaySurcharge: surcharge,
+      singleLunchPrice: restaurant?.singleLunchPrice ?? 3.00,
+      hasPlan: hasPlan,
+      // Con plan prepagado no se cobra nada en caja.
+      amount: hasPlan ? 0 : price + (takeaway ? surcharge : 0),
+      createdAt: now,
+      expiresAt: now.add(const Duration(minutes: 30)),
+    );
+    _store.preorders.add(record);
+    _store.changed();
+    return _toActiveOrder(record);
+  }
+
+  @override
+  Future<bool> cancelPreorder(String orderNumber) async {
+    // TODO: Conectar con provider de backend
+    await _simulateNetwork();
+    _store.preorderByNumber(orderNumber)?.status = PreorderStatus.cancelled;
+    _store.changed();
+    return true;
+  }
+
+  @override
+  Future<List<PlanTemplate>> getPlanTemplates(String restaurantId) async {
+    // TODO: Conectar con provider de backend
+    await _simulateNetwork();
+    return _planTemplates.where((p) => p.restaurantId == restaurantId).toList();
+  }
+
+  @override
+  Future<PlanTemplate?> getPlanTemplateById(String planId) async {
+    // TODO: Conectar con provider de backend
+    await _simulateNetwork();
+    for (final p in _planTemplates) {
+      if (p.id == planId) return p;
+    }
+    return null;
+  }
+
+  @override
+  Future<bool> requestPlan(String planId) async {
+    // TODO: Conectar con provider de backend
+    await _simulateNetwork();
+    return true;
+  }
+
+  @override
+  Future<bool> cancelPlanRequest(String planId) async {
+    // TODO: Conectar con provider de backend
+    await _simulateNetwork();
+    return true;
+  }
+
+  // --- Datos semilla del prototipo (store.tsx) ---
+
+  static const List<PlanTemplate> _planTemplates = [
+    PlanTemplate(id: 'p-semanal', restaurantId: 'r1', type: 'Semanal', name: 'Plan semanal', lunches: 5, priceCents: 1500, validityDays: 7),
+    PlanTemplate(id: 'p-quincenal', restaurantId: 'r1', type: 'Quincenal', name: 'Plan quincenal', lunches: 10, priceCents: 2800, validityDays: 18),
+    PlanTemplate(id: 'p-mensual', restaurantId: 'r1', type: 'Mensual', name: 'Plan mensual ejecutivo', lunches: 20, priceCents: 5500, validityDays: 35),
+    PlanTemplate(id: 'p-r2-semanal', restaurantId: 'r2', type: 'Semanal', name: 'Semanal Verde', lunches: 5, priceCents: 1600, validityDays: 7),
+    PlanTemplate(id: 'p-r2-mensual', restaurantId: 'r2', type: 'Mensual', name: 'Mensual Saludable', lunches: 20, priceCents: 6000, validityDays: 35),
+    PlanTemplate(id: 'p-r3-quincenal', restaurantId: 'r3', type: 'Quincenal', name: 'Quincenal Manaba', lunches: 10, priceCents: 3300, validityDays: 18),
+    PlanTemplate(id: 'p-r3-mensual', restaurantId: 'r3', type: 'Mensual', name: 'Mensual Costeño', lunches: 20, priceCents: 6500, validityDays: 35),
+    PlanTemplate(id: 'p-r4-mensual', restaurantId: 'r4', type: 'Mensual', name: 'Mensual USFQ', lunches: 20, priceCents: 6800, validityDays: 35),
   ];
 
-  static final List<Restaurant> _allRestaurants = [
+  static const List<Restaurant> _allRestaurants = [
     Restaurant(
       id: 'r1',
       name: 'La Cuchara de San Blas',
       description: 'Comida casera tradicional frente a la PUCE',
+      featuredDish: 'Comida casera tradicional frente a la PUCE',
       address: 'Av. 12 de Octubre N24-110 y La Católica',
       zone: 'Frente a la PUCE',
-      rating: 4.8,
       distanceKm: 0.2,
+      latitude: -0.2092,
+      longitude: -78.4897,
       singleLunchPrice: 3.00,
       planLunchPrice: 2.75,
-      occupancy: 'Movido',
-      isOpen: true,
-      categories: const ['Todos', 'Ejecutivo', 'Cerca', 'Tradicional'],
+      occupancy: 'LIBRE',
+      hasPlan: true,
+      schedule: '11:30 - 15:30',
+      tags: ['Comida casera', 'Sazón quiteña', 'Opción vegetariana'],
+      juice: 'Jugo natural de temporada',
+      dessert: 'Dulce de la casa',
       imageUrl:
-          'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?auto=format&fit=crop&w=800&q=80',
-      todayMenu: _defaultMenu,
+          'https://images.unsplash.com/photo-1547592166-23ac45744acd?auto=format&fit=crop&w=800&q=80',
+      todayMenu: [
+        MenuItem(id: 'r1-s1', name: 'Locro de papa con queso y aguacate', category: 'Sopa', isVeggie: true),
+        MenuItem(id: 'r1-s2', name: 'Sopa criolla de verduras', category: 'Sopa', isVeggie: true),
+        MenuItem(
+          id: 'r1-m1',
+          name: 'Seco de pollo tierno con maduro frito',
+          category: 'Plato Fuerte',
+          price: 3.00,
+          imageUrl:
+              'https://images.unsplash.com/photo-1598515214211-89d3c73ae83b?auto=format&fit=crop&w=300&q=80',
+        ),
+        MenuItem(
+          id: 'r1-m2',
+          name: 'Chuleta ahumada al grill con menestra',
+          category: 'Plato Fuerte',
+          price: 3.25,
+          imageUrl:
+              'https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=300&q=80',
+        ),
+      ],
     ),
     Restaurant(
       id: 'r2',
       name: 'Verde Limón',
-      description: 'Almuerzos saludables, ensaladas frescas y bowls',
+      description: 'Almuerzos saludables y ensaladas en La Floresta',
+      featuredDish: 'Crema de espinaca · Pechuga a las finas hierbas',
       address: 'Calle Madrid 1159 y Coruña, La Floresta',
       zone: 'La Floresta',
-      rating: 4.6,
       distanceKm: 0.8,
+      latitude: -0.2128,
+      longitude: -78.4863,
       singleLunchPrice: 3.25,
       planLunchPrice: 3.00,
-      occupancy: 'Libre',
-      isOpen: true,
-      categories: const ['Todos', 'Veggie', 'Saludable', 'Cerca'],
+      occupancy: 'MOVIDO',
+      hasPlan: true,
+      schedule: '12:00 - 15:30',
+      tags: ['Saludable', 'Ensaladas frescas', 'Céntrico'],
+      juice: 'Limonada de hierbabuena',
+      dessert: 'Fruta picada con miel',
+      takeawaySurcharge: 0.30,
       imageUrl:
-          'https://images.unsplash.com/photo-1498837167922-ddd27525d352?auto=format&fit=crop&w=800&q=80',
+          'https://images.unsplash.com/photo-1512621776951-a57141f2eefd?auto=format&fit=crop&w=800&q=80',
       todayMenu: [
-        const MenuItem(
-          id: 'vl-sopa-1',
-          name: 'Crema de espinaca con croutons',
-          category: 'Sopa',
-          isVeggie: true,
-        ),
-        const MenuItem(
-          id: 'vl-fuerte-1',
-          name: 'Pechuga a las finas hierbas con ensalada rusa',
-          category: 'Plato Fuerte',
-          price: 3.25,
-          isVeggie: false,
-        ),
-        const MenuItem(
-          id: 'vl-fuerte-2',
-          name: 'Lasagna de berenjena y champiñones',
-          category: 'Plato Fuerte',
-          price: 3.50,
-          isVeggie: true,
-        ),
-        const MenuItem(
-          id: 'vl-jugo-1',
-          name: 'Limonada de hierbabuena fría',
-          category: 'Bebida',
-          isVeggie: true,
-        ),
+        MenuItem(id: 'r2-d1', name: 'Bolón de verde con café pasado', category: 'Desayuno', price: 2.50),
+        MenuItem(id: 'r2-d2', name: 'Tostadas con huevo y jugo', category: 'Desayuno', price: 2.00, isSoldOut: true),
+        MenuItem(id: 'r2-s1', name: 'Crema de espinaca con croutons', category: 'Sopa', isVeggie: true),
+        MenuItem(id: 'r2-s2', name: 'Sopa de quinoa', category: 'Sopa', isVeggie: true, isSoldOut: true),
+        MenuItem(id: 'r2-m1', name: 'Pechuga a las finas hierbas con ensalada', category: 'Plato Fuerte', price: 3.25),
+        MenuItem(id: 'r2-m2', name: 'Lasagna de berenjena y champiñones', category: 'Plato Fuerte', price: 3.50, isVeggie: true),
       ],
     ),
     Restaurant(
       id: 'r3',
       name: 'El Rincón Manabita',
       description: 'Especialidad en mariscos y sazón manaba tradicional',
+      featuredDish: 'Caldo de bola · Pescado frito con patacones',
       address: 'Av. Amazonas N22-48 y Calle Mariscal Foch',
       zone: 'La Mariscal',
-      rating: 4.7,
       distanceKm: 1.4,
+      latitude: -0.2030,
+      longitude: -78.4925,
       singleLunchPrice: 3.50,
       planLunchPrice: 3.30,
-      occupancy: 'Lleno',
-      isOpen: true,
-      categories: const ['Todos', 'Ejecutivo', 'Tradicional'],
+      occupancy: 'LLENO',
+      schedule: '11:30 - 16:00',
+      tags: ['Mariscos frescos', 'Plátano verde', 'Porción generosa'],
+      juice: 'Jugo de maracuyá',
+      dessert: 'Cocada manaba',
       imageUrl:
           'https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=800&q=80',
+      offers: [
+        RestaurantOffer(
+          id: 'of-r3-1',
+          restaurantId: 'r3',
+          title: 'Encebollado con jugo',
+          badge: 'Flash · Quedan 5 cupos · hasta 14:00',
+          price: 2.50,
+          originalPrice: 3.50,
+          slotsLeft: 5,
+          reservable: true,
+        ),
+      ],
       todayMenu: [
-        const MenuItem(
-          id: 'rm-sopa-1',
-          name: 'Caldo de bolas de verde con maní',
-          category: 'Sopa',
-          isVeggie: false,
-        ),
-        const MenuItem(
-          id: 'rm-fuerte-1',
-          name: 'Pescado frito con arroz, menestra y patacones',
-          category: 'Plato Fuerte',
-          price: 3.50,
-          isVeggie: false,
-        ),
-        const MenuItem(
-          id: 'rm-jugo-1',
-          name: 'Jugo de maracuyá helado',
-          category: 'Bebida',
-          isVeggie: true,
-        ),
+        MenuItem(id: 'r3-s1', name: 'Caldo de bolas de verde con maní', category: 'Sopa'),
+        MenuItem(id: 'r3-m1', name: 'Pescado frito con arroz y patacones', category: 'Plato Fuerte', price: 3.50),
       ],
     ),
     Restaurant(
       id: 'r4',
       name: 'Sazón Criolla',
       description: 'Almuerzo ejecutivo universitario junto a la USFQ',
+      featuredDish: 'Sopa de lenteja · Lomo saltado criollo',
       address: 'Av. Pampite y Vía Interoceánica, edif. Platinum Plaza',
       zone: 'Cumbayá',
-      rating: 4.9,
       distanceKm: 3.2,
+      latitude: -0.1980,
+      longitude: -78.4350,
       singleLunchPrice: 3.75,
       planLunchPrice: 3.40,
-      occupancy: 'Libre',
-      isOpen: true,
-      categories: const ['Todos', 'Ejecutivo'],
+      occupancy: 'LIBRE',
+      schedule: '12:00 - 16:00',
+      tags: ['Almuerzos ejecutivos', 'Ambiente universitario', 'Rápido'],
+      juice: 'Jugo de guanábana',
+      dessert: 'Tres leches',
+      takeawaySurcharge: 0.35,
       imageUrl:
           'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80',
       todayMenu: [
-        const MenuItem(
-          id: 'sc-sopa-1',
-          name: 'Sopa campesina de lenteja con queso',
-          category: 'Sopa',
-          isVeggie: true,
-        ),
-        const MenuItem(
-          id: 'sc-fuerte-1',
-          name: 'Lomo saltado criollo con papas rústicas',
-          category: 'Plato Fuerte',
-          price: 3.75,
-          isVeggie: false,
-        ),
-        const MenuItem(
-          id: 'sc-jugo-1',
-          name: 'Jugo de guanábana natural',
-          category: 'Bebida',
-          isVeggie: true,
-        ),
+        MenuItem(id: 'r4-s1', name: 'Sopa campesina de lenteja con queso', category: 'Sopa', isVeggie: true),
+        MenuItem(id: 'r4-m1', name: 'Lomo saltado criollo con papas rústicas', category: 'Plato Fuerte', price: 3.75),
       ],
+    ),
+    Restaurant(
+      id: 'r5',
+      name: 'Don Vicho Almuerzos',
+      description: 'El almuerzo rendidor y económico del sur de Quito',
+      featuredDish: 'Sin menú publicado hoy',
+      address: 'Av. Rodrigo de Chávez OE1-24 y 5 de Junio',
+      zone: 'Villaflora',
+      distanceKm: 6.1,
+      latitude: -0.2450,
+      longitude: -78.5210,
+      singleLunchPrice: 2.75,
+      planLunchPrice: 2.50,
+      occupancy: 'LIBRE',
+      isOpen: false,
+      schedule: '11:00 - 14:30',
+      tags: ['Económico', 'Sopa criolla'],
+      takeawaySurcharge: 0.20,
+      imageUrl:
+          'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?auto=format&fit=crop&w=800&q=80',
     ),
   ];
 }
-

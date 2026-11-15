@@ -1,6 +1,7 @@
-import 'package:material_ui/material_ui.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../../../core/auth/auth_models.dart';
 import '../../../core/auth/auth_provider.dart';
@@ -8,10 +9,9 @@ import '../../../core/contracts/models.dart';
 import '../../../core/theme/app_theme.dart';
 import 'owner_controller.dart';
 import 'owner_format.dart';
-import 'sell_plan_modal.dart';
+import 'owner_widgets.dart';
 
-/// Dashboard de caja diaria: métricas, arqueo de efectivo, transacciones del
-/// día y cierre de caja.
+/// O13 · Cierre de caja: ventas del turno, desglose por método y cuadre físico.
 class CashClosingScreen extends ConsumerStatefulWidget {
   const CashClosingScreen({super.key});
 
@@ -20,9 +20,8 @@ class CashClosingScreen extends ConsumerStatefulWidget {
 }
 
 class _CashClosingScreenState extends ConsumerState<CashClosingScreen> {
-  final TextEditingController _counted = TextEditingController();
-  bool _countedTouched = false;
-  bool _closed = false;
+  final _counted = TextEditingController();
+  bool _closing = false;
 
   @override
   void dispose() {
@@ -30,578 +29,323 @@ class _CashClosingScreenState extends ConsumerState<CashClosingScreen> {
     super.dispose();
   }
 
-  double? get _countedValue =>
-      double.tryParse(_counted.text.trim().replaceAll(',', '.'));
+  double? get _countedValue => double.tryParse(_counted.text.trim().replaceAll(',', '.'));
 
-  Future<void> _sellPlan() async {
-    final sold = await showSellPlanModal(context);
-    if (sold == true && mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Venta registrada.')));
+  Future<void> _close(double counted) async {
+    setState(() => _closing = true);
+    final messenger = ScaffoldMessenger.of(context);
+    final container = ProviderScope.containerOf(context, listen: false);
+    final repo = ref.read(ownerCashRepositoryProvider);
+    final rid = ref.read(ownerRestaurantIdProvider);
+    final ok = await repo.closeShift(rid, countedCash: counted);
+    if (!mounted) return;
+    setState(() => _closing = false);
+    if (!ok) {
+      showInfoSnackBar(messenger, 'No se pudo cerrar el turno');
+      return;
     }
+    container.invalidate(shiftClosedProvider);
+    showUndoSnackBar(messenger, label: 'Turno cerrado correctamente', onUndo: () async {
+      await repo.reopenShift(rid);
+      container.invalidate(shiftClosedProvider);
+    });
   }
 
-  Future<void> _closeCash(TransactionSummary summary, double counted) async {
-    final diff = counted - summary.cashExpected;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('¿Cerrar caja?'),
-        content: Text(
-          diff == 0
-              ? 'La caja cuadra: ${OwnerFormat.money(counted)} en cajón.'
-              : '${diff < 0 ? 'Faltan' : 'Sobran'} '
-                    '${OwnerFormat.money(diff.abs())} respecto a lo esperado.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Cerrar Caja'),
-          ),
-        ],
-      ),
-    );
-    if (ok == true && mounted) setState(() => _closed = true);
-  }
+  void _back() => context.canPop() ? context.pop() : context.go('/owner/caja');
 
   @override
   Widget build(BuildContext context) {
-    final isCashier =
-        ref.watch(authProvider).user?.role == AuthRole.cashier;
-    if (isCashier) {
-      final theme = Theme.of(context);
-      final colors = theme.colorScheme;
-      return Scaffold(
-        appBar: AppBar(
-          leading: IconButton(
-            tooltip: 'Volver',
-            icon: const Icon(Icons.arrow_back),
-            onPressed: () =>
-                context.canPop() ? context.pop() : context.go('/owner/scanner'),
-          ),
-          title: const Text('Cierre de caja'),
-        ),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Card(
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.lock_outline_rounded,
-                      size: 48,
-                      color: colors.primary,
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      'Solo el dueño puede cerrar caja',
-                      style: theme.textTheme.titleLarge,
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'En tu turno puedes cobrar almuerzos, vender planes y atender pedidos. El arqueo del cajón le corresponde al dueño.',
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: colors.onSurfaceVariant,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 20),
-                    FilledButton(
-                      onPressed: () => context.canPop()
-                          ? context.pop()
-                          : context.go('/owner/scanner'),
-                      child: const Text('Volver a caja'),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
-    }
-
-    final async = ref.watch(dailySummaryProvider);
+    final colors = context.colorScheme;
+    final summary = ref.watch(dailySummaryProvider);
 
     return Scaffold(
-      appBar: AppBar(
-        leading: IconButton(
-          tooltip: 'Volver',
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () =>
-              context.canPop() ? context.pop() : context.go('/owner/scanner'),
-        ),
-        title: const Text('Cierre de caja'),
-        actions: [
-          IconButton(
-            tooltip: 'Actualizar',
-            icon: const Icon(Icons.refresh),
-            onPressed: () => ref.invalidate(dailySummaryProvider),
-          ),
-        ],
-      ),
+      backgroundColor: colors.surface,
       body: SafeArea(
-        child: async.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => _ErrorView(
-            message: '$e',
-            onRetry: () => ref.invalidate(dailySummaryProvider),
+        bottom: false,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 16, 8),
+            child: OwnerBackHeader(
+              title: 'Cierre de caja',
+              onBack: _back,
+              trailing: Text('Turno hoy',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: colors.onSurfaceVariant)),
+            ),
           ),
-          data: (summary) => _buildContent(context, summary),
-        ),
+          Divider(height: 1, color: colors.outlineVariant),
+          Expanded(
+            child: summary.when(
+              loading: () => Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                const CircularProgressIndicator(),
+                const SizedBox(height: 12),
+                Text('Calculando ventas',
+                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: colors.onSurface)),
+              ]),
+              error: (_, _) => _ErrorView(onRetry: () => ref.invalidate(dailySummaryProvider)),
+              data: (s) => s.transactions.isEmpty ? const _EmptyView() : _content(s),
+            ),
+          ),
+        ]),
       ),
     );
   }
 
-  Widget _buildContent(BuildContext context, TransactionSummary summary) {
-    final theme = Theme.of(context);
-    final scheme = context.colorScheme;
+  Widget _content(TransactionSummary s) {
+    final colors = context.colorScheme;
+    final b = context.bocadooColors;
+    final closed = ref.watch(shiftClosedProvider).value ?? false;
+    final transfers = s.transactions
+        .where((t) => t.paymentMethod != 'Efectivo' && t.paymentMethod != 'Plan')
+        .fold<double>(0, (sum, t) => sum + t.amount);
+    final empty = _counted.text.trim().isEmpty;
+    final counted = empty ? s.cashExpected : (_countedValue ?? 0);
+    final diff = ((counted - s.cashExpected) * 100).round();
+    final (Color bg, Color fg, String label) = diff == 0
+        ? (b.successContainer, b.success, 'Caja cuadrada exacta')
+        : diff > 0
+            ? (colors.primaryContainer, colors.onPrimaryContainer, 'Sobrante en cajón')
+            : (b.dangerContainer, b.onDangerContainer, 'Faltante en cajón');
 
-    // Por defecto, el efectivo contado coincide con el esperado (como el PMV).
-    final counted = _countedTouched
-        ? (_countedValue ?? 0)
-        : summary.cashExpected;
-    final diff = counted - summary.cashExpected;
+    BoxDecoration card() => BoxDecoration(
+          color: Theme.of(context).scaffoldBackgroundColor,
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: colors.outlineVariant),
+        );
 
-    return RefreshIndicator(
-      onRefresh: () async {
-        ref.invalidate(dailySummaryProvider);
-        await ref.read(dailySummaryProvider.future);
-      },
-      child: ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-        children: [
-          _IncomeCard(total: summary.totalIncomeToday),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: _MetricCard(
-                  icon: Icons.restaurant,
-                  label: 'Almuerzos validados hoy',
-                  value: '${summary.lunchesRedeemedToday}',
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _MetricCard(
-                  icon: Icons.sell_outlined,
-                  label: 'Planes vendidos',
-                  value: '${summary.plansSoldToday}',
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          _CashCountCard(
-            expected: summary.cashExpected,
-            controller: _counted,
-            hintValue: summary.cashExpected,
-            enabled: !_closed,
-            difference: diff,
-            onChanged: () => setState(() => _countedTouched = true),
-          ),
-          const SizedBox(height: 24),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'Movimientos de hoy',
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ),
-              TextButton.icon(
-                onPressed: _sellPlan,
-                icon: const Icon(Icons.add),
-                label: const Text('Vender plan'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          if (summary.transactions.isEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 32),
-              child: Column(
-                children: [
-                  Icon(
-                    Icons.receipt_long_outlined,
-                    size: 40,
-                    color: scheme.onSurfaceVariant,
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Aún no hay movimientos hoy.',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ),
-            )
-          else
-            for (final t in summary.transactions) _TransactionTile(item: t),
-          const SizedBox(height: 24),
-          if (_closed)
-            _ClosedBanner(difference: diff)
-          else
-            ElevatedButton.icon(
-              onPressed: (_countedTouched && _countedValue == null)
-                  ? null
-                  : () => _closeCash(summary, counted),
-              icon: const Icon(Icons.lock_outline),
-              label: const Text('Cerrar Caja'),
-            ),
-        ],
+    return ListView(padding: const EdgeInsets.all(16), children: [
+      Container(
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(gradient: b.heroGradient, borderRadius: BorderRadius.circular(AppTheme.cardRadius)),
+        child: Column(children: [
+          Text('Ventas del turno',
+              style: TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.w800, color: b.imageForeground.withValues(alpha: 0.85))),
+          const SizedBox(height: 6),
+          Text(OwnerFormat.money(s.totalIncomeToday),
+              style: TextStyle(fontSize: 40, fontWeight: FontWeight.w900, height: 1, color: b.imageForeground)),
+          const SizedBox(height: 6),
+          Text('${s.lunchesRedeemedToday} almuerzos servidos hoy',
+              style: TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.w600, color: b.imageForeground.withValues(alpha: 0.85))),
+        ]),
       ),
-    );
-  }
-}
-
-class _IncomeCard extends StatelessWidget {
-  const _IncomeCard({required this.total});
-
-  final double total;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = context.colorScheme;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: scheme.primaryContainer,
-        borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-      ),
-      child: Column(
-        children: [
-          Text(
-            'INGRESOS TOTALES',
-            style: theme.textTheme.labelLarge?.copyWith(
-              color: scheme.onPrimaryContainer,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 1,
-            ),
+      const SizedBox(height: 14),
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        decoration: card(),
+        child: Column(children: [
+          _MethodRow(
+            icon: Icons.payments_outlined,
+            iconBg: b.successContainer,
+            iconFg: b.success,
+            label: 'Efectivo en caja',
+            value: OwnerFormat.money(s.cashExpected),
           ),
-          const SizedBox(height: 8),
-          Text(
-            OwnerFormat.money(total),
-            style: theme.textTheme.displayMedium?.copyWith(
-              color: scheme.onPrimaryContainer,
-              fontWeight: FontWeight.w900,
-            ),
+          Divider(height: 1, color: colors.outlineVariant),
+          _MethodRow(
+            icon: Icons.smartphone_rounded,
+            iconBg: colors.primaryContainer,
+            iconFg: colors.primary,
+            label: 'Transferencias',
+            value: OwnerFormat.money(transfers),
           ),
-        ],
-      ),
-    );
-  }
-}
-
-class _MetricCard extends StatelessWidget {
-  const _MetricCard({
-    required this.icon,
-    required this.label,
-    required this.value,
-  });
-
-  final IconData icon;
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = context.colorScheme;
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: scheme.surface,
-        borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-        border: Border.all(color: scheme.outlineVariant),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, color: scheme.primary),
-          const SizedBox(height: 12),
-          Text(
-            value,
-            style: theme.textTheme.headlineMedium?.copyWith(
-              color: scheme.onSurface,
-              fontWeight: FontWeight.w900,
-            ),
+          Divider(height: 1, color: colors.outlineVariant),
+          _MethodRow(
+            icon: Icons.percent_rounded,
+            iconBg: colors.primaryContainer,
+            iconFg: colors.onPrimaryContainer,
+            label: 'Comisión Bocadoo',
+            value: OwnerFormat.money(0),
+            valueColor: colors.primary,
           ),
-          const SizedBox(height: 2),
-          Text(
-            label,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: scheme.onSurfaceVariant,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
+        ]),
       ),
-    );
-  }
-}
-
-class _CashCountCard extends StatelessWidget {
-  const _CashCountCard({
-    required this.expected,
-    required this.controller,
-    required this.hintValue,
-    required this.enabled,
-    required this.difference,
-    required this.onChanged,
-  });
-
-  final double expected;
-  final TextEditingController controller;
-  final double hintValue;
-  final bool enabled;
-  final double difference;
-  final VoidCallback onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = context.colorScheme;
-    final tokens = context.bocadooColors;
-
-    final balanced = difference.abs() < 0.005;
-    final (Color bg, Color fg, String label) = balanced
-        ? (tokens.successContainer, tokens.onSuccessContainer, 'Caja cuadra')
-        : difference > 0
-        ? (scheme.primaryContainer, scheme.onPrimaryContainer, 'Sobrante')
-        : (tokens.dangerContainer, tokens.onDangerContainer, 'Faltante');
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: scheme.surface,
-        borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-        border: Border.all(color: scheme.outlineVariant),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Arqueo de efectivo',
-            style: theme.textTheme.titleSmall?.copyWith(
-              fontWeight: FontWeight.w800,
+      const SizedBox(height: 14),
+      Container(
+        padding: const EdgeInsets.all(16),
+        decoration: card(),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          const OwnerSectionLabel('Cuadre de caja física'),
+          const SizedBox(height: 10),
+          Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Efectivo en Bocadoo',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: colors.onSurfaceVariant)),
+                Text(OwnerFormat.money(s.cashExpected),
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: colors.onSurface)),
+              ]),
             ),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Esperado en Bocadoo',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
+            Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+              Text('Efectivo en cajón',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: colors.onSurfaceVariant)),
+              const SizedBox(height: 4),
+              Row(mainAxisSize: MainAxisSize.min, children: [
+                Text('\$', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900, color: colors.primary)),
+                const SizedBox(width: 4),
+                SizedBox(
+                  width: 96,
+                  child: TextField(
+                    controller: _counted,
+                    enabled: !closed,
+                    textAlign: TextAlign.end,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]'))],
+                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900, color: colors.onSurface),
+                    decoration: InputDecoration(
+                      isDense: true,
+                      hintText: s.cashExpected.toStringAsFixed(2).replaceAll('.', ','),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+                        borderSide: BorderSide(color: colors.outlineVariant),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+                        borderSide: BorderSide(color: colors.primary, width: 2),
+                      ),
+                      disabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+                        borderSide: BorderSide(color: colors.outlineVariant),
                       ),
                     ),
-                    Text(
-                      OwnerFormat.money(expected),
-                      style: theme.textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              SizedBox(
-                width: 140,
-                child: TextField(
-                  controller: controller,
-                  enabled: enabled,
-                  textAlign: TextAlign.end,
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
+                    onChanged: (_) => setState(() {}),
                   ),
-                  decoration: InputDecoration(
-                    labelText: 'Efectivo en cajón',
-                    prefixText: r'$ ',
-                    hintText: expected.toStringAsFixed(2).replaceAll('.', ','),
-                  ),
-                  onChanged: (_) => onChanged(),
                 ),
-              ),
-            ],
-          ),
+              ]),
+            ]),
+          ]),
           const SizedBox(height: 12),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             decoration: BoxDecoration(
               color: bg,
-              borderRadius: BorderRadius.circular(AppTheme.inputRadius),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: fg.withValues(alpha: 0.3)),
             ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  label,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: fg,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                Text(
-                  balanced
-                      ? OwnerFormat.money(0)
-                      : '${difference > 0 ? '+' : '-'}'
-                            '${OwnerFormat.money(difference.abs())}',
-                  style: theme.textTheme.bodyLarge?.copyWith(
-                    color: fg,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _TransactionTile extends StatelessWidget {
-  const _TransactionTile({required this.item});
-
-  final TransactionItem item;
-
-  IconData get _icon => switch (item.type) {
-    'Canje' => Icons.restaurant,
-    'Venta Plan' => Icons.sell_outlined,
-    _ => Icons.payments_outlined,
-  };
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = context.colorScheme;
-    final isRedeem = item.type == 'Canje';
-    final displayType = isRedeem ? 'Almuerzo validado' : item.type;
-
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      leading: CircleAvatar(
-        backgroundColor: scheme.primaryContainer,
-        foregroundColor: scheme.onPrimaryContainer,
-        child: Icon(_icon, size: 20),
-      ),
-      title: Text(
-        item.customerName,
-        style: theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w700),
-      ),
-      subtitle: Text(
-        '$displayType · ${OwnerFormat.time(item.timestamp)}',
-        style: theme.textTheme.bodySmall?.copyWith(
-          color: scheme.onSurfaceVariant,
-        ),
-      ),
-      trailing: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          Text(
-            isRedeem ? '1 almuerzo' : OwnerFormat.money(item.amount),
-            style: theme.textTheme.bodyLarge?.copyWith(
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-          Text(
-            item.paymentMethod,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: scheme.onSurfaceVariant,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ClosedBanner extends StatelessWidget {
-  const _ClosedBanner({required this.difference});
-
-  final double difference;
-
-  @override
-  Widget build(BuildContext context) {
-    final tokens = context.bocadooColors;
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: tokens.successContainer,
-        borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.check_circle, color: tokens.onSuccessContainer),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              'Caja cerrada correctamente',
-              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                color: tokens.onSuccessContainer,
-                fontWeight: FontWeight.w800,
+            child: Row(children: [
+              Icon(diff == 0 ? Icons.check_circle_outline_rounded : Icons.error_outline_rounded, size: 20, color: fg),
+              const SizedBox(width: 8),
+              Expanded(child: Text(label, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: fg))),
+              Text(
+                diff == 0
+                    ? OwnerFormat.money(0)
+                    : '${diff > 0 ? '+' : '-'}${OwnerFormat.money(diff.abs() / 100)}',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: fg),
               ),
-            ),
+            ]),
           ),
-        ],
+        ]),
+      ),
+      const SizedBox(height: 18),
+      if (closed)
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(color: b.successContainer, borderRadius: BorderRadius.circular(AppTheme.cardRadius)),
+          child: Row(children: [
+            Icon(Icons.lock_outline_rounded, color: b.success),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text('Turno cerrado',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: b.onSuccessContainer)),
+            ),
+          ]),
+        )
+      else
+        ElevatedButton.icon(
+          onPressed: _closing || (!empty && _countedValue == null) ? null : () => _close(counted),
+          icon: const Icon(Icons.check_circle_outline_rounded),
+          label: const Text('Cerrar turno'),
+        ),
+    ]);
+  }
+}
+
+class _MethodRow extends StatelessWidget {
+  const _MethodRow({
+    required this.icon,
+    required this.iconBg,
+    required this.iconFg,
+    required this.label,
+    required this.value,
+    this.valueColor,
+  });
+
+  final IconData icon;
+  final Color iconBg;
+  final Color iconFg;
+  final String label;
+  final String value;
+  final Color? valueColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Row(children: [
+        CircleAvatar(radius: 16, backgroundColor: iconBg, child: Icon(icon, size: 17, color: iconFg)),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(label, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: colors.onSurface)),
+        ),
+        Text(value, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: valueColor ?? colors.onSurface)),
+      ]),
+    );
+  }
+}
+
+class _EmptyView extends StatelessWidget {
+  const _EmptyView();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.payments_outlined, size: 48, color: colors.onSurfaceVariant),
+          const SizedBox(height: 8),
+          Text('Caja sin movimientos',
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: colors.onSurface)),
+          const SizedBox(height: 4),
+          Text('Aún no se han registrado cobros hoy.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant)),
+        ]),
       ),
     );
   }
 }
 
 class _ErrorView extends StatelessWidget {
-  const _ErrorView({required this.message, required this.onRetry});
+  const _ErrorView({required this.onRetry});
 
-  final String message;
   final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context) {
-    final scheme = context.colorScheme;
+    final b = context.bocadooColors;
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.error_outline, size: 48, color: scheme.error),
-            const SizedBox(height: 12),
-            Text(
-              'No se pudo calcular el total del turno.',
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.titleMedium
-                  ?.copyWith(fontWeight: FontWeight.w700),
-            ),
+        padding: const EdgeInsets.all(24),
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(color: b.dangerContainer, borderRadius: BorderRadius.circular(AppTheme.cardRadius)),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Icon(Icons.error_outline_rounded, size: 36, color: b.onDangerContainer),
+            const SizedBox(height: 8),
+            Text('Error en cierre',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: b.onDangerContainer)),
             const SizedBox(height: 4),
-            Text(
-              message,
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodySmall
-                  ?.copyWith(color: scheme.onSurfaceVariant),
-            ),
-            const SizedBox(height: 20),
+            Text('No se pudo calcular el total del turno.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: b.onDangerContainer)),
+            const SizedBox(height: 16),
             OutlinedButton(onPressed: onRetry, child: const Text('Reintentar')),
-          ],
+          ]),
         ),
       ),
     );

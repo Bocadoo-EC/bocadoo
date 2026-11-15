@@ -6,585 +6,305 @@ import '../../../core/auth/auth_models.dart';
 import '../../../core/auth/auth_provider.dart';
 import '../../../core/network/api_config.dart';
 import '../../../core/theme/app_theme.dart';
-import '../../../core/widgets/widgets.dart';
+import 'google_sign_in_flow.dart';
 
-/// Modos del formulario de acceso.
-enum _AuthMode { login, register }
+enum _UserRole { customer, owner }
 
-/// Pantalla oficial de Inicio de Sesión y Registro de Bocadoo.
-class LoginScreen extends ConsumerStatefulWidget {
+class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
   @override
   ConsumerState<LoginScreen> createState() => _LoginScreenState();
 }
 
-class _LoginScreenState extends ConsumerState<LoginScreen> {
-  final _formKey = GlobalKey<FormState>();
-  final _nameController = TextEditingController();
-  final _restaurantController = TextEditingController();
-  final _basePriceController = TextEditingController(text: '2,75');
-  final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
-
-  static const List<String> _zones = [
-    'La Floresta',
-    'González Suárez',
-    'Iñaquito',
-    'Centro Histórico',
-    'Cumbayá',
-  ];
-
-  _AuthMode _mode = _AuthMode.login;
-  AuthRole _selectedRole = AuthRole.customer;
-  String _selectedZone = _zones.first;
-  bool _obscurePassword = true;
-  String? _localError;
+class _LoginScreenState extends State<LoginScreen> {
+  _UserRole _role = _UserRole.customer;
+  final _emailCtrl = TextEditingController();
+  final _passCtrl = TextEditingController();
+  bool _obscure = true;
+  bool _loading = false;
+  String? _emailError;
+  String? _passError;
 
   @override
   void dispose() {
-    _nameController.dispose();
-    _restaurantController.dispose();
-    _basePriceController.dispose();
-    _emailController.dispose();
-    _passwordController.dispose();
+    _emailCtrl.dispose();
+    _passCtrl.dispose();
     super.dispose();
   }
 
-  void _showForgotPasswordModal() {
-    final resetEmail = TextEditingController(text: _emailController.text.trim());
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      builder: (sheetCtx) {
-        final theme = Theme.of(sheetCtx);
-        final colors = theme.colorScheme;
-        return Padding(
-          padding: EdgeInsets.fromLTRB(
-            24,
-            8,
-            24,
-            MediaQuery.of(sheetCtx).viewInsets.bottom + 24,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                'Recuperar contraseña',
-                style: theme.textTheme.titleLarge,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Ingresa el correo de tu cuenta y te enviaremos un enlace para restablecer tu acceso.',
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: colors.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: resetEmail,
-                keyboardType: TextInputType.emailAddress,
-                decoration: const InputDecoration(
-                  labelText: 'Correo electrónico',
-                  prefixIcon: Icon(Icons.alternate_email_rounded),
-                ),
-              ),
-              const SizedBox(height: 20),
-              BocadooButton(
-                label: 'Enviar enlace',
-                icon: Icons.send_rounded,
-                onPressed: () {
-                  Navigator.of(sheetCtx).pop();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                        'Si tu correo está registrado, recibirás instrucciones en breve.',
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ],
-          ),
-        );
-      },
-    ).whenComplete(resetEmail.dispose);
-  }
-
-  void _switchMode(_AuthMode mode) {
-    if (_mode == mode) return;
+  void _changeRole(_UserRole r) {
     setState(() {
-      _mode = mode;
-      _localError = null;
+      _role = r;
+      _emailError = null;
+      _passError = null;
     });
   }
 
-  void _selectRole(AuthRole role) {
-    if (_selectedRole == role) return;
+  bool _validate() {
+    final email = _emailCtrl.text.trim();
+    final pass = _passCtrl.text;
+    final eErr = email.isEmpty
+        ? 'Ingresa tu correo electrónico para continuar.'
+        : !RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)
+            ? 'Por favor ingresa un correo electrónico válido (ej: nombre@correo.ec)'
+            : null;
+    final pErr = pass.isEmpty ? 'Por favor ingresa tu contraseña.' : null;
     setState(() {
-      _selectedRole = role;
-      _localError = null;
+      _emailError = eErr;
+      _passError = pErr;
     });
+    return eErr == null && pErr == null;
   }
 
-  Future<void> _submit() async {
-    setState(() => _localError = null);
-    if (!(_formKey.currentState?.validate() ?? false)) return;
-
-    final useRemote = ref.read(useRemoteApiProvider);
-    final notifier = ref.read(authProvider.notifier);
-
-    if (!useRemote) {
-      await notifier.loginDemo(
-        _selectedRole,
-        email: _emailController.text.trim(),
-      );
-      if (!mounted) return;
-      context.go(
-        _selectedRole.isStaff ? '/owner/scanner' : '/customer/pase',
-      );
-      return;
-    }
-
-    final bool ok;
-    if (_mode == _AuthMode.login) {
-      ok = await notifier.login(
-        email: _emailController.text.trim(),
-        password: _passwordController.text,
-      );
-    } else {
-      ok = await notifier.register(
-        fullName: _nameController.text.trim(),
-        email: _emailController.text.trim(),
-        password: _passwordController.text,
-        role: _selectedRole,
-        restaurantName: _selectedRole == AuthRole.owner
-            ? _restaurantController.text.trim()
-            : null,
-      );
-    }
-
+  Future<void> _login() async {
+    if (!_validate()) return;
+    setState(() => _loading = true);
+    // TODO: Conectar con provider de backend
+    await Future.delayed(const Duration(milliseconds: 700));
     if (!mounted) return;
-    if (!ok) {
-      setState(() {
-        _localError = ref.read(authProvider).errorMessage;
-      });
-      return;
-    }
-
-    final user = ref.read(authProvider).user;
-    if (user != null) {
-      context.go(user.role.isStaff ? '/owner/scanner' : '/customer/pase');
+    setState(() => _loading = false);
+    if (_role == _UserRole.customer) {
+      context.go('/customer/pase');
+    } else {
+      context.go('/owner/caja');
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colors = theme.colorScheme;
-    final bColor = context.bocadooColors;
-    final authState = ref.watch(authProvider);
-    final isRegister = _mode == _AuthMode.register;
-    final errorText = _localError ?? authState.errorMessage;
+    final cs = context.colorScheme;
+    final isCustomer = _role == _UserRole.customer;
 
     return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(24, 12, 24, 28),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Align(
-                  alignment: Alignment.centerRight,
-                  child: ThemeToggle.compact(),
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const SizedBox(height: 16),
+
+              // Espacio reservado para el logo oficial de Bocadoo
+              Center(
+                child: Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    color: cs.primary,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Icon(Icons.restaurant_menu_rounded, color: cs.onPrimary, size: 26),
                 ),
                 const SizedBox(height: 8),
 
-                // Marca oficial Bocadoo
-                Center(
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 48,
-                        height: 48,
-                        decoration: BoxDecoration(
-                          color: colors.primary,
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: Icon(
-                          Icons.restaurant_menu_rounded,
-                          color: colors.onPrimary,
-                          size: 26,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'bocadoo',
-                            style: theme.textTheme.headlineMedium?.copyWith(
-                              fontSize: 28,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: -0.5,
-                            ),
-                          ),
-                          Text(
-                            'tu almuerzo, más fácil',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: colors.onSurfaceVariant,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
+              const SizedBox(height: 20),
+
+              Center(
+                child: Column(children: [
+                  Text(
+                    'Tu almuerzo,',
+                    style: TextStyle(fontSize: 32, fontWeight: FontWeight.w800, color: cs.onSurface),
                   ),
-                ),
-
-                const SizedBox(height: 28),
-
-                // Selector Iniciar sesión / Crear cuenta
-                Container(
-                  padding: const EdgeInsets.all(4),
-                  decoration: BoxDecoration(
-                    color: colors.surface,
-                    borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-                    border: Border.all(color: colors.outlineVariant),
+                  Text(
+                    'sin cartulinas.',
+                    style: TextStyle(fontSize: 32, fontWeight: FontWeight.w800, color: cs.primary),
                   ),
-                  child: Row(
-                    children: [
-                      _SegmentPill(
-                        label: 'Iniciar sesión',
-                        selected: !isRegister,
-                        onTap: () => _switchMode(_AuthMode.login),
-                      ),
-                      _SegmentPill(
-                        label: 'Crear cuenta',
-                        selected: isRegister,
-                        onTap: () => _switchMode(_AuthMode.register),
-                      ),
-                    ],
-                  ),
-                ),
-
-                const SizedBox(height: 16),
-
-                // Tarjeta principal de acceso
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: colors.surface,
-                    borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-                    border: Border.all(color: colors.outlineVariant),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Text(
-                        'Tu rol',
-                        style: theme.textTheme.bodySmall,
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _RoleOption(
-                              label: 'Comensal',
-                              icon: Icons.person_outline_rounded,
-                              selected: _selectedRole == AuthRole.customer,
-                              onTap: () => _selectRole(AuthRole.customer),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: _RoleOption(
-                              label: 'Dueño',
-                              icon: Icons.storefront_rounded,
-                              selected: _selectedRole == AuthRole.owner,
-                              onTap: () => _selectRole(AuthRole.owner),
-                            ),
-                          ),
-                        ],
-                      ),
-
-                      if (isRegister) ...[
-                        const SizedBox(height: 18),
-                        Text(
-                          'Nombre completo',
-                          style: theme.textTheme.bodySmall,
-                        ),
-                        const SizedBox(height: 6),
-                        TextFormField(
-                          controller: _nameController,
-                          textInputAction: TextInputAction.next,
-                          decoration: const InputDecoration(
-                            hintText: 'Ej. Carlos Mejía',
-                            prefixIcon: Icon(Icons.badge_outlined),
-                          ),
-                          validator: (value) {
-                            if (!isRegister) return null;
-                            if (value == null || value.trim().isEmpty) {
-                              return 'Ingresa tu nombre.';
-                            }
-                            return null;
-                          },
-                        ),
-                        if (_selectedRole == AuthRole.owner) ...[
-                          const SizedBox(height: 16),
-                          Text(
-                            'Nombre del local',
-                            style: theme.textTheme.bodySmall,
-                          ),
-                          const SizedBox(height: 6),
-                          TextFormField(
-                            controller: _restaurantController,
-                            textInputAction: TextInputAction.next,
-                            decoration: const InputDecoration(
-                              hintText: 'Ej. La Cuchara de San Blas',
-                              prefixIcon: Icon(Icons.store_outlined),
-                            ),
-                            validator: (value) {
-                              if (!isRegister ||
-                                  _selectedRole != AuthRole.owner) {
-                                return null;
-                              }
-                              if (value == null || value.trim().isEmpty) {
-                                return 'Ingresa el nombre de tu local.';
-                              }
-                              return null;
-                            },
-                          ),
-                          const SizedBox(height: 16),
-                          Text(
-                            'Precio habitual del almuerzo (USD)',
-                            style: theme.textTheme.bodySmall,
-                          ),
-                          const SizedBox(height: 6),
-                          TextFormField(
-                            controller: _basePriceController,
-                            keyboardType: const TextInputType.numberWithOptions(
-                              decimal: true,
-                            ),
-                            textInputAction: TextInputAction.next,
-                            decoration: const InputDecoration(
-                              hintText: 'Ej. 2,75',
-                              prefixIcon: Icon(Icons.attach_money_rounded),
-                            ),
-                            validator: (value) {
-                              if (!isRegister ||
-                                  _selectedRole != AuthRole.owner) {
-                                return null;
-                              }
-                              final parsed = double.tryParse(
-                                (value ?? '').trim().replaceAll(',', '.'),
-                              );
-                              if (parsed == null || parsed <= 0) {
-                                return 'Ingresa un precio válido (ej. 2,75).';
-                              }
-                              return null;
-                            },
-                          ),
-                        ],
-                        const SizedBox(height: 16),
-                        Text(
-                          _selectedRole == AuthRole.owner
-                              ? 'Zona del local'
-                              : 'Tu zona habitual',
-                          style: theme.textTheme.bodySmall,
-                        ),
-                        const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: _zones
-                              .map(
-                                (z) => ChoiceChip(
-                                  label: Text(z),
-                                  selected: _selectedZone == z,
-                                  onSelected: (_) =>
-                                      setState(() => _selectedZone = z),
-                                ),
-                              )
-                              .toList(),
-                        ),
-                      ],
-
-                      const SizedBox(height: 18),
-                      Text(
-                        'Correo',
-                        style: theme.textTheme.bodySmall,
-                      ),
-                      const SizedBox(height: 6),
-                      TextFormField(
-                        controller: _emailController,
-                        keyboardType: TextInputType.emailAddress,
-                        textInputAction: TextInputAction.next,
-                        decoration: InputDecoration(
-                          hintText: _selectedRole == AuthRole.customer
-                              ? 'tu.correo@puce.edu.ec'
-                              : 'dueno@tulocal.ec',
-                          prefixIcon: const Icon(Icons.alternate_email_rounded),
-                        ),
-                        validator: (value) {
-                          final trimmed = value?.trim() ?? '';
-                          if (trimmed.isEmpty) {
-                            return 'Ingresa tu correo.';
-                          }
-                          if (!trimmed.contains('@') ||
-                              !trimmed.contains('.')) {
-                            return 'Ingresa un correo válido.';
-                          }
-                          return null;
-                        },
-                      ),
-
-                      const SizedBox(height: 16),
-                      Text(
-                        'Contraseña',
-                        style: theme.textTheme.bodySmall,
-                      ),
-                      const SizedBox(height: 6),
-                      TextFormField(
-                        controller: _passwordController,
-                        obscureText: _obscurePassword,
-                        textInputAction: TextInputAction.done,
-                        onFieldSubmitted: (_) => _submit(),
-                        decoration: InputDecoration(
-                          hintText: 'Mínimo 6 caracteres',
-                          prefixIcon: const Icon(Icons.lock_outline_rounded),
-                          suffixIcon: IconButton(
-                            icon: Icon(
-                              _obscurePassword
-                                  ? Icons.visibility_off_outlined
-                                  : Icons.visibility_outlined,
-                            ),
-                            onPressed: () {
-                              setState(() {
-                                _obscurePassword = !_obscurePassword;
-                              });
-                            },
-                          ),
-                        ),
-                        validator: (value) {
-                          if (value == null || value.isEmpty) {
-                            return 'Ingresa tu contraseña.';
-                          }
-                          if (value.length < 6) {
-                            return 'Mínimo 6 caracteres.';
-                          }
-                          return null;
-                        },
-                      ),
-
-                      if (errorText != null && errorText.isNotEmpty) ...[
-                        const SizedBox(height: 16),
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: bColor.dangerContainer,
-                            borderRadius:
-                                BorderRadius.circular(AppTheme.inputRadius),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(
-                                Icons.error_outline_rounded,
-                                size: 20,
-                                color: bColor.onDangerContainer,
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Text(
-                                  errorText,
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: bColor.onDangerContainer,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-
-                      const SizedBox(height: 22),
-                      BocadooButton(
-                        label: isRegister ? 'Crear cuenta' : 'Iniciar sesión',
-                        icon: Icons.arrow_forward_rounded,
-                        isLoading: authState.isLoading,
-                        onPressed: _submit,
-                      ),
-                      if (!isRegister) ...[
-                        const SizedBox(height: 8),
-                        Align(
-                          alignment: Alignment.center,
-                          child: TextButton(
-                            onPressed: _showForgotPasswordModal,
-                            child: Text(
-                              '¿Olvidaste tu contraseña?',
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: colors.primary,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _SegmentPill extends StatelessWidget {
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _SegmentPill({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-
-    return Expanded(
-      child: Material(
-        color: selected ? colors.primaryContainer : Colors.transparent,
-        borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            child: Text(
-              label,
-              textAlign: TextAlign.center,
-              style: textTheme.bodyMedium?.copyWith(
-                fontWeight: FontWeight.w700,
-                color: selected
-                    ? colors.onPrimaryContainer
-                    : colors.onSurfaceVariant,
+                ]),
               ),
-            ),
+
+              const SizedBox(height: 8),
+
+              Center(
+                child: Text(
+                  isCustomer
+                      ? 'Planes simples. Valida tu almuerzo con QR en Quito.'
+                      : 'Gestiona comensales, planes prepagados y cobros QR.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: cs.onSurfaceVariant),
+                ),
+              ),
+
+              const SizedBox(height: 24),
+
+              // Tabs Comensal / Dueño
+              Container(
+                padding: const EdgeInsets.all(4),
+                decoration: BoxDecoration(
+                  color: cs.secondaryContainer,
+                  borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+                ),
+                child: Row(children: [
+                  _Tab(
+                    label: 'Comensal',
+                    icon: Icons.person_rounded,
+                    selected: isCustomer,
+                    onTap: () => _changeRole(_UserRole.customer),
+                  ),
+                  _Tab(
+                    label: 'Dueño',
+                    icon: Icons.storefront_rounded,
+                    selected: !isCustomer,
+                    onTap: () => _changeRole(_UserRole.owner),
+                  ),
+                ]),
+              ),
+
+              const SizedBox(height: 16),
+
+              // Badge de rol
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: cs.primaryContainer,
+                    borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(
+                      isCustomer ? Icons.credit_card_rounded : Icons.point_of_sale_rounded,
+                      size: 15,
+                      color: cs.onPrimaryContainer,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      isCustomer ? 'PASE COMENSAL' : 'TERMINAL RESTAURANTE',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.5,
+                        color: cs.onPrimaryContainer,
+                      ),
+                    ),
+                  ]),
+                ),
+              ),
+
+              const SizedBox(height: 20),
+
+              Text(
+                'CORREO ELECTRÓNICO',
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.6, color: cs.onSurfaceVariant),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _emailCtrl,
+                keyboardType: TextInputType.emailAddress,
+                decoration: InputDecoration(
+                  prefixIcon: Icon(Icons.email_outlined, color: cs.onSurfaceVariant),
+                  hintText: isCustomer ? 'carlos@email.com' : 'maria@lacuchara.ec',
+                  errorText: _emailError,
+                  suffixIcon: _emailCtrl.text.isNotEmpty
+                      ? IconButton(
+                          icon: Icon(Icons.clear, color: cs.onSurfaceVariant),
+                          onPressed: () => setState(() => _emailCtrl.clear()),
+                        )
+                      : null,
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+
+              const SizedBox(height: 16),
+
+              Text(
+                'CONTRASEÑA',
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.6, color: cs.onSurfaceVariant),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _passCtrl,
+                obscureText: _obscure,
+                decoration: InputDecoration(
+                  prefixIcon: Icon(Icons.lock_outline_rounded, color: cs.onSurfaceVariant),
+                  hintText: '••••••••',
+                  errorText: _passError,
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _obscure ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                      color: cs.onSurfaceVariant,
+                    ),
+                    onPressed: () => setState(() => _obscure = !_obscure),
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 4),
+
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: () => context.push('/auth/olvide-contrasena', extra: _emailCtrl.text.trim()),
+                  child: Text(
+                    '¿Olvidaste tu contraseña?',
+                    style: TextStyle(fontSize: 13, color: cs.primary),
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 8),
+
+              ElevatedButton(
+                onPressed: _loading ? null : _login,
+                child: _loading
+                    ? SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: cs.onPrimary),
+                      )
+                    : const Text('Iniciar sesión'),
+              ),
+
+              const SizedBox(height: 20),
+
+              Row(children: [
+                Expanded(child: Divider(color: cs.outlineVariant)),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Text('ó', style: TextStyle(fontSize: 14, color: cs.onSurfaceVariant)),
+                ),
+                Expanded(child: Divider(color: cs.outlineVariant)),
+              ]),
+
+              const SizedBox(height: 16),
+
+              OutlinedButton.icon(
+                onPressed: () => continueWithGoogle(context, role: isCustomer ? 'customer' : 'owner'),
+                icon: const Icon(Icons.g_mobiledata_rounded, size: 24),
+                label: const Text('Continuar con Google'),
+              ),
+
+              const SizedBox(height: 24),
+
+              Center(
+                child: Wrap(alignment: WrapAlignment.center, children: [
+                  Text(
+                    '¿Primera vez en Bocadoo? ',
+                    style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
+                  ),
+                  GestureDetector(
+                    onTap: () => isCustomer
+                        ? context.push('/auth/registro/comensal')
+                        : context.push('/auth/registro/dueno'),
+                    child: Text(
+                      isCustomer ? 'Crear cuenta de Comensal' : 'Registrar mi Restaurante',
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: cs.primary),
+                    ),
+                  ),
+                ]),
+              ),
+
+              const SizedBox(height: 20),
+
+              Center(
+                child: Text(
+                  'BCD-PASS •••• 9412        QUITO · 2026',
+                  style: TextStyle(fontSize: 11, color: cs.outlineVariant),
+                ),
+              ),
+
+              const SizedBox(height: 16),
+            ],
           ),
         ),
       ),
@@ -592,61 +312,40 @@ class _SegmentPill extends StatelessWidget {
   }
 }
 
-class _RoleOption extends StatelessWidget {
+class _Tab extends StatelessWidget {
   final String label;
   final IconData icon;
   final bool selected;
   final VoidCallback onTap;
 
-  const _RoleOption({
-    required this.label,
-    required this.icon,
-    required this.selected,
-    required this.onTap,
-  });
+  const _Tab({required this.label, required this.icon, required this.selected, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-
-    return Material(
-      color: selected ? colors.primaryContainer : colors.surface,
-      borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+    final cs = context.colorScheme;
+    return Expanded(
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(vertical: 10),
           decoration: BoxDecoration(
+            color: selected ? cs.primary : null,
             borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-            border: Border.all(
-              color: selected ? colors.primary : colors.outlineVariant,
-              width: selected ? 1.5 : 1,
+          ),
+          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Icon(icon, size: 18, color: selected ? cs.onPrimary : cs.onSurfaceVariant),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 15,
+                color: selected ? cs.onPrimary : cs.onSurfaceVariant,
+              ),
             ),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                icon,
-                size: 18,
-                color: selected
-                    ? colors.onPrimaryContainer
-                    : colors.onSurfaceVariant,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                label,
-                style: textTheme.bodyMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                  color: selected
-                      ? colors.onPrimaryContainer
-                      : colors.onSurfaceVariant,
-                ),
-              ),
-            ],
-          ),
+          ]),
         ),
       ),
     );

@@ -1,3 +1,6 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -10,11 +13,10 @@ import 'owner_bottom_nav.dart';
 import 'owner_controller.dart';
 import 'sell_plan_modal.dart';
 
-/// Ruta de la pantalla de resultado (definida en `core/router/app_router.dart`).
-const String _scanResultRoute = '/owner/scan-result';
-
 /// Escáner QR del Dueño: cámara con ML Kit (offline), overlay animado,
 /// linterna, simulación para emulador e ingreso manual del token.
+/// Al obtener un resultado vuelve a la pantalla anterior, que muestra la
+/// tarjeta flotante (ver `openScannerFlow`).
 class ScannerScreen extends ConsumerStatefulWidget {
   const ScannerScreen({super.key});
 
@@ -94,15 +96,14 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
     if (!mounted) return;
 
     final state = ref.read(ownerControllerProvider);
-    if (state is OwnerSuccess || state is OwnerError) {
+    if (state is OwnerSuccess || state is OwnerError || state is OwnerRedirect) {
       await _camera.stop();
       if (!mounted) return;
-      await context.push(_scanResultRoute);
-      if (!mounted) return;
-      // De vuelta del resultado: listo para escanear al siguiente comensal.
-      controller.startScanning();
-      _paused = false;
-      await _camera.start();
+      if (context.canPop()) {
+        context.pop(true);
+      } else {
+        context.go('/owner/caja');
+      }
     } else {
       _paused = false;
     }
@@ -132,7 +133,11 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
 
   void _close() {
     ref.read(ownerControllerProvider.notifier).reset();
-    if (context.canPop()) context.pop();
+    if (context.canPop()) {
+      context.pop();
+    } else {
+      context.go('/owner/caja');
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -187,35 +192,20 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
                 Padding(
                   padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
                   child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton.icon(
-                              onPressed: processing
-                                  ? null
-                                  : _openPassCardSheet,
-                              icon: const Icon(Icons.credit_card_rounded),
-                              label: const Text('Pasar cartulina'),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: OutlinedButton.icon(
-                              onPressed: processing
-                                  ? null
-                                  : () => showSellPlanModal(context),
-                              icon: const Icon(Icons.add_card_rounded),
-                              label: const Text('Vender plan'),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
+                      if (kDebugMode) ...[
+                        OutlinedButton.icon(
+                          onPressed: processing ? null : _openSimulator,
+                          icon: const Icon(Icons.bug_report_outlined),
+                          label: const Text('Simular escaneo'),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
                       ElevatedButton.icon(
                         onPressed: processing ? null : _openManualEntry,
                         icon: const Icon(Icons.keyboard_alt_outlined),
-                        label: const Text('Ingresar Código Manualmente'),
+                        label: const Text('Ingresar código'),
                       ),
                     ],
                   ),
@@ -328,11 +318,15 @@ class _StatusHint extends StatelessWidget {
         ],
       );
     }
-    return Text(
-      'Apunta al QR del comensal',
-      textAlign: TextAlign.center,
-      style: style,
-    );
+    return Column(mainAxisSize: MainAxisSize.min, children: [
+      Text('Apunta al código', textAlign: TextAlign.center, style: style),
+      const SizedBox(height: 4),
+      Text(
+        'Plan, preorden o mesa: se reconoce solo',
+        textAlign: TextAlign.center,
+        style: style?.copyWith(fontSize: 14, fontWeight: FontWeight.w500),
+      ),
+    ]);
   }
 }
 
@@ -426,10 +420,13 @@ class _PassCardSheetState extends State<_PassCardSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            'Pasar cartulina',
-            style: theme.textTheme.titleLarge?.copyWith(
-              fontWeight: FontWeight.w800,
+          ListTile(
+            leading: Icon(Icons.check_circle_outline, color: scheme.primary),
+            title: const Text('Token válido'),
+            subtitle: const Text('Carlos Mejía (u1) · QR vigente'),
+            onTap: () => Navigator.pop(
+              context,
+              BocadooQrParser.generateQrPayload('u1'),
             ),
           ),
           const SizedBox(height: 6),
@@ -439,25 +436,23 @@ class _PassCardSheetState extends State<_PassCardSheet> {
               color: scheme.onSurfaceVariant,
             ),
           ),
-          const SizedBox(height: 16),
-          TextField(
-            controller: _code,
-            autofocus: true,
-            textInputAction: TextInputAction.done,
-            decoration: InputDecoration(
-              labelText: 'Código o identificador del pase',
-              hintText: 'BCD1.u1.…',
-              errorText: _error,
-            ),
-            onChanged: (_) {
-              if (_error != null) setState(() => _error = null);
-            },
-            onSubmitted: (_) => _confirm(),
+          ListTile(
+            leading: Icon(Icons.groups_outlined, color: scheme.primary),
+            title: const Text('Mesa M1234'),
+            subtitle: const Text('QR de mesa con amigos · abre Cobrar mesa'),
+            onTap: () => Navigator.pop(context, 'BCD-MESA-M1234'),
           ),
-          const SizedBox(height: 20),
-          ElevatedButton(
-            onPressed: _confirm,
-            child: const Text('Validar pase'),
+          ListTile(
+            leading: Icon(Icons.receipt_long_outlined, color: scheme.primary),
+            title: const Text('Preorden #43'),
+            subtitle: const Text('QR de pedido · abre Cobrar pedido'),
+            onTap: () => Navigator.pop(context, 'BCD-ORD-43'),
+          ),
+          ListTile(
+            leading: Icon(Icons.cancel_outlined, color: scheme.error),
+            title: const Text('Token inválido'),
+            subtitle: const Text('Formato no reconocido'),
+            onTap: () => Navigator.pop(context, 'INVALID'),
           ),
         ],
       ),

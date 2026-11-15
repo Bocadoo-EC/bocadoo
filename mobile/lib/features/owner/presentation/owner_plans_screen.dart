@@ -1,28 +1,15 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../../core/theme/app_theme.dart';
-import '../../../core/widgets/widgets.dart';
-import 'owner_bottom_nav.dart';
-import 'sell_plan_modal.dart';
+import '../domain/models/cash_models.dart';
+import 'add_client_sheet.dart';
+import 'owner_controller.dart';
+import 'owner_format.dart';
+import 'owner_widgets.dart';
 
-class _OwnerPlanPackage {
-  final String id;
-  final String name;
-  final int lunches;
-  final double totalPrice;
-  final double savings;
-
-  const _OwnerPlanPackage({
-    required this.id,
-    required this.name,
-    required this.lunches,
-    required this.totalPrice,
-    required this.savings,
-  });
-}
-
-/// Pantalla de Planes y Ofertas del Local para el Dueño.
+/// O8 · Planes y clientes.
 class OwnerPlansScreen extends ConsumerStatefulWidget {
   const OwnerPlansScreen({super.key});
 
@@ -31,289 +18,346 @@ class OwnerPlansScreen extends ConsumerStatefulWidget {
 }
 
 class _OwnerPlansScreenState extends ConsumerState<OwnerPlansScreen> {
-  final List<_OwnerPlanPackage> _packages = [
-    const _OwnerPlanPackage(
-      id: 'p5',
-      name: 'Paquete Semanal',
-      lunches: 5,
-      totalPrice: 14.50,
-      savings: 0.50,
-    ),
-    const _OwnerPlanPackage(
-      id: 'p10',
-      name: 'Paquete Quincenal',
-      lunches: 10,
-      totalPrice: 28.00,
-      savings: 2.00,
-    ),
-    const _OwnerPlanPackage(
-      id: 'p20',
-      name: 'Paquete Mensual',
-      lunches: 20,
-      totalPrice: 55.00,
-      savings: 5.00,
-    ),
-  ];
+  bool _clients = false;
+  final _search = TextEditingController();
 
-  bool _flashActive = false;
-  int _flashSlots = 5;
-  String _flashTitle = 'Almuerzo de cierre';
-  double _flashPrice = 2.25;
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
 
-  String _money(double value) =>
-      '\$${value.toStringAsFixed(2).replaceAll('.', ',')}';
+  Future<void> _sell(String clientName) async {
+    await context.push('/owner/vender-plan', extra: clientName);
+    if (!mounted) return;
+    ref
+      ..invalidate(ownerClientsProvider)
+      ..invalidate(planClientCountsProvider);
+  }
 
-  void _openFlashOfferModal() {
-    final titleCtrl = TextEditingController(text: _flashTitle);
-    final slotsCtrl = TextEditingController(text: '$_flashSlots');
-    final priceCtrl = TextEditingController(
-      text: _flashPrice.toStringAsFixed(2).replaceAll('.', ','),
-    );
+  /// O8 · Agregar cliente (hoja). Si pide vender plan, abre O3 enseguida.
+  Future<void> _addClient() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final added = await context.push<AddedClient>('/owner/clientes/nuevo');
+    if (!mounted || added == null) return;
+    ref.invalidate(ownerClientsProvider);
+    if (added.sellPlan) {
+      await _sell(added.client.name);
+      return;
+    }
+    showInfoSnackBar(messenger, '${added.client.name} agregado a tus clientes');
+  }
 
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      builder: (sheetCtx) {
-        return Padding(
-          padding: EdgeInsets.fromLTRB(
-            24,
-            8,
-            24,
-            MediaQuery.of(sheetCtx).viewInsets.bottom + 24,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                'Publicar oferta flash de hoy',
-                style: Theme.of(sheetCtx).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'Liquida los almuerzos que te quedan antes del cierre.',
-                style: Theme.of(sheetCtx).textTheme.bodyMedium?.copyWith(
-                      color: Theme.of(sheetCtx).colorScheme.onSurfaceVariant,
-                    ),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: titleCtrl,
-                decoration: const InputDecoration(labelText: 'Título'),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: slotsCtrl,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(labelText: 'Cupos'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextField(
-                      controller: priceCtrl,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      decoration: const InputDecoration(
-                        labelText: 'Precio (USD)',
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 20),
-              BocadooButton(
-                label: 'Publicar oferta flash',
-                icon: Icons.bolt_rounded,
-                onPressed: () {
-                  final slots = int.tryParse(slotsCtrl.text.trim()) ?? 5;
-                  final price = double.tryParse(
-                        priceCtrl.text.trim().replaceAll(',', '.'),
-                      ) ??
-                      2.25;
-                  setState(() {
-                    _flashActive = true;
-                    _flashTitle = titleCtrl.text.trim().isEmpty
-                        ? 'Almuerzo de cierre'
-                        : titleCtrl.text.trim();
-                    _flashSlots = slots.clamp(1, 50);
-                    _flashPrice = price;
-                  });
-                  Navigator.of(sheetCtx).pop();
-                },
-              ),
-            ],
-          ),
-        );
-      },
-    ).whenComplete(() {
-      titleCtrl.dispose();
-      slotsCtrl.dispose();
-      priceCtrl.dispose();
-    });
+  Future<void> _togglePlan(OwnerPlanTemplate plan, bool active) async {
+    await ref
+        .read(ownerCashRepositoryProvider)
+        .setPlanActive(ref.read(ownerRestaurantIdProvider), plan.id, active: active);
+    if (mounted) ref.invalidate(planTemplatesProvider);
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colors = theme.colorScheme;
-    final bColor = context.bocadooColors;
+    final colors = context.colorScheme;
+    final clients = ref.watch(ownerClientsProvider);
+    final q = _search.text.trim().toLowerCase();
+    final filtered = [
+      for (final c in clients.value ?? const <OwnerClient>[])
+        if (q.isEmpty || c.name.toLowerCase().contains(q) || c.phone.contains(q)) c,
+    ];
 
     return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
-      appBar: AppBar(
-        title: const Text('Planes del local'),
-        automaticallyImplyLeading: false,
-        actions: [
-          TextButton.icon(
-            onPressed: () => showSellPlanModal(context),
-            icon: const Icon(Icons.add_card_rounded, size: 20),
-            label: const Text('Vender en caja'),
-          ),
-          const SizedBox(width: 8),
-        ],
-      ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
-        children: [
+      backgroundColor: colors.surface,
+      body: SafeArea(
+        bottom: false,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           Container(
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              color: _flashActive
-                  ? bColor.successContainer
-                  : colors.primaryContainer,
-              borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(
-                      Icons.bolt_rounded,
-                      color: _flashActive
-                          ? bColor.onSuccessContainer
-                          : colors.onPrimaryContainer,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        _flashActive
-                            ? '$_flashTitle · $_flashSlots cupos a ${_money(_flashPrice)}'
-                            : 'Oferta flash de hoy',
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          color: _flashActive
-                              ? bColor.onSuccessContainer
-                              : colors.onPrimaryContainer,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
-                  ],
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+            decoration: BoxDecoration(border: Border(bottom: BorderSide(color: colors.outlineVariant))),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Row(children: [
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(ref.watch(ownerRestaurantNameProvider),
+                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: colors.primary)),
+                    Text(_clients ? 'Clientes' : 'Mis planes',
+                        style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: colors.onSurface)),
+                  ]),
                 ),
-                const SizedBox(height: 6),
-                Text(
-                  _flashActive
-                      ? 'Visible ahora en Dónde comer para comensales cercanos.'
-                      : 'Publica cupos con descuento para evitar sobrantes al final del día.',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: _flashActive
-                        ? bColor.onSuccessContainer
-                        : colors.onPrimaryContainer,
+                if (_clients) ...[
+                  Text('${filtered.length} comensales',
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: colors.onSurfaceVariant)),
+                  const SizedBox(width: 8),
+                  IconButton.filledTonal(
+                    tooltip: 'Agregar cliente',
+                    onPressed: _addClient,
+                    icon: const Icon(Icons.add_rounded),
                   ),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    FilledButton(
-                      onPressed: _openFlashOfferModal,
-                      child: Text(_flashActive ? 'Editar oferta' : 'Publicar'),
+                ] else
+                  IconButton.filledTonal(
+                    tooltip: 'Nuevo plan',
+                    onPressed: () => context.push('/owner/planes/nuevo'),
+                    icon: const Icon(Icons.add_rounded),
+                  ),
+              ]),
+              const SizedBox(height: 10),
+              OwnerSegmented(
+                labels: const ['Planes', 'Clientes'],
+                index: _clients ? 1 : 0,
+                onChanged: (i) => setState(() => _clients = i == 1),
+              ),
+              if (_clients) ...[
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _search,
+                  onChanged: (_) => setState(() {}),
+                  decoration: InputDecoration(
+                    hintText: 'Buscar por nombre o teléfono',
+                    prefixIcon: const Icon(Icons.search_rounded),
+                    isDense: true,
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+                      borderSide: BorderSide(color: colors.outlineVariant),
                     ),
-                    if (_flashActive) ...[
-                      const SizedBox(width: 10),
-                      TextButton(
-                        onPressed: () => setState(() => _flashActive = false),
-                        child: const Text('Retirar'),
-                      ),
-                    ],
-                  ],
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+                      borderSide: BorderSide(color: colors.primary, width: 2),
+                    ),
+                  ),
                 ),
               ],
-            ),
+            ]),
           ),
-          const SizedBox(height: 22),
-
-          Text(
-            'Paquetes disponibles',
-            style: theme.textTheme.titleMedium,
-          ),
-          const SizedBox(height: 12),
-
-          for (final pkg in _packages) ...[
-            Container(
-              padding: const EdgeInsets.all(18),
-              decoration: BoxDecoration(
-                color: colors.surface,
-                borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-                border: Border.all(color: colors.outlineVariant),
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          pkg.name,
-                          style: theme.textTheme.titleMedium,
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '${pkg.lunches} almuerzos · ${_money(pkg.totalPrice / pkg.lunches)} c/u',
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: colors.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(
-                        _money(pkg.totalPrice),
-                        style: theme.textTheme.titleLarge?.copyWith(
-                          color: colors.primary,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Ahorra ${_money(pkg.savings)}',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: bColor.success,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 10),
-          ],
-        ],
+          Expanded(child: _clients ? _clientsBody(clients, filtered) : _plansBody()),
+        ]),
       ),
-      bottomNavigationBar: const OwnerBottomNav(currentRoute: '/owner/plans'),
+    );
+  }
+
+  Widget _plansBody() {
+    final colors = context.colorScheme;
+    final counts = ref.watch(planClientCountsProvider).value ?? const <String, int>{};
+    return ref.watch(planTemplatesProvider).when(
+          loading: () => const OwnerLoadingView('Cargando planes'),
+          error: (_, _) => OwnerErrorView(
+            title: 'Error al cargar planes',
+            message: 'Revisa tu conexión e inténtalo de nuevo.',
+            onRetry: () => ref.invalidate(planTemplatesProvider),
+          ),
+          data: (plans) => plans.isEmpty
+              ? _Empty(
+                  icon: Icons.inventory_2_outlined,
+                  title: 'Sin planes configurados',
+                  message: 'Crea tu primer paquete de almuerzos.',
+                  action: ElevatedButton.icon(
+                    onPressed: () => context.push('/owner/planes/nuevo'),
+                    icon: const Icon(Icons.add_rounded),
+                    label: const Text('Crear plan'),
+                  ),
+                )
+              : ListView(padding: const EdgeInsets.fromLTRB(16, 16, 16, 24), children: [
+                  for (final p in plans) ...[
+                    _PlanCard(
+                      plan: p,
+                      clients: counts[p.id] ?? 0,
+                      onEdit: () => context.push('/owner/planes/${p.id}/editar'),
+                      onToggle: (v) => _togglePlan(p, v),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  Text('Toca la cantidad de un plan para editarlo.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: colors.onSurfaceVariant)),
+                ]),
+        );
+  }
+
+  Widget _clientsBody(AsyncValue<List<OwnerClient>> clients, List<OwnerClient> filtered) {
+    final query = _search.text.trim();
+    if (clients.isLoading && !clients.hasValue) return const OwnerLoadingView('Cargando clientes');
+    if (clients.hasError && !clients.hasValue) {
+      return OwnerErrorView(
+        title: 'Error al cargar clientes',
+        message: 'Revisa tu conexión e inténtalo de nuevo.',
+        onRetry: () => ref.invalidate(ownerClientsProvider),
+      );
+    }
+    if (filtered.isEmpty) {
+      return query.isEmpty
+          ? _Empty(
+              icon: Icons.group_outlined,
+              title: 'Sin clientes registrados',
+              message: 'Agrega a tu primer cliente para venderle un plan.',
+              action: ElevatedButton.icon(
+                onPressed: _addClient,
+                icon: const Icon(Icons.person_add_alt_1_rounded),
+                label: const Text('Agregar cliente'),
+              ),
+            )
+          : _Empty(
+              icon: Icons.person_search_outlined,
+              title: 'No se encontró "$query"',
+              message: '¿Cliente nuevo? Regístralo al instante para venderle el plan.',
+              action: ElevatedButton.icon(
+                onPressed: () => _sell(query),
+                icon: const Icon(Icons.add_rounded),
+                label: Text('Vender plan a "$query"', maxLines: 1, overflow: TextOverflow.ellipsis),
+              ),
+            );
+    }
+    return ListView(padding: const EdgeInsets.fromLTRB(16, 16, 16, 24), children: [
+      for (final c in filtered) ...[
+        _ClientCard(client: c, onSell: () => _sell(c.name)),
+        const SizedBox(height: 10),
+      ],
+    ]);
+  }
+}
+
+class _PlanCard extends StatelessWidget {
+  const _PlanCard({required this.plan, required this.clients, required this.onEdit, required this.onToggle});
+
+  final OwnerPlanTemplate plan;
+  final int clients;
+  final VoidCallback onEdit;
+  final ValueChanged<bool> onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    final tag = plan.name.replaceFirst(RegExp(r'^plan\s*', caseSensitive: false), '');
+    final tagLabel = tag.isEmpty ? plan.name : '${tag[0].toUpperCase()}${tag.substring(1)}';
+
+    Widget column(String label, String value, [String? extra]) => Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(label, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant)),
+            const SizedBox(height: 2),
+            Text(value, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900, color: colors.onSurface)),
+            if (extra != null)
+              Text(extra, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: colors.primary)),
+          ]),
+        );
+
+    return Opacity(
+      opacity: plan.active ? 1 : 0.6,
+      child: Container(
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          color: plan.active ? colors.surface : Theme.of(context).scaffoldBackgroundColor,
+          borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+          border: Border.all(color: colors.outlineVariant),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Row(children: [
+            Flexible(
+              child: OwnerBadge(
+                label: tagLabel,
+                background: colors.primaryContainer,
+                foreground: colors.onPrimaryContainer,
+              ),
+            ),
+            const SizedBox(width: 6),
+            OwnerBadge(
+              label: plan.coverage.label,
+              background: Theme.of(context).scaffoldBackgroundColor,
+              foreground: colors.onSurfaceVariant,
+            ),
+            const Spacer(),
+            Semantics(
+              label: 'Estado de ${plan.name}',
+              child: Switch(value: plan.active, onChanged: onToggle),
+            ),
+          ]),
+          InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: onEdit,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Row(children: [
+                Expanded(
+                  child: Text('${plan.lunches} ${plan.coverage.unit}',
+                      style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: colors.onSurface)),
+                ),
+                Icon(Icons.edit_outlined, size: 20, color: colors.primary),
+              ]),
+            ),
+          ),
+          Divider(height: 16, color: colors.outlineVariant),
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            column('Precio', OwnerFormat.money(plan.price), '${OwnerFormat.money(plan.perLunch)} c/u'),
+            column('Vigencia', '${plan.validityDays} días'),
+            column('Clientes', '$clients'),
+          ]),
+        ]),
+      ),
     );
   }
 }
 
+class _ClientCard extends StatelessWidget {
+  const _ClientCard({required this.client, required this.onSell});
+
+  final OwnerClient client;
+  final VoidCallback onSell;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: colors.outlineVariant),
+      ),
+      child: Row(children: [
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(client.name, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: colors.onSurface)),
+            if (client.phone.isNotEmpty)
+              Text(client.phone,
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant)),
+            const SizedBox(height: 6),
+            OwnerBadge(
+              label: client.habitualPlan ?? 'Sin plan',
+              background: colors.primaryContainer,
+              foreground: colors.onPrimaryContainer,
+            ),
+          ]),
+        ),
+        const SizedBox(width: 8),
+        OwnerSmallButton(label: 'Vender plan', onPressed: onSell),
+      ]),
+    );
+  }
+}
+
+class _Empty extends StatelessWidget {
+  const _Empty({required this.icon, required this.title, required this.message, this.action});
+
+  final IconData icon;
+  final String title;
+  final String message;
+  final Widget? action;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(32),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Icon(icon, size: 48, color: colors.onSurfaceVariant),
+          const SizedBox(height: 8),
+          Text(title,
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: colors.onSurface)),
+          const SizedBox(height: 4),
+          Text(message,
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant)),
+          if (action != null) ...[const SizedBox(height: 16), action!],
+        ]),
+      ),
+    );
+  }
+}

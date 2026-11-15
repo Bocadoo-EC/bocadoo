@@ -48,5 +48,89 @@ class ApiCustomerRepository implements ICustomerRepository {
 
   @override
   Future<void> saveCachedPass(CustomerPass pass) async {}
+
+  Never _pending() => throw UnimplementedError(
+      'API en desarrollo por el backend (Chucho). Usa MockCustomerRepository.');
+
+  @override
+  Future<List<CustomerPass>> getActivePasses({String? userId}) async => _pending();
+
+  @override
+  Future<StampCard?> getStampCard(String restaurantId) async => _pending();
+
+  @override
+  Future<bool> claimReward(String restaurantId) async => _pending();
+
+  @override
+  Future<ActiveTable?> getActiveTable() async => _pending();
+
+  @override
+  Future<ActiveOrder?> getActiveOrder() async => _pending();
+
+  @override
+  Future<List<ActivityItem>> getRecentActivity() async => _pending();
+
+  @override
+  Future<ActiveOrder> preorder({
+    required String restaurantId,
+    String? soupId,
+    String? mainId,
+    String? breakfastId,
+    String? offerId,
+    required bool takeaway,
+  }) async =>
+      _pending();
+
+  @override
+  Future<bool> cancelPreorder(String orderNumber) async => _pending();
+
+  @override
+  Future<bool> acknowledgeOrder(String orderNumber) async => _pending();
+
+  @override
+  Future<List<PlanTemplate>> getPlanTemplates(String restaurantId) async => _pending();
+
+  @override
+  Future<PlanTemplate?> getPlanTemplateById(String planId) async => _pending();
+
+  @override
+  Future<bool> requestPlan(String planId) async => _pending();
+
+  @override
+  Future<bool> cancelPlanRequest(String planId) async => _pending();
+
+  @override
+  Future<SharedTable> openSharedTable({required String restaurantId, required String time}) async => _pending();
+
+  @override
+  Future<SharedTable?> getSharedTable(String tableId) async => _pending();
+
+  @override
+  Future<SharedTable> setTableMode(String tableId, TableMode mode) async => _pending();
+
+  @override
+  Future<SharedTable> notifyKitchen(String tableId) async => _pending();
+
+  @override
+  Future<SharedTable> joinTable(
+    String tableId, {
+    required String name,
+    required String soup,
+    required String main,
+    required bool takeaway,
+  }) async =>
+      _pending();
+
+  @override
+  Future<CustomerProfile> getProfile() async => _pending();
+
+  @override
+  Future<PendingFeedback?> getPendingFeedback() async => _pending();
+
+  @override
+  Future<bool> submitFeedback(String redemptionId, {required String tag, String? note}) async => _pending();
+
+  @override
+  Future<bool> dismissFeedback(String redemptionId) async => _pending();
 }
 
