@@ -74,8 +74,9 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
           final cached = s.restaurantById(widget.restaurantId);
           final loaded = detail.value;
           if (loaded != null) return _content(controller, s, loaded);
-          if (cached != null && cached.hasMenu)
+          if (cached != null && cached.hasMenu) {
             return _content(controller, s, cached);
+          }
 
           return detail.when(
             loading: () => const _CenteredStatus(

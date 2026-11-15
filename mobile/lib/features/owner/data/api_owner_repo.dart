@@ -67,10 +67,9 @@ class ApiOwnerRepository
         IOwnerFeedbackRepository,
         IOwnerSettingsRepository {
   ApiOwnerRepository({
-    required ApiClient api,
-    required SessionNotifier session,
-  })  : _api = api,
-        _session = session;
+    required this._api,
+    required this._session,
+  });
 
   final ApiClient _api;
   final SessionNotifier _session;
@@ -651,7 +650,7 @@ class ApiOwnerRepository
     for (var page = 0; page < 10; page++) {
       final query = <String, dynamic>{
         'limit': 50,
-        if (cursor != null) 'cursor': cursor,
+        'cursor': ?cursor,
       };
       final data = await guard(
         () => _api.getMap(

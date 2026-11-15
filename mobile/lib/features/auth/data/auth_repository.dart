@@ -324,9 +324,9 @@ class ApiAuthRepository implements IAuthRepository {
                 'tipo': 'registro.ubicacion',
                 'ocurridoEn': DateTime.now().toUtc().toIso8601String(),
                 'propiedades': {
-                  if (zone != null) 'zona': zone,
-                  if (lat != null) 'lat': lat,
-                  if (lng != null) 'lng': lng,
+                  'zona': ?zone,
+                  'lat': ?lat,
+                  'lng': ?lng,
                 },
               },
             ],
@@ -391,9 +391,9 @@ class ApiAuthRepository implements IAuthRepository {
         if (e164Phone.isNotEmpty) 'telefono': e164Phone,
         if (address != null && address.trim().isNotEmpty)
           'direccion': address.trim(),
-        if (lat != null) 'latitud': lat,
-        if (lng != null) 'longitud': lng,
-        if (knownZoneId != null) 'zonaId': knownZoneId,
+        'latitud': ?lat,
+        'longitud': ?lng,
+        'zonaId': ?knownZoneId,
         'precioSueltoCentavos': Money.toCents(looseLunchPrice),
       };
 

@@ -8,8 +8,8 @@ class ApiException implements Exception {
     this.detail = '',
     this.requestId,
     this.isNetwork = false,
-    String? overrideMessage,
-  }) : _overrideMessage = overrideMessage;
+    this._overrideMessage,
+  });
 
   final int? status;
   final String code;

@@ -18,12 +18,11 @@ import 'local_customer_cache.dart';
 class ApiCustomerRepository implements ICustomerRepository {
   ApiCustomerRepository({
     required ApiClient apiClient,
-    SessionNotifier? session,
+    this._session,
     LocalCustomerCache? passCache,
     LocalProfileStore? profileStore,
     DeferredCommit? deferredCommit,
   })  : _api = apiClient,
-        _session = session,
         _passCache = passCache ?? LocalCustomerCache(),
         _profileStore = profileStore ?? LocalProfileStore(),
         _deferredCommit = deferredCommit ??
@@ -724,7 +723,7 @@ class ApiCustomerRepository implements ICustomerRepository {
       if (estado == 'FINALIZADA' || estado == 'CANCELADA') {
         return null;
       }
-      return _mapMesaResponseToSharedTable(res);
+      return await _mapMesaResponseToSharedTable(res);
     } on ApiException catch (e) {
       if (e.status != 404 && e.status != 403 && e.code != 'MESA_NO_ENCONTRADA') {
         rethrow;
@@ -752,12 +751,12 @@ class ApiCustomerRepository implements ICustomerRepository {
           final mine = await guard(
             () => _api.getMap('${ApiConfig.v1}/mis/mesas/$tableId'),
           );
-          return _mapMesaResponseToSharedTable(mine);
+          return await _mapMesaResponseToSharedTable(mine);
         } on ApiException {
           // Si falló la vista privada, continúa con el detalle de invitación.
         }
       }
-      return _mapInvitacionToSharedTable(inv);
+      return await _mapInvitacionToSharedTable(inv);
     } on ApiException catch (e) {
       if (e.status == 404 || e.code == 'MESA_NO_ENCONTRADA') {
         return null;
@@ -808,7 +807,7 @@ class ApiCustomerRepository implements ICustomerRepository {
         ),
       );
       _idempotency.done(intent);
-      return _mapMesaResponseToSharedTable(res ?? const {});
+      return await _mapMesaResponseToSharedTable(res ?? const {});
     } on ApiException catch (e) {
       if (e.status == 400 || e.status == 404 || e.status == 409) {
         _idempotency.done(intent);

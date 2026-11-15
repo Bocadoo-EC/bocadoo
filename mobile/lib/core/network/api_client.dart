@@ -127,7 +127,7 @@ class ApiClient {
       method: method,
       receiveTimeout: receiveTimeout,
       headers: {
-        if (idempotencyKey != null) 'Idempotency-Key': idempotencyKey,
+        'Idempotency-Key': ?idempotencyKey,
       },
       extra: {
         'restaurant': restaurant,

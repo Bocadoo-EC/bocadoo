@@ -277,7 +277,6 @@ class _MethodRow extends StatelessWidget {
     required this.iconFg,
     required this.label,
     required this.value,
-    this.valueColor,
   });
 
   final IconData icon;
@@ -285,7 +284,6 @@ class _MethodRow extends StatelessWidget {
   final Color iconFg;
   final String label;
   final String value;
-  final Color? valueColor;
 
   @override
   Widget build(BuildContext context) {
@@ -298,7 +296,7 @@ class _MethodRow extends StatelessWidget {
         Expanded(
           child: Text(label, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: colors.onSurface)),
         ),
-        Text(value, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: valueColor ?? colors.onSurface)),
+        Text(value, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: colors.onSurface)),
       ]),
     );
   }
