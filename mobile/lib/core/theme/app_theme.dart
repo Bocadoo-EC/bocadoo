@@ -80,6 +80,9 @@ class AppColors {
   static const Color qrForeground = Color(0xFF2D0050);
   static const Color qrBackground = Color(0xFFFFFFFF);
 
+  // Texto sobre fotos y degradados del hero (igual en ambos temas)
+  static const Color imageForeground = Color(0xFFFFFFFF);
+
   // Hero Gradients
   static const LinearGradient lightHeroGradient = LinearGradient(
     begin: Alignment.topLeft,
@@ -110,6 +113,7 @@ class BocadooColors extends ThemeExtension<BocadooColors> {
   final Color inputBg;
   final Color qrForeground;
   final Color qrBackground;
+  final Color imageForeground;
   final LinearGradient heroGradient;
 
   const BocadooColors({
@@ -127,6 +131,7 @@ class BocadooColors extends ThemeExtension<BocadooColors> {
     required this.inputBg,
     required this.qrForeground,
     required this.qrBackground,
+    this.imageForeground = AppColors.imageForeground,
     required this.heroGradient,
   });
 
@@ -244,6 +249,7 @@ class BocadooColors extends ThemeExtension<BocadooColors> {
       inputBg: Color.lerp(inputBg, other.inputBg, t)!,
       qrForeground: qrForeground,
       qrBackground: qrBackground,
+      imageForeground: imageForeground,
       heroGradient: heroGradient,
     );
   }
@@ -264,53 +270,53 @@ class AppTheme {
   static const double inputRadius = 16.0;
 
   static TextTheme _buildTextTheme(TextTheme base, ColorScheme colors) {
-    final jakarta = GoogleFonts.plusJakartaSansTextTheme(base);
-    return jakarta.copyWith(
-      displayLarge: jakarta.displayLarge?.copyWith(
+    final outfit = GoogleFonts.outfitTextTheme(base);
+    return outfit.copyWith(
+      displayLarge: outfit.displayLarge?.copyWith(
         fontSize: 48,
         fontWeight: FontWeight.w800,
         color: colors.onSurface,
       ),
-      displayMedium: jakarta.displayMedium?.copyWith(
+      displayMedium: outfit.displayMedium?.copyWith(
         fontSize: 32,
         fontWeight: FontWeight.w800,
         color: colors.onSurface,
       ),
-      headlineMedium: jakarta.headlineMedium?.copyWith(
+      headlineMedium: outfit.headlineMedium?.copyWith(
         fontSize: 24,
         fontWeight: FontWeight.w800,
         color: colors.onSurface,
       ),
-      titleLarge: jakarta.titleLarge?.copyWith(
+      titleLarge: outfit.titleLarge?.copyWith(
         fontSize: 20,
         fontWeight: FontWeight.w700,
         color: colors.onSurface,
       ),
-      titleMedium: jakarta.titleMedium?.copyWith(
+      titleMedium: outfit.titleMedium?.copyWith(
         fontSize: 17,
         fontWeight: FontWeight.w700,
         color: colors.onSurface,
       ),
-      bodyLarge: jakarta.bodyLarge?.copyWith(
+      bodyLarge: outfit.bodyLarge?.copyWith(
         fontSize: 15,
         fontWeight: FontWeight.w500,
         color: colors.onSurface,
       ),
-      bodyMedium: jakarta.bodyMedium?.copyWith(
+      bodyMedium: outfit.bodyMedium?.copyWith(
         fontSize: 15,
         fontWeight: FontWeight.w400,
         color: colors.onSurface,
       ),
-      bodySmall: jakarta.bodySmall?.copyWith(
+      bodySmall: outfit.bodySmall?.copyWith(
         fontSize: 13,
         fontWeight: FontWeight.w600,
         color: colors.onSurfaceVariant,
       ),
-      labelLarge: jakarta.labelLarge?.copyWith(
+      labelLarge: outfit.labelLarge?.copyWith(
         fontSize: 17,
         fontWeight: FontWeight.w700,
       ),
-      labelMedium: jakarta.labelMedium?.copyWith(
+      labelMedium: outfit.labelMedium?.copyWith(
         fontSize: 13,
         fontWeight: FontWeight.w600,
         color: colors.onSurfaceVariant,
@@ -345,19 +351,18 @@ class AppTheme {
       colorScheme: colorScheme,
       scaffoldBackgroundColor: AppColors.lightBackground,
       textTheme: _buildTextTheme(baseTextTheme, colorScheme),
-      fontFamily: GoogleFonts.plusJakartaSans().fontFamily,
+      fontFamily: GoogleFonts.outfit().fontFamily,
       extensions: const [BocadooColors.light],
-      appBarTheme: const AppBarTheme(
+      appBarTheme: AppBarTheme(
         backgroundColor: Colors.transparent,
         elevation: 0,
         centerTitle: false,
         scrolledUnderElevation: 0,
-        iconTheme: IconThemeData(color: AppColors.lightForeground),
-        titleTextStyle: TextStyle(
+        iconTheme: const IconThemeData(color: AppColors.lightForeground),
+        titleTextStyle: GoogleFonts.outfit(
           color: AppColors.lightForeground,
           fontSize: 20,
           fontWeight: FontWeight.w700,
-          fontFamily: 'Plus Jakarta Sans',
         ),
       ),
       cardTheme: CardThemeData(
@@ -377,10 +382,9 @@ class AppTheme {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(buttonRadius),
           ),
-          textStyle: const TextStyle(
+          textStyle: GoogleFonts.outfit(
             fontSize: 17,
             fontWeight: FontWeight.w700,
-            fontFamily: 'Plus Jakarta Sans',
           ),
         ),
       ),
@@ -392,10 +396,9 @@ class AppTheme {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(buttonRadius),
           ),
-          textStyle: const TextStyle(
+          textStyle: GoogleFonts.outfit(
             fontSize: 17,
             fontWeight: FontWeight.w700,
-            fontFamily: 'Plus Jakarta Sans',
           ),
         ),
       ),
@@ -453,19 +456,18 @@ class AppTheme {
       colorScheme: colorScheme,
       scaffoldBackgroundColor: AppColors.darkBackground,
       textTheme: _buildTextTheme(baseTextTheme, colorScheme),
-      fontFamily: GoogleFonts.plusJakartaSans().fontFamily,
+      fontFamily: GoogleFonts.outfit().fontFamily,
       extensions: const [BocadooColors.dark],
-      appBarTheme: const AppBarTheme(
+      appBarTheme: AppBarTheme(
         backgroundColor: Colors.transparent,
         elevation: 0,
         centerTitle: false,
         scrolledUnderElevation: 0,
-        iconTheme: IconThemeData(color: AppColors.darkForeground),
-        titleTextStyle: TextStyle(
+        iconTheme: const IconThemeData(color: AppColors.darkForeground),
+        titleTextStyle: GoogleFonts.outfit(
           color: AppColors.darkForeground,
           fontSize: 20,
           fontWeight: FontWeight.w700,
-          fontFamily: 'Plus Jakarta Sans',
         ),
       ),
       cardTheme: CardThemeData(
@@ -485,10 +487,9 @@ class AppTheme {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(buttonRadius),
           ),
-          textStyle: const TextStyle(
+          textStyle: GoogleFonts.outfit(
             fontSize: 17,
             fontWeight: FontWeight.w700,
-            fontFamily: 'Plus Jakarta Sans',
           ),
         ),
       ),
@@ -500,10 +501,9 @@ class AppTheme {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(buttonRadius),
           ),
-          textStyle: const TextStyle(
+          textStyle: GoogleFonts.outfit(
             fontSize: 17,
             fontWeight: FontWeight.w700,
-            fontFamily: 'Plus Jakarta Sans',
           ),
         ),
       ),

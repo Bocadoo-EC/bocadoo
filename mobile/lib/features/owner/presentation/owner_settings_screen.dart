@@ -37,7 +37,7 @@ class OwnerSettingsScreen extends ConsumerWidget {
           tooltip: 'Volver',
           icon: const Icon(Icons.arrow_back),
           onPressed: () =>
-              context.canPop() ? context.pop() : context.go('/owner/scanner'),
+              context.canPop() ? context.pop() : context.go('/owner/caja'),
         ),
         title: const Text('Ajustes'),
       ),

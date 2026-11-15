@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -5,241 +7,415 @@ import '../../../core/contracts/models.dart';
 import '../../../core/contracts/repositories.dart';
 import '../data/mock_customer_repo.dart';
 
-/// Estados posibles de la interfaz del Comensal
 enum CustomerStatus { initial, loading, success, error }
 
-/// Estado inmutable de la pantalla del Comensal
+/// Qué QR muestra Mi Pase. El orden es la prioridad por defecto.
+enum QrMode { preorden, mesa, plan }
+
+/// Filtros de Dónde comer. Se combinan entre sí (Y).
+enum RestaurantFilter { near, withPlan, free, offers }
+
+/// Banner de deshacer visible durante unos segundos.
+@immutable
+class UndoNotice {
+  final String label;
+  final int secondsLeft;
+
+  const UndoNotice(this.label, this.secondsLeft);
+}
+
 @immutable
 class CustomerUiState {
   final CustomerStatus status;
-  final CustomerPass? pass;
+  final List<CustomerPass> passes;
+  final int passIndex;
+  final QrMode? selectedQrMode;
+  final Map<String, StampCard> stampCards;
+  final ActiveTable? activeTable;
+  final ActiveOrder? activeOrder;
+  final List<ActivityItem> recentActivity;
   final List<Restaurant> restaurants;
-  final List<Restaurant> filteredRestaurants;
-  final List<ConsumptionRecord> history;
   final String searchQuery;
-  final String selectedCategory;
+  final Set<RestaurantFilter> filters;
+  final String? plansRestaurantId;
+  final List<PlanTemplate> planTemplates;
+  final bool isLoadingPlans;
+  final UndoNotice? undo;
   final String? errorMessage;
-  final bool isRefreshingQr;
   final bool isOffline;
-  final Restaurant? selectedRestaurant;
-  final List<MenuItem> selectedMenu;
 
   const CustomerUiState({
     this.status = CustomerStatus.initial,
-    this.pass,
+    this.passes = const [],
+    this.passIndex = 0,
+    this.selectedQrMode,
+    this.stampCards = const {},
+    this.activeTable,
+    this.activeOrder,
+    this.recentActivity = const [],
     this.restaurants = const [],
-    this.filteredRestaurants = const [],
-    this.history = const [],
     this.searchQuery = '',
-    this.selectedCategory = 'Todos',
+    this.filters = const {},
+    this.plansRestaurantId,
+    this.planTemplates = const [],
+    this.isLoadingPlans = false,
+    this.undo,
     this.errorMessage,
-    this.isRefreshingQr = false,
     this.isOffline = false,
-    this.selectedRestaurant,
-    this.selectedMenu = const [],
   });
 
   bool get isLoading => status == CustomerStatus.loading;
-  bool get isSuccess => status == CustomerStatus.success;
   bool get isError => status == CustomerStatus.error;
+
+  CustomerPass? get currentPass =>
+      passes.isEmpty ? null : passes[passIndex.clamp(0, passes.length - 1)];
+
+  List<QrMode> get availableQrModes => [
+        if (activeOrder != null) QrMode.preorden,
+        if (activeTable != null) QrMode.mesa,
+        if (passes.isNotEmpty) QrMode.plan,
+      ];
+
+  QrMode get qrMode {
+    final modes = availableQrModes;
+    if (selectedQrMode != null && modes.contains(selectedQrMode)) {
+      return selectedQrMode!;
+    }
+    return modes.isEmpty ? QrMode.plan : modes.first;
+  }
+
+  String get qrValue => switch (qrMode) {
+        QrMode.preorden => activeOrder?.qrPayload ?? '',
+        QrMode.mesa => activeTable?.url ?? '',
+        QrMode.plan => currentPass?.qrToken ?? '',
+      };
+
+  List<Restaurant> get filteredRestaurants {
+    final q = searchQuery.trim().toLowerCase();
+    return restaurants.where((r) {
+      if (q.isNotEmpty) {
+        final matchesText = r.name.toLowerCase().contains(q) ||
+            r.featuredDish.toLowerCase().contains(q) ||
+            r.zone.toLowerCase().contains(q) ||
+            r.todayMenu.any(
+              (m) => !m.isSoldOut && m.name.toLowerCase().contains(q),
+            ) ||
+            r.offers.any((o) => o.title.toLowerCase().contains(q));
+        if (!matchesText) return false;
+      }
+      if (filters.contains(RestaurantFilter.near) && r.distanceKm >= 1.0) {
+        return false;
+      }
+      if (filters.contains(RestaurantFilter.withPlan) && !r.hasPlan) {
+        return false;
+      }
+      if (filters.contains(RestaurantFilter.free) && r.occupancy != 'LIBRE') {
+        return false;
+      }
+      if (filters.contains(RestaurantFilter.offers) && !r.hasOffer) {
+        return false;
+      }
+      return true;
+    }).toList();
+  }
+
+  CustomerPass? passFor(String restaurantId) {
+    for (final p in passes) {
+      if (p.restaurantId == restaurantId) return p;
+    }
+    return null;
+  }
+
+  Restaurant? restaurantById(String id) {
+    for (final r in restaurants) {
+      if (r.id == id) return r;
+    }
+    return null;
+  }
 
   CustomerUiState copyWith({
     CustomerStatus? status,
-    CustomerPass? pass,
+    List<CustomerPass>? passes,
+    int? passIndex,
+    QrMode? selectedQrMode,
+    Map<String, StampCard>? stampCards,
+    ActiveTable? activeTable,
+    ActiveOrder? activeOrder,
+    bool clearActiveOrder = false,
+    List<ActivityItem>? recentActivity,
     List<Restaurant>? restaurants,
-    List<Restaurant>? filteredRestaurants,
-    List<ConsumptionRecord>? history,
     String? searchQuery,
-    String? selectedCategory,
+    Set<RestaurantFilter>? filters,
+    String? plansRestaurantId,
+    List<PlanTemplate>? planTemplates,
+    bool? isLoadingPlans,
+    UndoNotice? undo,
+    bool clearUndo = false,
     String? errorMessage,
-    bool? isRefreshingQr,
     bool? isOffline,
-    Restaurant? selectedRestaurant,
-    List<MenuItem>? selectedMenu,
   }) {
     return CustomerUiState(
       status: status ?? this.status,
-      pass: pass ?? this.pass,
+      passes: passes ?? this.passes,
+      passIndex: passIndex ?? this.passIndex,
+      selectedQrMode: selectedQrMode ?? this.selectedQrMode,
+      stampCards: stampCards ?? this.stampCards,
+      activeTable: activeTable ?? this.activeTable,
+      activeOrder: clearActiveOrder ? null : activeOrder ?? this.activeOrder,
+      recentActivity: recentActivity ?? this.recentActivity,
       restaurants: restaurants ?? this.restaurants,
-      filteredRestaurants: filteredRestaurants ?? this.filteredRestaurants,
-      history: history ?? this.history,
       searchQuery: searchQuery ?? this.searchQuery,
-      selectedCategory: selectedCategory ?? this.selectedCategory,
+      filters: filters ?? this.filters,
+      plansRestaurantId: plansRestaurantId ?? this.plansRestaurantId,
+      planTemplates: planTemplates ?? this.planTemplates,
+      isLoadingPlans: isLoadingPlans ?? this.isLoadingPlans,
+      undo: clearUndo ? null : undo ?? this.undo,
       errorMessage: errorMessage,
-      isRefreshingQr: isRefreshingQr ?? this.isRefreshingQr,
       isOffline: isOffline ?? this.isOffline,
-      selectedRestaurant: selectedRestaurant ?? this.selectedRestaurant,
-      selectedMenu: selectedMenu ?? this.selectedMenu,
     );
   }
 }
 
-/// Gestor de estado para el Comensal (Estudiante)
-/// Extiende [ChangeNotifier] para soportar `AnimatedBuilder`, `ListenableBuilder`
-/// y Riverpod mediante [customerControllerProvider].
+/// Estado del módulo Comensal compartido por Mi Pase, Dónde comer y Planes.
 class CustomerController extends ChangeNotifier {
   final ICustomerRepository _repository;
   CustomerUiState _state = const CustomerUiState();
+  Timer? _undoTimer;
+  Future<void> Function()? _undoAction;
 
   CustomerController({ICustomerRepository? repository})
       : _repository = repository ?? MockCustomerRepository();
 
   CustomerUiState get state => _state;
-  CustomerPass? get pass => _state.pass;
-  List<Restaurant> get restaurants => _state.filteredRestaurants;
-  List<ConsumptionRecord> get history => _state.history;
-  bool get isLoading => _state.isLoading;
-  String? get errorMessage => _state.errorMessage;
 
-  /// Carga inicial o recarga del Dashboard del Comensal
+  void _emit(CustomerUiState next) {
+    _state = next;
+    notifyListeners();
+  }
+
   Future<void> loadDashboard({bool silent = false}) async {
     if (!silent) {
-      _state = _state.copyWith(
-        status: CustomerStatus.loading,
-        errorMessage: null,
-      );
-      notifyListeners();
+      _emit(_state.copyWith(status: CustomerStatus.loading));
     }
 
     try {
-      // Intenta usar pase local de caché primero para respuesta instantánea
       final cached = await _repository.getCachedPass();
-      if (cached != null && _state.pass == null) {
-        _state = _state.copyWith(pass: cached);
-        notifyListeners();
+      if (cached != null && _state.passes.isEmpty) {
+        _emit(_state.copyWith(passes: [cached]));
       }
 
-      final activePass = await _repository.getActivePass();
-      final allRestaurants = await _repository.getRestaurants();
-      final records = await _repository.getConsumptionHistory(activePass.id);
+      final passes = await _repository.getActivePasses();
+      final restaurants = await _repository.getRestaurants();
+      final table = await _repository.getActiveTable();
+      final order = await _repository.getActiveOrder();
+      final activity = await _repository.getRecentActivity();
+      final stamps = <String, StampCard>{};
+      for (final p in passes) {
+        final card = await _repository.getStampCard(p.restaurantId);
+        if (card != null) stamps[p.restaurantId] = card;
+      }
 
-      final filtered = _applyFilters(
-        allRestaurants,
-        _state.searchQuery,
-        _state.selectedCategory,
-      );
-
-      _state = _state.copyWith(
+      _emit(CustomerUiState(
         status: CustomerStatus.success,
-        pass: activePass,
-        restaurants: allRestaurants,
-        filteredRestaurants: filtered,
-        history: records,
-        isOffline: false,
-        errorMessage: null,
-      );
+        passes: passes,
+        passIndex: _state.passIndex.clamp(0, passes.isEmpty ? 0 : passes.length - 1),
+        selectedQrMode: _state.selectedQrMode,
+        stampCards: stamps,
+        activeTable: table,
+        activeOrder: order,
+        recentActivity: activity,
+        restaurants: restaurants,
+        searchQuery: _state.searchQuery,
+        filters: _state.filters,
+        plansRestaurantId: _state.plansRestaurantId,
+        planTemplates: _state.planTemplates,
+        undo: _state.undo,
+      ));
+      if (_state.plansRestaurantId == null && restaurants.isNotEmpty) {
+        await selectPlansRestaurant(restaurants.first.id);
+      }
     } catch (e) {
-      // Si falla la red pero hay datos en memoria/caché, no se bloquea la UI
-      if (_state.pass != null) {
-        _state = _state.copyWith(
-          status: CustomerStatus.success,
-          isOffline: true,
-          errorMessage: 'Modo Offline · Código guardado',
-        );
+      if (_state.passes.isNotEmpty) {
+        _emit(_state.copyWith(status: CustomerStatus.success, isOffline: true));
       } else {
-        _state = _state.copyWith(
+        _emit(_state.copyWith(
           status: CustomerStatus.error,
           isOffline: false,
           errorMessage: e.toString().replaceFirst('Exception: ', ''),
-        );
+        ));
       }
-    } finally {
-      notifyListeners();
     }
   }
 
-  /// Refresca el token del código QR dinámico (anti-captura)
+  /// Regenera el QR rotativo del plan en pantalla (anti-captura).
   Future<void> refreshQr() async {
-    final currentPass = _state.pass;
-    if (currentPass == null) return;
-
-    _state = _state.copyWith(isRefreshingQr: true);
-    notifyListeners();
-
+    final pass = _state.currentPass;
+    if (pass == null) return;
     try {
-      final newToken = await _repository.refreshQrToken(currentPass.id);
-      final updatedPass = currentPass.copyWith(qrToken: newToken);
-      await _repository.saveCachedPass(updatedPass);
-
-      _state = _state.copyWith(
-        pass: updatedPass,
-        isRefreshingQr: false,
-      );
+      final token = await _repository.refreshQrToken(pass.id);
+      final updated = [
+        for (final p in _state.passes) p.id == pass.id ? p.copyWith(qrToken: token) : p,
+      ];
+      await _repository.saveCachedPass(updated[_state.passIndex]);
+      _emit(_state.copyWith(passes: updated));
     } catch (_) {
-      _state = _state.copyWith(
-        isRefreshingQr: false,
-        errorMessage: 'No se pudo regenerar el QR en este momento.',
-      );
-    } finally {
-      notifyListeners();
+      // Se conserva el QR anterior hasta el siguiente ciclo.
     }
   }
 
-  /// Filtra restaurantes en memoria por texto y/o categoría sin llamadas pesadas
-  void filterRestaurants(String query, {String? category}) {
-    final cat = category ?? _state.selectedCategory;
-    final filtered = _applyFilters(_state.restaurants, query, cat);
+  void selectQrMode(QrMode mode) => _emit(_state.copyWith(selectedQrMode: mode));
 
-    _state = _state.copyWith(
-      searchQuery: query,
-      selectedCategory: cat,
-      filteredRestaurants: filtered,
-    );
-    notifyListeners();
+  void nextPass() {
+    if (_state.passes.length < 2) return;
+    _emit(_state.copyWith(passIndex: (_state.passIndex + 1) % _state.passes.length));
   }
 
-  /// Cambia la categoría seleccionada en los filtros
-  void selectCategory(String category) {
-    filterRestaurants(_state.searchQuery, category: category);
+  void previousPass() {
+    final n = _state.passes.length;
+    if (n < 2) return;
+    _emit(_state.copyWith(passIndex: (_state.passIndex - 1 + n) % n));
   }
 
-  /// Selecciona un restaurante y obtiene su menú del día
-  Future<void> selectRestaurant(Restaurant restaurant) async {
-    _state = _state.copyWith(
-      selectedRestaurant: restaurant,
-      selectedMenu: restaurant.todayMenu,
-    );
-    notifyListeners();
+  void setSearchQuery(String query) => _emit(_state.copyWith(searchQuery: query));
 
+  void toggleFilter(RestaurantFilter filter) {
+    final next = {..._state.filters};
+    if (!next.remove(filter)) next.add(filter);
+    _emit(_state.copyWith(filters: next));
+  }
+
+  void clearFilters() => _emit(_state.copyWith(searchQuery: '', filters: {}));
+
+  Future<bool> claimReward(String restaurantId) async {
+    final ok = await _repository.claimReward(restaurantId);
+    if (!ok) return false;
+    final card = await _repository.getStampCard(restaurantId);
+    if (card != null) {
+      _emit(_state.copyWith(stampCards: {..._state.stampCards, restaurantId: card}));
+    }
+    _startUndo('Premio reclamado', () async {
+      // TODO: Conectar con provider de backend (revertir premio reclamado)
+    });
+    return true;
+  }
+
+  /// Preorden desde la ficha del local (C3) o directa desde la tarjeta (C2).
+  Future<bool> preorder({
+    required Restaurant restaurant,
+    String? soupId,
+    String? mainId,
+    String? breakfastId,
+    String? offerId,
+    bool takeaway = false,
+  }) async {
+    if (_state.activeOrder != null) return false;
+    final order = await _repository.preorder(
+      restaurantId: restaurant.id,
+      soupId: soupId,
+      mainId: mainId,
+      breakfastId: breakfastId,
+      offerId: offerId,
+      takeaway: takeaway,
+    );
+    _emit(_state.copyWith(activeOrder: order, selectedQrMode: QrMode.preorden));
+    _startUndo('Pedido enviado · Deshacer', () async {
+      await _repository.cancelPreorder(order.orderNumber);
+      _emit(_state.copyWith(clearActiveOrder: true));
+    });
+    return true;
+  }
+
+  /// "Pedir" en la tarjeta de Dónde comer: primera sopa y segundo disponibles.
+  Future<bool> quickOrder(Restaurant restaurant) {
+    final soup = restaurant.soups.where((m) => !m.isSoldOut).firstOrNull;
+    final main = restaurant.mains.where((m) => !m.isSoldOut).firstOrNull;
+    return preorder(restaurant: restaurant, soupId: soup?.id, mainId: main?.id);
+  }
+
+  Future<bool> reserveOffer(RestaurantOffer offer) async {
+    final restaurant = _state.restaurantById(offer.restaurantId);
+    if (restaurant == null) return false;
+    return preorder(restaurant: restaurant, offerId: offer.id);
+  }
+
+  Future<void> selectPlansRestaurant(String restaurantId) async {
+    _emit(_state.copyWith(plansRestaurantId: restaurantId, isLoadingPlans: true));
     try {
-      final freshMenu = await _repository.getTodayMenu(restaurant.id);
-      _state = _state.copyWith(selectedMenu: freshMenu);
-      notifyListeners();
+      final plans = await _repository.getPlanTemplates(restaurantId);
+      if (_state.plansRestaurantId != restaurantId) return;
+      _emit(_state.copyWith(planTemplates: plans, isLoadingPlans: false));
     } catch (_) {
-      // Conserva el menú ya asociado en caso de error
+      _emit(_state.copyWith(planTemplates: const [], isLoadingPlans: false));
     }
   }
 
-  List<Restaurant> _applyFilters(
-    List<Restaurant> list,
-    String query,
-    String category,
-  ) {
-    return list.where((r) {
-      final matchesQuery = query.isEmpty ||
-          r.name.toLowerCase().contains(query.toLowerCase()) ||
-          r.zone.toLowerCase().contains(query.toLowerCase()) ||
-          r.description.toLowerCase().contains(query.toLowerCase());
+  Future<bool> requestPlan(PlanTemplate plan) async {
+    final ok = await _repository.requestPlan(plan.id);
+    if (!ok) return false;
+    _startUndo('Plan solicitado · Deshacer', () async {
+      await _repository.cancelPlanRequest(plan.id);
+    });
+    return true;
+  }
 
-      final matchesCategory = category.isEmpty ||
-          category == 'Todos' ||
-          r.categories.contains(category);
+  Future<void> undo() async {
+    final action = _undoAction;
+    _clearUndo();
+    if (action != null) await action();
+  }
 
-      return matchesQuery && matchesCategory;
-    }).toList();
+  void _startUndo(String label, Future<void> Function() action) {
+    _undoTimer?.cancel();
+    _undoAction = action;
+    _emit(_state.copyWith(undo: UndoNotice(label, 10)));
+    _undoTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      final current = _state.undo;
+      if (current == null || current.secondsLeft <= 1) {
+        _clearUndo();
+      } else {
+        _emit(_state.copyWith(undo: UndoNotice(current.label, current.secondsLeft - 1)));
+      }
+    });
+  }
+
+  void _clearUndo() {
+    _undoTimer?.cancel();
+    _undoTimer = null;
+    _undoAction = null;
+    _emit(_state.copyWith(clearUndo: true));
+  }
+
+  @override
+  void dispose() {
+    _undoTimer?.cancel();
+    super.dispose();
   }
 }
 
-/// Provider de Riverpod para el repositorio de Comensal
 final customerRepositoryProvider = Provider<ICustomerRepository>((ref) {
   return MockCustomerRepository();
 });
 
-/// Provider de Riverpod para el controlador de estado del Comensal
 final customerControllerProvider = Provider<CustomerController>((ref) {
-  final repo = ref.watch(customerRepositoryProvider);
-  final controller = CustomerController(repository: repo);
+  final controller = CustomerController(repository: ref.watch(customerRepositoryProvider));
   controller.loadDashboard();
   ref.onDispose(controller.dispose);
   return controller;
+});
+
+/// Local y menú para la ficha (C3), también cuando se abre por ruta directa.
+final restaurantDetailProvider =
+    FutureProvider.autoDispose.family<Restaurant?, String>((ref, id) {
+  return ref.watch(customerRepositoryProvider).getRestaurantById(id);
+});
+
+/// Plan y su local para el detalle del plan (C5).
+final planDetailProvider = FutureProvider.autoDispose
+    .family<(PlanTemplate, Restaurant)?, String>((ref, planId) async {
+  final repo = ref.watch(customerRepositoryProvider);
+  final plan = await repo.getPlanTemplateById(planId);
+  if (plan == null) return null;
+  final restaurant = await repo.getRestaurantById(plan.restaurantId);
+  if (restaurant == null) return null;
+  return (plan, restaurant);
 });

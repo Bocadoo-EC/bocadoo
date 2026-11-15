@@ -8,11 +8,10 @@ import '../../../core/contracts/qr_parser.dart';
 import '../../../core/theme/app_theme.dart';
 import 'owner_controller.dart';
 
-/// Ruta de la pantalla de resultado (definida en `core/router/app_router.dart`).
-const String _scanResultRoute = '/owner/scan-result';
-
 /// Escáner QR del Dueño: cámara con ML Kit (offline), overlay animado,
 /// linterna, simulación para emulador e ingreso manual del token.
+/// Al obtener un resultado vuelve a la pantalla anterior, que muestra la
+/// tarjeta flotante (ver `openScannerFlow`).
 class ScannerScreen extends ConsumerStatefulWidget {
   const ScannerScreen({super.key});
 
@@ -95,12 +94,11 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
     if (state is OwnerSuccess || state is OwnerError) {
       await _camera.stop();
       if (!mounted) return;
-      await context.push(_scanResultRoute);
-      if (!mounted) return;
-      // De vuelta del resultado: listo para escanear al siguiente comensal.
-      controller.startScanning();
-      _paused = false;
-      await _camera.start();
+      if (context.canPop()) {
+        context.pop(true);
+      } else {
+        context.go('/owner/caja');
+      }
     } else {
       _paused = false;
     }
@@ -129,7 +127,11 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
 
   void _close() {
     ref.read(ownerControllerProvider.notifier).reset();
-    if (context.canPop()) context.pop();
+    if (context.canPop()) {
+      context.pop();
+    } else {
+      context.go('/owner/caja');
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -188,14 +190,14 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
                         OutlinedButton.icon(
                           onPressed: processing ? null : _openSimulator,
                           icon: const Icon(Icons.bug_report_outlined),
-                          label: const Text('Simular Escaneo'),
+                          label: const Text('Simular escaneo'),
                         ),
                         const SizedBox(height: 12),
                       ],
                       ElevatedButton.icon(
                         onPressed: processing ? null : _openManualEntry,
                         icon: const Icon(Icons.keyboard_alt_outlined),
-                        label: const Text('Ingresar Código Manualmente'),
+                        label: const Text('Ingresar código'),
                       ),
                     ],
                   ),
@@ -302,11 +304,15 @@ class _StatusHint extends StatelessWidget {
         ],
       );
     }
-    return Text(
-      'Apunta al QR del comensal',
-      textAlign: TextAlign.center,
-      style: style,
-    );
+    return Column(mainAxisSize: MainAxisSize.min, children: [
+      Text('Apunta al código', textAlign: TextAlign.center, style: style),
+      const SizedBox(height: 4),
+      Text(
+        'Plan, preorden o mesa: se reconoce solo',
+        textAlign: TextAlign.center,
+        style: style?.copyWith(fontSize: 14, fontWeight: FontWeight.w500),
+      ),
+    ]);
   }
 }
 
@@ -372,7 +378,7 @@ class _SimulatorSheet extends StatelessWidget {
           ListTile(
             leading: Icon(Icons.check_circle_outline, color: scheme.primary),
             title: const Text('Token válido'),
-            subtitle: const Text('Camila Andrade (u1) · QR vigente'),
+            subtitle: const Text('Carlos Mejía (u1) · QR vigente'),
             onTap: () => Navigator.pop(
               context,
               BocadooQrParser.generateQrPayload('u1'),

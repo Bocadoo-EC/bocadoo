@@ -1,6 +1,8 @@
 import '../../../core/contracts/models.dart';
 import '../../../core/contracts/qr_parser.dart';
 import '../../../core/contracts/repositories.dart';
+import '../domain/models/cash_models.dart';
+import '../domain/repositories/i_owner_repository.dart';
 
 /// Repositorio mock del Dueño. Porta la lógica del PMV Web
 /// (`src/domain/redemption.ts`, `plans.ts` y `cash.ts`):
@@ -8,7 +10,8 @@ import '../../../core/contracts/repositories.dart';
 /// - Descuento FIFO: se consume del plan que vence primero.
 /// - Control de doble escaneo: un comensal no se valida dos veces en < 60 s.
 /// - Cierre de caja: solo el efectivo cobrado hoy es "esperado" en gaveta.
-class MockOwnerRepository implements IOwnerRepository {
+// TODO: Conectar con provider de backend
+class MockOwnerRepository implements IOwnerRepository, IOwnerCashRepository {
   MockOwnerRepository({
     this.restaurantId = 'rest-001',
     this.latency = const Duration(milliseconds: 250),
@@ -32,6 +35,17 @@ class MockOwnerRepository implements IOwnerRepository {
   final List<_Redemption> _redemptions = [];
   final List<TransactionItem> _transactions = [];
   int _sequence = 0;
+
+  static const double _singleLunchPrice = 3.00;
+
+  /// Venta de plan → (userId, planId), para poder deshacerla.
+  final Map<String, (String, String)> _planSales = {};
+
+  /// Venta del POS → almuerzos servidos en esa venta.
+  final Map<String, int> _posLunchUnits = {};
+
+  FlashOffer? _activeOffer;
+  bool _shiftClosed = false;
 
   // ---------------------------------------------------------------------------
   // IOwnerRepository
@@ -159,7 +173,8 @@ class MockOwnerRepository implements IOwnerRepository {
     final now = _clock();
     final today = _todayTransactions(now);
 
-    final redeemed = today.where((t) => t.type == 'Canje').length;
+    final redeemed = today.where((t) => t.type == 'Validado').length +
+        today.fold<int>(0, (sum, t) => sum + (_posLunchUnits[t.id] ?? 0));
     final plansSold = today.where((t) => t.type == 'Venta Plan').length;
     final income = today.fold<double>(0, (sum, t) => sum + t.amount);
     // Solo el efectivo cobrado hoy forma parte de lo esperado en gaveta;
@@ -194,6 +209,214 @@ class MockOwnerRepository implements IOwnerRepository {
   ) async {
     await _simulateLatency();
     return List.unmodifiable(_todayTransactions(_clock()));
+  }
+
+  // ---------------------------------------------------------------------------
+  // IOwnerCashRepository
+  // ---------------------------------------------------------------------------
+
+  @override
+  Future<double> getSingleLunchPrice(String restaurantId) async =>
+      _singleLunchPrice;
+
+  @override
+  Future<List<OwnerClient>> getClients(String restaurantId) async {
+    await _simulateLatency();
+    return [
+      for (final s in _studentsByUserId.values)
+        if (s.restaurantId == this.restaurantId)
+          OwnerClient(id: s.userId, name: s.name, phone: s.phone),
+    ];
+  }
+
+  @override
+  Future<List<OwnerPlanTemplate>> getPlanTemplates(String restaurantId) async {
+    await _simulateLatency();
+    return const [
+      OwnerPlanTemplate(
+          id: 'tpl-semanal', name: 'Plan semanal', lunches: 5, price: 15, validityDays: 7),
+      OwnerPlanTemplate(
+          id: 'tpl-quincenal', name: 'Plan quincenal', lunches: 10, price: 28, validityDays: 15),
+      OwnerPlanTemplate(
+          id: 'tpl-mensual',
+          name: 'Plan mensual ejecutivo',
+          lunches: 20,
+          price: 55,
+          validityDays: 30),
+    ];
+  }
+
+  @override
+  Future<String?> sellPlanTemplate({
+    required String restaurantId,
+    String? clientId,
+    String? newClientName,
+    required OwnerPlanTemplate template,
+    required OwnerPayMethod method,
+  }) async {
+    await _simulateLatency();
+    final now = _clock();
+    final _Student? student;
+    if (clientId != null) {
+      student = _studentsByUserId[clientId];
+    } else if (newClientName != null && newClientName.trim().isNotEmpty) {
+      student = _registerStudent(_nextId('c-quick'), name: newClientName.trim());
+    } else {
+      student = null;
+    }
+    if (student == null) return null;
+
+    final plan = _Plan(
+      id: _nextId('plan'),
+      total: template.lunches,
+      remaining: template.lunches,
+      expiresAt: now.add(Duration(days: template.validityDays)),
+    );
+    student.plans.add(plan);
+    final saleId = _nextId('sale');
+    _transactions.add(TransactionItem(
+      id: saleId,
+      customerName: student.name,
+      type: 'Venta Plan',
+      amount: _round2(template.price),
+      paymentMethod: method.label,
+      timestamp: now,
+    ));
+    _planSales[saleId] = (student.userId, plan.id);
+    return saleId;
+  }
+
+  @override
+  Future<bool> undoTransaction(String transactionId) async {
+    await _simulateLatency();
+    final removed = _transactions.length;
+    _transactions.removeWhere((t) => t.id == transactionId);
+    if (_transactions.length == removed) return false;
+
+    final planSale = _planSales.remove(transactionId);
+    if (planSale != null) {
+      _studentsByUserId[planSale.$1]?.plans.removeWhere((p) => p.id == planSale.$2);
+    }
+    _posLunchUnits.remove(transactionId);
+    return true;
+  }
+
+  @override
+  Future<bool> undoRedeem(String passId) async {
+    await _simulateLatency();
+    final student = _studentByPassId(passId);
+    if (student == null) return false;
+    for (final r in _redemptions.reversed) {
+      if (r.userId != student.userId || r.annulled) continue;
+      r.annulled = true;
+      for (final p in student.plans) {
+        if (p.id == r.planId) p.remaining += 1;
+      }
+      _transactions.removeWhere((t) => t.id == r.id);
+      return true;
+    }
+    return false;
+  }
+
+  @override
+  Future<List<CatalogItem>> getCatalog(String restaurantId) async {
+    await _simulateLatency();
+    CatalogItem item(String id, String name, String desc, double price, PosCategory c) =>
+        CatalogItem(id: id, name: name, description: desc, price: price, category: c);
+    return [
+      item('des-1', 'Desayuno criollo', 'Bolón, huevo y café', 2.50, PosCategory.desayunos),
+      item('des-2', 'Desayuno continental', 'Pan, huevos, jugo y café', 2.50, PosCategory.desayunos),
+      item('car-1', 'Churrasco montado', 'Lomo, huevo, papas y ensalada', 5.50, PosCategory.carta),
+      item('car-2', 'Seco de chivo', 'Con arroz amarillo y maduro', 6.00, PosCategory.carta),
+      item('car-3', 'Trucha frita', 'Con patacones y ensalada', 6.50, PosCategory.carta),
+      item('car-4', 'Lomo saltado', 'Res salteada con cebolla y tomate', 5.00, PosCategory.carta),
+      item('car-5', 'Pechuga a la plancha', 'Con menestra de lenteja', 4.50, PosCategory.carta),
+      item('ext-1', 'Aguacate', 'Porción', 0.75, PosCategory.extras),
+      item('ext-2', 'Huevo frito', 'Adicional', 0.50, PosCategory.extras),
+      item('ext-3', 'Maduro con queso', 'Porción', 0.75, PosCategory.extras),
+      item('ext-4', 'Papas fritas', 'Porción', 1.00, PosCategory.extras),
+      item('ext-5', 'Arroz extra', 'Porción', 0.50, PosCategory.extras),
+      item('ext-6', 'Ensalada', 'Porción', 0.75, PosCategory.extras),
+      item('beb-1', 'Jugo de naranjilla', 'Natural', 0.75, PosCategory.bebidas),
+      item('beb-2', 'Limonada', 'Con hierbabuena', 1.00, PosCategory.bebidas),
+      item('beb-3', 'Gaseosa personal', '300 ml', 1.00, PosCategory.bebidas),
+      item('beb-4', 'Agua', '500 ml', 0.75, PosCategory.bebidas),
+      item('beb-5', 'Postre del día', 'Flan o tres leches', 1.00, PosCategory.bebidas),
+      item('beb-6', 'Café', 'Pasado', 1.00, PosCategory.bebidas),
+    ];
+  }
+
+  @override
+  Future<String?> registerPosSale({
+    required String restaurantId,
+    required String label,
+    required List<PosSaleLine> lines,
+    required double total,
+    required OwnerPayMethod method,
+  }) async {
+    await _simulateLatency();
+    if (lines.isEmpty || total < 0) return null;
+    final saleId = _nextId('pos');
+    _transactions.add(TransactionItem(
+      id: saleId,
+      customerName: label,
+      type: 'Venta Suelta',
+      amount: _round2(total),
+      paymentMethod: method.label,
+      timestamp: _clock(),
+    ));
+    _posLunchUnits[saleId] =
+        lines.where((l) => l.isLunch).fold<int>(0, (sum, l) => sum + l.qty);
+    return saleId;
+  }
+
+  @override
+  Future<FlashOffer?> getActiveOffer(String restaurantId) async {
+    await _simulateLatency();
+    return _activeOffer;
+  }
+
+  @override
+  Future<bool> publishOffer(String restaurantId, FlashOffer offer) async {
+    await _simulateLatency();
+    _activeOffer = offer;
+    return true;
+  }
+
+  @override
+  Future<bool> cancelOffer(String restaurantId) async {
+    await _simulateLatency();
+    _activeOffer = null;
+    return true;
+  }
+
+  @override
+  Future<bool> setManualBusy(String restaurantId, {required bool busy}) async {
+    await _simulateLatency();
+    return true;
+  }
+
+  @override
+  Future<int> getOrdersOnTheWayCount(String restaurantId) async {
+    await _simulateLatency();
+    return 1;
+  }
+
+  @override
+  Future<bool> isShiftClosed(String restaurantId) async => _shiftClosed;
+
+  @override
+  Future<bool> closeShift(String restaurantId, {required double countedCash}) async {
+    await _simulateLatency();
+    _shiftClosed = true;
+    return true;
+  }
+
+  @override
+  Future<bool> reopenShift(String restaurantId) async {
+    await _simulateLatency();
+    _shiftClosed = false;
+    return true;
   }
 
   // ---------------------------------------------------------------------------
@@ -233,9 +456,9 @@ class MockOwnerRepository implements IOwnerRepository {
         student,
         isValid: false,
         outcome: 'ROJO',
-        title: hasBalance ? 'Plan vencido' : 'Sin almuerzos',
+        title: 'Sin saldo activo',
         supportingLine: hasBalance
-            ? 'El plan caducó. Ofrécele renovar hoy.'
+            ? 'Su plan anterior ya venció.'
             : 'No le quedan almuerzos disponibles.',
         action: 'VENDER_PLAN',
       );
@@ -251,7 +474,7 @@ class MockOwnerRepository implements IOwnerRepository {
         isValid: true,
         outcome: 'ADVERTENCIA',
         title: 'Último almuerzo',
-        supportingLine: '¡Se agotará su plan! Ofrécele renovar.',
+        supportingLine: 'Su plan acaba de terminar hoy.',
         action: 'VENDER_PLAN',
         remaining: 0,
       );
@@ -272,8 +495,8 @@ class MockOwnerRepository implements IOwnerRepository {
       student,
       isValid: true,
       outcome: 'VERDE',
-      title: 'Validado',
-      supportingLine: 'Le quedarán $remainingAfter.',
+      title: 'Almuerzo registrado',
+      supportingLine: 'Le quedan $remainingAfter almuerzos',
       action: 'NINGUNA',
       remaining: remainingAfter,
     );
@@ -340,10 +563,10 @@ class MockOwnerRepository implements IOwnerRepository {
     return null;
   }
 
-  _Student _registerStudent(String identifier) {
+  _Student _registerStudent(String identifier, {String? name}) {
     final student = _Student(
       userId: identifier,
-      name: identifier,
+      name: name ?? identifier,
       career: 'Estudiante',
       restaurantId: restaurantId,
     );
@@ -357,6 +580,10 @@ class MockOwnerRepository implements IOwnerRepository {
         return 'Efectivo';
       case 'transferencia':
         return 'Transferencia';
+      case 'deuna':
+        return 'Deuna';
+      case 'tarjeta':
+        return 'Tarjeta';
       default:
         return null;
     }
@@ -394,6 +621,7 @@ class MockOwnerRepository implements IOwnerRepository {
       String career,
       List<_Plan> plans, {
       String? restaurant,
+      String phone = '',
     }) {
       _studentsByUserId[userId] = _Student(
         userId: userId,
@@ -401,6 +629,7 @@ class MockOwnerRepository implements IOwnerRepository {
         career: career,
         restaurantId: restaurant ?? restaurantId,
         plans: plans,
+        phone: phone,
       );
     }
 
@@ -411,16 +640,16 @@ class MockOwnerRepository implements IOwnerRepository {
           expiresAt: now.add(Duration(days: days)),
         );
 
-    add('u1', 'Camila Andrade', 'Ing. de Sistemas',
-        [plan('seed-1', 20, 12, 20)]); // VERDE
-    add('u2', 'Mateo Villacís', 'Administración',
-        [plan('seed-2', 10, 1, 15)]); // ADVERTENCIA: último almuerzo
-    add('u3', 'Sofía Paredes', 'Diseño Gráfico',
-        [plan('seed-3', 15, 8, 2)]); // ADVERTENCIA: vence pronto
+    add('u1', 'Carlos Mejía', 'Ing. de Sistemas',
+        [plan('seed-1', 20, 12, 20)], phone: '0991234567'); // VERDE
+    add('u2', 'Valentina Ortiz', 'Administración',
+        [plan('seed-2', 10, 1, 15)], phone: '0987654321'); // ADVERTENCIA: último almuerzo
+    add('u3', 'Sofía Almeida', 'Diseño Gráfico',
+        [plan('seed-3', 15, 8, 2)], phone: '0998877665'); // ADVERTENCIA: vence pronto
     add('u4', 'Diego Salazar', 'Derecho',
-        [plan('seed-4', 10, 4, -2)]); // ROJO: plan vencido
-    add('u5', 'Valeria Núñez', 'Psicología',
-        [plan('seed-5', 10, 0, 10)]); // ROJO: sin almuerzos
+        [plan('seed-4', 10, 4, -2)], phone: '0976543210'); // ROJO: plan vencido
+    add('u5', 'Luis Paredes', 'Psicología',
+        [plan('seed-5', 10, 0, 10)], phone: '0965432109'); // ROJO: sin almuerzos
     add('u6', 'Andrés Ortiz', 'Medicina',
         [plan('seed-6', 20, 15, 25)],
         restaurant: 'rest-otro'); // ROJO: otro local
@@ -448,11 +677,13 @@ class _Student {
     required this.career,
     required this.restaurantId,
     List<_Plan>? plans,
+    this.phone = '',
   }) : plans = plans ?? [];
 
   final String userId;
   final String name;
   final String career;
+  final String phone;
   final String restaurantId;
   final List<_Plan> plans;
 
@@ -486,5 +717,5 @@ class _Redemption {
   final String userId;
   final String planId;
   final DateTime timestamp;
-  final bool annulled = false;
+  bool annulled = false;
 }

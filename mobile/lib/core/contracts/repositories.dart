@@ -25,6 +25,49 @@ abstract class ICustomerRepository {
 
   /// Guarda el pase en almacenamiento local para acceso offline
   Future<void> saveCachedPass(CustomerPass pass);
+
+  /// Planes activos del comensal, uno por local
+  Future<List<CustomerPass>> getActivePasses({String? userId});
+
+  /// Tarjeta de sellos del comensal en un local (null si el local no tiene)
+  Future<StampCard?> getStampCard(String restaurantId);
+
+  /// Reclama un premio de la tarjeta de sellos
+  Future<bool> claimReward(String restaurantId);
+
+  /// Mesa con amigos activa del comensal
+  Future<ActiveTable?> getActiveTable();
+
+  /// Preorden activa del comensal
+  Future<ActiveOrder?> getActiveOrder();
+
+  /// Últimos movimientos del comensal
+  Future<List<ActivityItem>> getRecentActivity();
+
+  /// Crea una preorden de almuerzo o desayuno y devuelve el número de orden
+  Future<ActiveOrder> preorder({
+    required String restaurantId,
+    String? soupId,
+    String? mainId,
+    String? breakfastId,
+    String? offerId,
+    required bool takeaway,
+  });
+
+  /// Cancela una preorden recién creada (deshacer)
+  Future<bool> cancelPreorder(String orderNumber);
+
+  /// Planes que publica un local
+  Future<List<PlanTemplate>> getPlanTemplates(String restaurantId);
+
+  /// Detalle de un plan por su ID
+  Future<PlanTemplate?> getPlanTemplateById(String planId);
+
+  /// Solicita un plan; se paga en caja al activarlo
+  Future<bool> requestPlan(String planId);
+
+  /// Cancela una solicitud de plan recién enviada (deshacer)
+  Future<bool> cancelPlanRequest(String planId);
 }
 
 /// Interfaz abstracta para operaciones del Dueño de Restaurante

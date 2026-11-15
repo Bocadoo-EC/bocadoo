@@ -127,10 +127,18 @@ class Restaurant {
   final String? logoUrl;
   final double singleLunchPrice;
   final double? planLunchPrice;
-  final String occupancy; // Libre, Movido, Lleno
+  final String occupancy; // LIBRE, MOVIDO, LLENO
   final bool isOpen;
   final List<String> categories;
   final List<MenuItem> todayMenu;
+  final String featuredDish;
+  final bool hasPlan;
+  final List<RestaurantOffer> offers;
+  final String schedule;
+  final List<String> tags;
+  final String juice;
+  final String dessert;
+  final double takeawaySurcharge;
 
   const Restaurant({
     required this.id,
@@ -144,11 +152,34 @@ class Restaurant {
     this.logoUrl,
     required this.singleLunchPrice,
     this.planLunchPrice,
-    this.occupancy = 'Libre',
+    this.occupancy = 'LIBRE',
     this.isOpen = true,
     this.categories = const ['Todos'],
     this.todayMenu = const [],
+    this.featuredDish = '',
+    this.hasPlan = false,
+    this.offers = const [],
+    this.schedule = '11:30 - 15:30',
+    this.tags = const [],
+    this.juice = '',
+    this.dessert = '',
+    this.takeawaySurcharge = 0.25,
   });
+
+  int get walkingMinutes {
+    final minutes = (distanceKm * 12).round();
+    return minutes < 2 ? 2 : minutes;
+  }
+
+  List<MenuItem> get soups =>
+      todayMenu.where((m) => m.category == 'Sopa').toList();
+  List<MenuItem> get mains =>
+      todayMenu.where((m) => m.category == 'Plato Fuerte').toList();
+  List<MenuItem> get breakfasts =>
+      todayMenu.where((m) => m.category == 'Desayuno').toList();
+  bool get hasMenu => soups.isNotEmpty || mains.isNotEmpty;
+  bool get hasOffer => offers.isNotEmpty;
+  bool get hasBreakfastToday => breakfasts.any((b) => !b.isSoldOut);
 
   Restaurant copyWith({
     String? id,
@@ -183,8 +214,146 @@ class Restaurant {
       isOpen: isOpen ?? this.isOpen,
       categories: categories ?? this.categories,
       todayMenu: todayMenu ?? this.todayMenu,
+      featuredDish: featuredDish,
+      hasPlan: hasPlan,
+      offers: offers,
+      schedule: schedule,
+      tags: tags,
+      juice: juice,
+      dessert: dessert,
+      takeawaySurcharge: takeawaySurcharge,
     );
   }
+}
+
+/// Oferta publicada por un local: flash de hoy o promo programada.
+@immutable
+class RestaurantOffer {
+  final String id;
+  final String restaurantId;
+  final String title;
+  final String badge;
+  final double? price;
+  final double? originalPrice;
+  final int slotsLeft;
+  final bool availableNow;
+  final bool appliesToday;
+  final bool reservable;
+
+  const RestaurantOffer({
+    required this.id,
+    required this.restaurantId,
+    required this.title,
+    required this.badge,
+    this.price,
+    this.originalPrice,
+    this.slotsLeft = 0,
+    this.availableNow = true,
+    this.appliesToday = true,
+    this.reservable = false,
+  });
+}
+
+/// Plan que un local publica para que el comensal lo solicite.
+@immutable
+class PlanTemplate {
+  final String id;
+  final String restaurantId;
+  final String type; // Semanal, Quincenal, Mensual
+  final String name;
+  final int lunches;
+  final int priceCents;
+  final int validityDays;
+  final String category; // ALMUERZO, DESAYUNO, MIXTO
+
+  const PlanTemplate({
+    required this.id,
+    required this.restaurantId,
+    required this.type,
+    required this.name,
+    required this.lunches,
+    required this.priceCents,
+    required this.validityDays,
+    this.category = 'ALMUERZO',
+  });
+
+  int get perLunchCents => (priceCents / lunches).round();
+}
+
+/// Tarjeta de sellos del comensal en un local.
+@immutable
+class StampCard {
+  final String restaurantId;
+  final String name;
+  final int current;
+  final int goal;
+  final String reward;
+  final int rewardsAvailable;
+
+  const StampCard({
+    required this.restaurantId,
+    required this.name,
+    required this.current,
+    required this.goal,
+    this.reward = 'Almuerzo gratis',
+    this.rewardsAvailable = 0,
+  });
+}
+
+/// Mesa con amigos activa del comensal.
+@immutable
+class ActiveTable {
+  final String id;
+  final String restaurantName;
+  final String time;
+  final int membersCount;
+  final String url;
+
+  const ActiveTable({
+    required this.id,
+    required this.restaurantName,
+    required this.time,
+    required this.membersCount,
+    required this.url,
+  });
+}
+
+/// Preorden activa del comensal.
+@immutable
+class ActiveOrder {
+  final String orderNumber;
+  final String status; // PREPARANDO, LISTO
+  final String restaurantName;
+  final String qrPayload;
+  final String detail;
+
+  const ActiveOrder({
+    required this.orderNumber,
+    required this.restaurantName,
+    required this.qrPayload,
+    this.status = 'PREPARANDO',
+    this.detail = '',
+  });
+}
+
+/// Movimiento reciente del comensal (consumo, compra de plan u otro).
+@immutable
+class ActivityItem {
+  final String id;
+  final String name;
+  final String detail;
+  final String value;
+  final bool positive;
+  final String kind; // lunch, plan, other
+
+  const ActivityItem({
+    required this.id,
+    required this.name,
+    required this.detail,
+    required this.value,
+    this.positive = false,
+    this.kind = 'other',
+  });
 }
 
 /// Modelo inmutable de un ítem de Menú
@@ -192,7 +361,7 @@ class Restaurant {
 class MenuItem {
   final String id;
   final String name;
-  final String category; // Sopa, Plato Fuerte, Bebida, Postre
+  final String category; // Sopa, Plato Fuerte, Bebida, Postre, Desayuno
   final double? price;
   final bool isSoldOut;
   final String? imageUrl;
