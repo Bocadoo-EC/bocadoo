@@ -537,7 +537,7 @@ class ApiCustomerRepository implements ICustomerRepository {
     eventsService.track(
       'comensal.preorden_creada',
       restaurantId: restaurantId,
-      props: {'para_llevar': takeaway, 'por_plan': order.paidByPlan},
+      props: {'para_llevar': takeaway, 'por_plan': order.hasPlan},
     );
     return order;
   }
