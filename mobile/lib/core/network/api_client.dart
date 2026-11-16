@@ -9,6 +9,14 @@ import 'api_config.dart';
 import 'api_exception.dart';
 import 'token_store.dart';
 
+typedef ApiErrorReporter = void Function({
+  required String method,
+  required String path,
+  int? status,
+  required String code,
+  String? requestId,
+});
+
 /// Cliente HTTP centralizado para comunicarse con el backend de Bocadoo.
 ///
 /// Cadena de interceptores en orden estricto:
@@ -21,6 +29,7 @@ class ApiClient {
   ApiClient({
     required TokenStore tokens,
     required void Function() onSessionExpired,
+    ApiErrorReporter? onErrorReported,
   }) {
     dio = Dio(
       BaseOptions(
@@ -50,7 +59,7 @@ class ApiClient {
       _AuthInterceptor(dio, refreshDio, tokens, onSessionExpired),
       _RestaurantInterceptor(tokens),
       _RetryInterceptor(dio),
-      _ProblemInterceptor(),
+      _ProblemInterceptor(onErrorReported),
       if (kDebugMode) _SafeDebugLogInterceptor(),
     ]);
   }
@@ -319,15 +328,31 @@ class _RetryInterceptor extends Interceptor {
 }
 
 class _ProblemInterceptor extends Interceptor {
+  _ProblemInterceptor(this._onErrorReported);
+
+  final ApiErrorReporter? _onErrorReported;
+
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) {
+    final ApiException apiError;
+    if (err.error is ApiException) {
+      apiError = err.error as ApiException;
+    } else {
+      final response = err.response;
+      apiError = response != null
+          ? ApiException.fromResponse(response)
+          : ApiException.network();
+    }
+    _onErrorReported?.call(
+      method: err.requestOptions.method,
+      path: err.requestOptions.path,
+      status: apiError.status,
+      code: apiError.code,
+      requestId: apiError.requestId,
+    );
     if (err.error is ApiException) {
       return handler.next(err);
     }
-    final response = err.response;
-    final apiError = response != null
-        ? ApiException.fromResponse(response)
-        : ApiException.network();
     handler.next(err.copyWith(error: apiError));
   }
 }

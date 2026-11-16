@@ -35,11 +35,36 @@ import '../../features/customer/presentation/plan_detail_sheet.dart';
 import '../../features/customer/presentation/plans_screen.dart';
 import '../../features/customer/presentation/restaurant_sheet.dart';
 import '../../features/customer/presentation/restaurants_screen.dart';
+import '../analytics/events_service.dart';
 import '../config/app_mode.dart';
 import '../session/session_notifier.dart';
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
 String? _pendingInviteTableId;
+
+class _AnalyticsRouteObserver extends NavigatorObserver {
+  String? _currentRole() {
+    if (!sessionNotifier.isAuthenticated) return null;
+    if (sessionNotifier.isCashierAccount) return 'cajero';
+    return sessionNotifier.hasRestaurant ? 'dueno' : 'comensal';
+  }
+
+  void _report(Route<dynamic>? route) {
+    final name = route?.settings.name;
+    if (name == null || name.trim().isEmpty) return;
+    eventsService.trackScreen(name, role: _currentRole());
+  }
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    _report(route);
+  }
+
+  @override
+  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) {
+    _report(newRoute);
+  }
+}
 
 /// Configuración central de rutas de navegación con GoRouter. Las 34 pantallas
 /// del roadmap tienen su pantalla real; no quedan marcadores de "pendiente".
@@ -47,6 +72,7 @@ final GoRouter appRouter = GoRouter(
   navigatorKey: _rootNavigatorKey,
   initialLocation: '/login',
   refreshListenable: sessionNotifier,
+  observers: [_AnalyticsRouteObserver()],
   redirect: (context, state) {
     final uri = state.uri;
     String? incomingInviteId;

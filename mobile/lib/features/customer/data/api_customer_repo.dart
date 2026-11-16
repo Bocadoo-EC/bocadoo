@@ -1,6 +1,7 @@
 import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../core/analytics/events_service.dart';
 import '../../../core/config/support_config.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/contracts/repositories.dart';
@@ -139,6 +140,7 @@ class ApiCustomerRepository implements ICustomerRepository {
         },
       ),
     );
+    eventsService.track('comensal.qr_generado', restaurantId: restId);
     return (data['codigo'] ?? '').toString();
   }
 
@@ -297,10 +299,26 @@ class ApiCustomerRepository implements ICustomerRepository {
 
     if (category != null && category.isNotEmpty && category != 'Todos') {
       final target = category.toLowerCase();
-      return mapped
+      final filtered = mapped
           .where((r) => r.categories.any((c) => c.toLowerCase() == target))
           .toList();
+      eventsService.track(
+        'comensal.vitrina_consultada',
+        props: {
+          'con_busqueda': query != null && query.trim().isNotEmpty,
+          'filtro': target,
+          'total': filtered.length,
+        },
+      );
+      return filtered;
     }
+    eventsService.track(
+      'comensal.vitrina_consultada',
+      props: {
+        'con_busqueda': query != null && query.trim().isNotEmpty,
+        'total': mapped.length,
+      },
+    );
     return mapped;
   }
 
@@ -326,7 +344,17 @@ class ApiCustomerRepository implements ICustomerRepository {
       final detail = results[0] as Map<String, dynamic>;
       final offersRaw = results[1] as List<Map<String, dynamic>>;
       final userPos = await _resolveUserPosition();
-      return _mapDetailToRestaurant(detail, offersRaw, userPos);
+      final mapped = _mapDetailToRestaurant(detail, offersRaw, userPos);
+      eventsService.track(
+        'comensal.restaurante_visto',
+        restaurantId: mapped.id,
+        props: {
+          'tiene_menu': mapped.todayMenu.isNotEmpty,
+          'tiene_planes': mapped.hasPlan,
+          'ofertas': mapped.offers.length,
+        },
+      );
+      return mapped;
     } on ApiException catch (e) {
       if (e.status == 404 || e.code == 'RESTAURANTE_NO_ENCONTRADO') {
         return null;
@@ -400,6 +428,11 @@ class ApiCustomerRepository implements ICustomerRepository {
         ),
       );
       _idempotency.done(intent);
+      eventsService.track(
+        'comensal.plan_solicitado',
+        restaurantId: plan.restaurantId,
+        props: {'almuerzos': plan.lunches},
+      );
     });
     return true;
   }
@@ -408,7 +441,11 @@ class ApiCustomerRepository implements ICustomerRepository {
   Future<bool> cancelPlanRequest(String planId) async {
     if (_pendingPlanId != planId) return false;
     _pendingPlanId = null;
-    return _deferredCommit.cancel();
+    final cancelled = _deferredCommit.cancel();
+    if (cancelled) {
+      eventsService.track('comensal.plan_deshecho');
+    }
+    return cancelled;
   }
 
   // ---------------------------------------------------------------------------
@@ -496,7 +533,13 @@ class ApiCustomerRepository implements ICustomerRepository {
       ),
     );
     _idempotency.done(intent);
-    return _mapPedidoToActiveOrder(res ?? const {});
+    final order = _mapPedidoToActiveOrder(res ?? const {});
+    eventsService.track(
+      'comensal.preorden_creada',
+      restaurantId: restaurantId,
+      props: {'para_llevar': takeaway, 'por_plan': order.paidByPlan},
+    );
+    return order;
   }
 
   @override
@@ -514,6 +557,7 @@ class ApiCustomerRepository implements ICustomerRepository {
         '${ApiConfig.v1}/mis/pedidos/$uuid/cancelar',
       ),
     );
+    eventsService.track('comensal.preorden_cancelada');
     return true;
   }
 
@@ -645,6 +689,13 @@ class ApiCustomerRepository implements ICustomerRepository {
         ),
       );
       _idempotency.done(intent);
+      eventsService.track(
+        'comensal.opinion_enviada',
+        props: {
+          'etiqueta': apiTag,
+          'con_nota': note != null && note.trim().isNotEmpty,
+        },
+      );
       return true;
     } on ApiException catch (e) {
       if (e.status == 404 || e.status == 409) {
@@ -667,6 +718,7 @@ class ApiCustomerRepository implements ICustomerRepository {
         ),
       );
       _idempotency.done(intent);
+      eventsService.track('comensal.opinion_descartada');
       return true;
     } on ApiException catch (e) {
       if (e.status == 404 ||
@@ -710,7 +762,13 @@ class ApiCustomerRepository implements ICustomerRepository {
         },
       ),
     );
-    return _mapMesaResponseToSharedTable(res ?? const {});
+    final table = await _mapMesaResponseToSharedTable(res ?? const {});
+    eventsService.track(
+      'comensal.mesa_abierta',
+      restaurantId: restaurantId,
+      props: {'hora': table.time},
+    );
+    return table;
   }
 
   @override
@@ -807,7 +865,13 @@ class ApiCustomerRepository implements ICustomerRepository {
         ),
       );
       _idempotency.done(intent);
-      return await _mapMesaResponseToSharedTable(res ?? const {});
+      final table = await _mapMesaResponseToSharedTable(res ?? const {});
+      eventsService.track(
+        'comensal.mesa_unida',
+        restaurantId: table.restaurantId,
+        props: {'para_llevar': takeaway, 'miembros': table.members.length},
+      );
+      return table;
     } on ApiException catch (e) {
       if (e.status == 400 || e.status == 404 || e.status == 409) {
         _idempotency.done(intent);

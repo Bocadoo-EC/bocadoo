@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../features/customer/data/local_customer_cache.dart';
+import '../analytics/events_service.dart';
 import '../config/app_mode.dart';
 import '../network/api_client.dart';
 import '../network/api_config.dart';
@@ -122,12 +123,36 @@ class LocalProfileStore {
 
 /// Estado global de sesión autenticada para el enrutador y repositorios.
 class SessionNotifier extends ChangeNotifier {
+  SessionNotifier() {
+    eventsService.configure(
+      api: api,
+      isAuthenticated: () => isAuthenticated,
+      activeRestaurantId: () => activeRestaurantId,
+      userId: () => userId,
+    );
+  }
+
   final TokenStore tokens = TokenStore();
   final LocalProfileStore profile = LocalProfileStore();
 
   late final ApiClient api = ApiClient(
     tokens: tokens,
     onSessionExpired: expire,
+    onErrorReported: ({
+      required String method,
+      required String path,
+      int? status,
+      required String code,
+      String? requestId,
+    }) {
+      eventsService.trackApiError(
+        method: method,
+        path: path,
+        status: status,
+        code: code,
+        requestId: requestId,
+      );
+    },
   );
 
   bool isAuthenticated = false;
@@ -186,6 +211,15 @@ class SessionNotifier extends ChangeNotifier {
       isAuthenticated = true;
       expiredMessage = null;
       notifyListeners();
+      eventsService.track(
+        'sesion.restaurada',
+        props: {
+          'rol': isCashierAccount
+              ? 'cajero'
+              : (hasRestaurant ? 'dueno' : 'comensal'),
+          'locales': restaurants.length,
+        },
+      );
     } on ApiException {
       // Si el refresh falló por 400/401, el interceptor ya limpió tokens y llamó expire().
       // Si fue un fallo de red o arranque en frío de Render, se conservan los tokens
@@ -256,6 +290,7 @@ class SessionNotifier extends ChangeNotifier {
   }
 
   void expire() {
+    eventsService.track('sesion.expirada');
     isAuthenticated = false;
     preferredEntryRole = null;
     expiredMessage = 'Tu sesión venció. Entra de nuevo.';
@@ -263,6 +298,8 @@ class SessionNotifier extends ChangeNotifier {
   }
 
   Future<void> logout() async {
+    eventsService.track('sesion.cerrada', props: {'alcance': 'actual'});
+    await eventsService.flush();
     final refreshToken = await tokens.refresh;
     if (!AppMode.useMock && refreshToken != null && refreshToken.isNotEmpty) {
       try {
@@ -278,10 +315,13 @@ class SessionNotifier extends ChangeNotifier {
     }
     await _clearAllStores();
     _resetLocalState();
+    eventsService.resetSession();
     notifyListeners();
   }
 
   Future<void> logoutAll() async {
+    eventsService.track('sesion.cerrada', props: {'alcance': 'todos'});
+    await eventsService.flush();
     if (!AppMode.useMock) {
       await guard(
         () => api.send<void>('POST', '${ApiConfig.v1}/auth/logout-all'),
@@ -289,6 +329,7 @@ class SessionNotifier extends ChangeNotifier {
     }
     await _clearAllStores();
     _resetLocalState();
+    eventsService.resetSession();
     notifyListeners();
   }
 

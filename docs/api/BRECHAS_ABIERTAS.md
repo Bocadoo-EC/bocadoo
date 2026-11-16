@@ -59,6 +59,6 @@ Este documento consolida las brechas identificadas al integrar la app Flutter de
 | **P-08** | `GET/PUT /v1/sellos/config`, `POST /v1/clientes/{id}/sellos/canjear` | Configuración de sellos y cobro explícito de premio. | Pendiente de UI. |
 | **P-09** | `GET/POST/PATCH /v1/restaurante/mesas` | Catálogo físico de mesas del local. | Pendiente de UI. |
 | **P-10** | `GET /v1/mis/consumos`, `GET /v1/mis/opiniones` | Historial extendido de opiniones del comensal con respuesta del dueño. | `getRecentActivity` conectado a `/v1/mis/consumos`; vista de respuestas en Comensal pendiente. |
-| **P-11** | `POST /v1/eventos` | Telemetría por lotes (máx. 50 eventos). | **No implementada**; requiere aprobación previa de Carlos. |
+| **P-11** | `POST /v1/eventos` | Telemetría por lotes (máx. 50 eventos). | **Implementada:** `EventsService` conectado (ingresos, errores API/Flutter, vistas de ruta y uso por función sin PII). |
 | **P-12** | `POST /v1/auth/logout-all` | Cierre de sesión en todos los dispositivos. | Pendiente de botón en Ajustes. |
 | **P-13** | `POST /v1/clientes/{id}/vincular\|desvincular` | Vincular cliente manual del local con su correo en la app. | `addClient` intenta vincular silenciosamente si se ingresa correo; falta UI dedicada de vinculación/edición. |

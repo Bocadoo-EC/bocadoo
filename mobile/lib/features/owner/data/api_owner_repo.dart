@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../core/analytics/events_service.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/contracts/repositories.dart';
 import '../../../core/network/api_client.dart';
@@ -320,6 +321,15 @@ class ApiOwnerRepository
 
       final remaining = _asNullableInt(data['almuerzosRestantes']);
       final daysToExpire = _asNullableInt(data['diasParaVencer']);
+
+      eventsService.track(
+        'dueno.qr_validado',
+        restaurantId: restaurantId,
+        props: {
+          'resultado': resultado.isEmpty ? 'DESCONOCIDO' : resultado,
+          'validado': resultado == 'OK' || resultado == 'OK_ADVERTENCIA',
+        },
+      );
 
       final passId = consumoId ??
           clienteId ??
@@ -829,6 +839,14 @@ class ApiOwnerRepository
         final id = (res['id'] ?? '').toString();
         if (id.isNotEmpty) {
           _saleUndoById[id] = _SaleUndoKind.plan;
+          eventsService.track(
+            'dueno.plan_vendido',
+            restaurantId: restaurantId,
+            props: {
+              'metodo': _mapPayMethodApi(method),
+              'origen': 'caja',
+            },
+          );
           return id;
         }
         return null;
@@ -869,6 +887,9 @@ class ApiOwnerRepository
         );
       }
       _saleUndoById.remove(transactionId);
+      if (kind == _SaleUndoKind.pos) {
+        eventsService.track('dueno.pos_venta_deshecha');
+      }
       return true;
     } on ApiException catch (e) {
       _lastError = e.userMessage;
@@ -891,7 +912,11 @@ class ApiOwnerRepository
             ).then((v) => v ?? <String, dynamic>{}),
       );
       _consumoIdByPassId.remove(passId);
-      return res['revertido'] != false;
+      final reverted = res['revertido'] != false;
+      if (reverted) {
+        eventsService.track('dueno.consumo_deshecho');
+      }
+      return reverted;
     } on ApiException catch (e) {
       _lastError = e.userMessage;
       return false;
@@ -1052,6 +1077,15 @@ class ApiOwnerRepository
         final id = (res['id'] ?? '').toString();
         if (id.isNotEmpty) {
           _saleUndoById[id] = _SaleUndoKind.pos;
+          eventsService.track(
+            'dueno.pos_venta_registrada',
+            restaurantId: restaurantId,
+            props: {
+              'metodo': _mapPayMethodApi(method),
+              'items': apiItems.length,
+              'para_llevar': paraLlevar,
+            },
+          );
           return id;
         }
         return null;
@@ -1133,6 +1167,14 @@ class ApiOwnerRepository
             ).then((v) => v ?? <String, dynamic>{}),
       );
       _activeOfferId = res['id']?.toString();
+      eventsService.track(
+        'dueno.oferta_publicada',
+        restaurantId: restaurantId,
+        props: {
+          'stock': offer.slots,
+          'descuento': offer.discountPercent,
+        },
+      );
       return true;
     } on ApiException catch (e) {
       _lastError = e.userMessage;
@@ -1179,6 +1221,11 @@ class ApiOwnerRepository
           restaurant: true,
         ),
       );
+      eventsService.track(
+        'dueno.aforo_cambiado',
+        restaurantId: restaurantId,
+        props: {'lleno': busy},
+      );
       return true;
     } on ApiException catch (e) {
       _lastError = e.userMessage;
@@ -1220,6 +1267,7 @@ class ApiOwnerRepository
           restaurant: true,
         ),
       );
+      eventsService.track('dueno.cierre_caja', restaurantId: restaurantId);
       return true;
     } on ApiException catch (e) {
       if (e.status == 409) {
@@ -1316,7 +1364,11 @@ class ApiOwnerRepository
             resultado == 'OK_ADVERTENCIA';
         if (ok) {
           entry.validated = true;
-          return true;
+          eventsService.track(
+            'dueno.pedido_validado',
+            restaurantId: restaurantId,
+          );
+      return true;
         }
         _lastError = (almuerzo?['mensaje'] ?? 'No se pudo validar el pase del pedido.')
             .toString();
@@ -1422,6 +1474,10 @@ class ApiOwnerRepository
           '${ApiConfig.v1}/caja/pedidos/${entry.id}/servir',
           restaurant: true,
         ),
+      );
+      eventsService.track(
+        'dueno.pedido_entregado',
+        props: {'con_efectivo': entry.amount > 0.005},
       );
 
       // TODO(backend): B-26 — si servir/canjear no incrementa efectivoEsperadoCentavos
@@ -1681,6 +1737,11 @@ class ApiOwnerRepository
       _tableUndoByChargeId[chargeId] = _TableUndoEntry(
         consumoIds: consumoIds,
         ventaId: ventaId,
+      );
+      eventsService.track(
+        'dueno.mesa_cobrada',
+        restaurantId: restaurantId,
+        props: {'consumos': consumoIds.length},
       );
       return chargeId;
     } on ApiException catch (e) {
@@ -1984,6 +2045,11 @@ class ApiOwnerRepository
               ),
         );
       }
+      eventsService.track(
+        'dueno.menu_publicado',
+        restaurantId: menu.restaurantId,
+        props: {'platos': menu.courses.length},
+      );
       return true;
     } on ApiException catch (e) {
       _lastError = e.userMessage;
@@ -2044,6 +2110,11 @@ class ApiOwnerRepository
               body: {'agotado': soldOut},
               restaurant: true,
             ),
+      );
+      eventsService.track(
+        'dueno.plato_agotado',
+        restaurantId: restaurantId,
+        props: {'agotado': soldOut},
       );
       return true;
     } on ApiException catch (e) {
@@ -2395,6 +2466,11 @@ class ApiOwnerRepository
       if (createdClientId != null && createdClientId.isNotEmpty) {
         _physicalCardCreatedClientId[planVendidoId] = createdClientId;
       }
+      eventsService.track(
+        'dueno.cartulina_migrada',
+        restaurantId: restaurantId,
+        props: {'restantes': remaining},
+      );
       return planVendidoId;
     } on ApiException catch (e) {
       _lastError = e.userMessage;
@@ -2727,6 +2803,11 @@ class ApiOwnerRepository
       weekCollected: Money.fromCents(weekCollectedCents),
     );
     _metricsCache[period] = _MetricsCacheEntry(value: metrics, at: DateTime.now());
+    eventsService.track(
+      'dueno.metricas_vistas',
+      restaurantId: restaurantId,
+      props: {'periodo': period.name},
+    );
     return metrics;
   }
 
@@ -2833,6 +2914,13 @@ class ApiOwnerRepository
             ),
       );
       ok = true;
+      eventsService.track(
+        'dueno.plan_vendido',
+        props: {
+          'metodo': _mapPayMethodApi(method),
+          'origen': 'solicitud',
+        },
+      );
     } on ApiException catch (e) {
       _lastError = e.userMessage;
     } catch (_) {
@@ -3037,6 +3125,11 @@ class ApiOwnerRepository
           );
         }
         _optimisticOpinionReplies.remove(opinionId);
+        eventsService.track(
+          'dueno.opinion_respondida',
+          restaurantId: restaurantId,
+          props: {'repuso_almuerzo': reply == OpinionReply.replaceLunch},
+        );
       },
       onError: (err) {
         _optimisticOpinionReplies.remove(opinionId);

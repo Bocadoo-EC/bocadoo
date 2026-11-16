@@ -1,14 +1,12 @@
-import 'dart:async';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/analytics/events_service.dart';
 import '../../../core/config/app_mode.dart';
 import '../../../core/config/zones.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/network/api_config.dart';
 import '../../../core/network/api_exception.dart';
-import '../../../core/network/idempotency.dart';
 import '../../../core/session/session_notifier.dart';
 import '../../../core/utils/formatters.dart';
 
@@ -202,9 +200,14 @@ class ApiAuthRepository implements IAuthRepository {
   ApiAuthRepository(this._session);
 
   final SessionNotifier _session;
-  final String _analyticsSessionId = uuidV4();
 
   ApiClient get _api => _session.api;
+
+  String _roleLabel(AppRole r) => switch (r) {
+        AppRole.diner => 'comensal',
+        AppRole.owner => 'dueno',
+        AppRole.cashier => 'cajero',
+      };
 
   @override
   Future<void> warmUpHealth() async {
@@ -246,8 +249,27 @@ class ApiAuthRepository implements IAuthRepository {
         expiresInSeconds: (tokenData['expiresIn'] as num).toInt(),
         expectedRole: expectedRole,
       );
+      eventsService.resetSession();
+      eventsService.track(
+        'auth.login_ok',
+        props: {
+          'rol_esperado': _roleLabel(expectedRole),
+          'rol_activo': _session.isCashierAccount
+              ? 'cajero'
+              : (meInfo.restaurants.isNotEmpty ? 'dueno' : 'comensal'),
+          'tiene_restaurante': meInfo.restaurants.isNotEmpty,
+        },
+      );
       return AuthResult.success(hasRestaurant: meInfo.restaurants.isNotEmpty);
     } on ApiException catch (e) {
+      eventsService.track(
+        'auth.login_error',
+        props: {
+          'rol_esperado': _roleLabel(expectedRole),
+          'status': ?e.status,
+          'code': e.code,
+        },
+      );
       if (e.status == 400 || e.status == 401) {
         return AuthResult.failure('Correo o contraseña incorrectos.');
       }
@@ -294,7 +316,20 @@ class ApiAuthRepository implements IAuthRepository {
         lng: lng,
       );
 
-      unawaited(_sendDinerLocationEvent(zone: zone, lat: lat, lng: lng));
+      eventsService.track(
+        'auth.registro_comensal',
+        props: {'tiene_zona': zone != null && zone.isNotEmpty},
+      );
+      if (zone != null || lat != null || lng != null) {
+        eventsService.track(
+          'registro.ubicacion',
+          props: {
+            'zona': ?zone,
+            'lat': ?lat,
+            'lng': ?lng,
+          },
+        );
+      }
       return AuthResult.success(hasRestaurant: loginResult.hasRestaurant);
     } on ApiException catch (e) {
       if (e.status == 409 || e.code == 'CONFLICT') {
@@ -304,43 +339,6 @@ class ApiAuthRepository implements IAuthRepository {
       }
       return AuthResult.failure(e.userMessage);
     }
-  }
-
-  Future<void> _sendDinerLocationEvent({
-    String? zone,
-    double? lat,
-    double? lng,
-  }) async {
-    try {
-      await guard(
-        () => _api.send<Map<String, dynamic>>(
-          'POST',
-          '${ApiConfig.v1}/eventos',
-          body: {
-            'sesionId': _analyticsSessionId,
-            'plataforma': _platformCode(),
-            'eventos': [
-              {
-                'tipo': 'registro.ubicacion',
-                'ocurridoEn': DateTime.now().toUtc().toIso8601String(),
-                'propiedades': {
-                  'zona': ?zone,
-                  'lat': ?lat,
-                  'lng': ?lng,
-                },
-              },
-            ],
-          },
-        ),
-      );
-    } catch (_) {
-      // Analítica silenciosa (Plan B B-02): nunca interrumpe el registro.
-    }
-  }
-
-  String _platformCode() {
-    if (kIsWeb) return 'WEB';
-    return defaultTargetPlatform == TargetPlatform.iOS ? 'IOS' : 'ANDROID';
   }
 
   @override
@@ -412,6 +410,13 @@ class ApiAuthRepository implements IAuthRepository {
         }
       }
 
+      eventsService.track(
+        'auth.registro_dueno',
+        props: {
+          'tiene_ubicacion': lat != null && lng != null,
+          'precio_centavos': Money.toCents(looseLunchPrice),
+        },
+      );
       return AuthResult.success(hasRestaurant: true);
     } on ApiException catch (e) {
       if (e.status == 409 || e.code == 'CONFLICT') {
