@@ -7,6 +7,7 @@ import 'package:material_ui/material_ui.dart';
 import '../../../core/config/app_mode.dart';
 import '../../../core/session/session_notifier.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/bocadoo_logo.dart';
 import '../data/auth_repository.dart';
 import 'google_sign_in_flow.dart';
 
@@ -155,22 +156,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             children: [
               const SizedBox(height: 16),
 
-              // Espacio reservado para el logo oficial de Bocadoo
-              Center(
-                child: Container(
-                  width: 48,
-                  height: 48,
-                  decoration: BoxDecoration(
-                    color: cs.primary,
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: Icon(
-                    Icons.restaurant_menu_rounded,
-                    color: cs.onPrimary,
-                    size: 26,
-                  ),
-                ),
-              ),
+              const Center(child: BocadooLogo.wordmark(size: 40)),
 
               const SizedBox(height: 20),
 
@@ -178,7 +164,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 child: Column(
                   children: [
                     Text(
-                      'Tu almuerzo,',
+                      'Tus comidas,',
                       style: TextStyle(
                         fontSize: 32,
                         fontWeight: FontWeight.w800,
@@ -186,7 +172,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       ),
                     ),
                     Text(
-                      'sin cartulinas.',
+                      'en un solo lugar.',
                       style: TextStyle(
                         fontSize: 32,
                         fontWeight: FontWeight.w800,

@@ -1,8 +1,6 @@
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:material_ui/material_ui.dart';
 
-/// Logos oficiales de Bocadoo (`assets/logos/`). En tema oscuro usa la versión
-/// blanca para que el trazo siga siendo legible.
+/// Logos oficiales de Bocadoo (`assets/logos/`).
 class BocadooLogo extends StatelessWidget {
   /// Solo el isotipo circular.
   const BocadooLogo.isotipo({super.key, this.size = 32}) : _wordmark = false;
@@ -16,16 +14,17 @@ class BocadooLogo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    final name = _wordmark ? 'wordmark' : 'isotipo';
-    final asset = 'assets/logos/bocadoo-$name${dark ? '-blanco' : ''}.svg';
+    final asset = _wordmark
+        ? 'assets/logos/logo completo.png'
+        : 'assets/logos/logo isotopo.png';
     return Semantics(
       label: 'Bocadoo',
       image: true,
-      child: SvgPicture.asset(
+      child: Image.asset(
         asset,
         height: size,
         width: _wordmark ? size * 420 / 80 : size,
+        fit: BoxFit.contain,
         excludeFromSemantics: true,
       ),
     );

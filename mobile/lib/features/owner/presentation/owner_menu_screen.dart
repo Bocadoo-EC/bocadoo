@@ -144,12 +144,17 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
   }
 
   Future<void> _publish(List<CatalogDish> dishes) async {
-    setState(() => _publishing = true);
     final messenger = ScaffoldMessenger.of(context);
+    final menu = _buildMenu(dishes);
+    if (menu.courses.isEmpty) {
+      showInfoSnackBar(messenger, 'Agrega al menos un plato antes de publicar el menú.');
+      return;
+    }
+    setState(() => _publishing = true);
     final container = ProviderScope.containerOf(context, listen: false);
     final repo = ref.read(ownerMenuRepositoryProvider);
     final rid = _rid;
-    final ok = await repo.publishMenu(_buildMenu(dishes));
+    final ok = await repo.publishMenu(menu);
     if (!mounted) return;
     setState(() {
       _publishing = false;

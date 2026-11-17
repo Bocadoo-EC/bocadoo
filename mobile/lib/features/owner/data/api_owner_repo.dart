@@ -892,7 +892,11 @@ class ApiOwnerRepository
       }
       return true;
     } on ApiException catch (e) {
-      _lastError = e.userMessage;
+      final detail = e.detail.trim();
+      _lastError =
+          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+              ? detail
+              : e.userMessage;
       return false;
     } finally {
       _idempotency.done(intent);
@@ -918,7 +922,11 @@ class ApiOwnerRepository
       }
       return reverted;
     } on ApiException catch (e) {
-      _lastError = e.userMessage;
+      final detail = e.detail.trim();
+      _lastError =
+          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+              ? detail
+              : e.userMessage;
       return false;
     }
   }
@@ -1177,7 +1185,11 @@ class ApiOwnerRepository
       );
       return true;
     } on ApiException catch (e) {
-      _lastError = e.userMessage;
+      final detail = e.detail.trim();
+      _lastError =
+          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+              ? detail
+              : e.userMessage;
       return false;
     } finally {
       _idempotency.done(intent);
@@ -1204,7 +1216,11 @@ class ApiOwnerRepository
       _activeOfferId = null;
       return true;
     } on ApiException catch (e) {
-      _lastError = e.userMessage;
+      final detail = e.detail.trim();
+      _lastError =
+          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+              ? detail
+              : e.userMessage;
       return false;
     }
   }
@@ -1228,7 +1244,11 @@ class ApiOwnerRepository
       );
       return true;
     } on ApiException catch (e) {
-      _lastError = e.userMessage;
+      final detail = e.detail.trim();
+      _lastError =
+          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+              ? detail
+              : e.userMessage;
       return false;
     }
   }
@@ -1297,7 +1317,11 @@ class ApiOwnerRepository
       );
       return true;
     } on ApiException catch (e) {
-      _lastError = e.userMessage;
+      final detail = e.detail.trim();
+      _lastError =
+          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+              ? detail
+              : e.userMessage;
       return false;
     }
   }
@@ -1377,7 +1401,11 @@ class ApiOwnerRepository
         _idempotency.done(intent);
       }
     } on ApiException catch (e) {
-      _lastError = e.userMessage;
+      final detail = e.detail.trim();
+      _lastError =
+          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+              ? detail
+              : e.userMessage;
       return false;
     }
   }
@@ -1403,7 +1431,11 @@ class ApiOwnerRepository
       entry.validated = false;
       return true;
     } on ApiException catch (e) {
-      _lastError = e.userMessage;
+      final detail = e.detail.trim();
+      _lastError =
+          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+              ? detail
+              : e.userMessage;
       return false;
     }
   }
@@ -1957,6 +1989,7 @@ class ApiOwnerRepository
       }
 
       final itemsPayload = <Map<String, dynamic>>[];
+      final seenPlatoIds = <String>{};
       var orden = 0;
       for (final course in menu.courses) {
         final name = course.name.trim();
@@ -1997,12 +2030,20 @@ class ApiOwnerRepository
           byName[name.toLowerCase()] = created;
         }
 
+        if (platoId.isEmpty || !seenPlatoIds.add(platoId)) continue;
+
         itemsPayload.add(<String, dynamic>{
           'platoId': platoId,
           'seccion': seccion,
-          if (course.price != null) 'precioCentavos': Money.toCents(course.price!),
+          if (course.price != null && course.price! > 0)
+            'precioCentavos': Money.toCents(course.price!),
           'orden': orden++,
         });
+      }
+
+      if (itemsPayload.isEmpty) {
+        _lastError = 'Agrega al menos un plato para publicar el menú.';
+        return false;
       }
 
       final today = EcuadorTime.today();
@@ -2018,6 +2059,7 @@ class ApiOwnerRepository
         () => _api.send<Map<String, dynamic>>(
               'POST',
               '${ApiConfig.v1}/menu/$today/publicar',
+              body: const <String, dynamic>{},
               restaurant: true,
             ).then((v) => v ?? <String, dynamic>{}),
       );
@@ -2052,7 +2094,11 @@ class ApiOwnerRepository
       );
       return true;
     } on ApiException catch (e) {
-      _lastError = e.userMessage;
+      final detail = e.detail.trim();
+      _lastError =
+          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+              ? detail
+              : e.userMessage;
       return false;
     } catch (_) {
       _lastError = 'No se pudo publicar el menú de hoy.';
@@ -2069,12 +2115,17 @@ class ApiOwnerRepository
         () => _api.send<dynamic>(
               'POST',
               '${ApiConfig.v1}/menu/$today/despublicar',
+              body: const <String, dynamic>{},
               restaurant: true,
             ),
       );
       return true;
     } on ApiException catch (e) {
-      _lastError = e.userMessage;
+      final detail = e.detail.trim();
+      _lastError =
+          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+              ? detail
+              : e.userMessage;
       return false;
     } catch (_) {
       _lastError = 'No se pudo despublicar el menú de hoy.';
@@ -2118,7 +2169,11 @@ class ApiOwnerRepository
       );
       return true;
     } on ApiException catch (e) {
-      _lastError = e.userMessage;
+      final detail = e.detail.trim();
+      _lastError =
+          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+              ? detail
+              : e.userMessage;
       return false;
     } catch (_) {
       _lastError = 'No se pudo actualizar el estado del plato.';
@@ -2140,7 +2195,11 @@ class ApiOwnerRepository
       );
       return true;
     } on ApiException catch (e) {
-      _lastError = e.userMessage;
+      final detail = e.detail.trim();
+      _lastError =
+          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+              ? detail
+              : e.userMessage;
       return false;
     } catch (_) {
       _lastError = 'No se pudo cambiar el estado del local.';
@@ -2206,7 +2265,7 @@ class ApiOwnerRepository
       'nombre': name.trim(),
       if (description != null && description.trim().isNotEmpty)
         'descripcion': description.trim(),
-      if (price != null) 'precioCentavos': Money.toCents(price),
+      if (price != null && price > 0) 'precioCentavos': Money.toCents(price),
       if (mapped.etiquetas.isNotEmpty) 'etiquetas': mapped.etiquetas,
     };
     final res = await guard(
@@ -2377,7 +2436,11 @@ class ApiOwnerRepository
       );
       return true;
     } on ApiException catch (e) {
-      _lastError = e.userMessage;
+      final detail = e.detail.trim();
+      _lastError =
+          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+              ? detail
+              : e.userMessage;
       return false;
     } catch (_) {
       _lastError = 'No se pudo actualizar el estado del plan.';
@@ -2943,7 +3006,11 @@ class ApiOwnerRepository
       );
       return true;
     } on ApiException catch (e) {
-      _lastError = e.userMessage;
+      final detail = e.detail.trim();
+      _lastError =
+          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+              ? detail
+              : e.userMessage;
       return false;
     } catch (_) {
       _lastError = 'No se pudo rechazar la solicitud de plan.';
