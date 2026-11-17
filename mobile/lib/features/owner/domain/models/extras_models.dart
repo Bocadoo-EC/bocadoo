@@ -16,6 +16,8 @@ class OwnerOrder {
     required this.createdAt,
     this.soup,
     this.main,
+    this.drink,
+    this.estimatedArrival,
     this.takeaway = false,
     this.paidByPlan = false,
     this.validated = false,
@@ -26,6 +28,8 @@ class OwnerOrder {
   final String dinerName;
   final String? soup;
   final String? main;
+  final String? drink;
+  final DateTime? estimatedArrival;
   final bool takeaway;
 
   /// Lo que se cobra en efectivo (0 si lo cubre un plan prepagado).

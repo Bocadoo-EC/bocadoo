@@ -224,6 +224,7 @@ class ApiOwnerRepository
 
     String? soup;
     String? mainDish;
+    String? drink;
     for (final p in platos.whereType<Map>()) {
       final seccion = (p['seccion'] ?? '').toString().toUpperCase();
       final nombre = (p['nombre'] ?? '').toString();
@@ -232,6 +233,8 @@ class ApiOwnerRepository
         soup ??= nombre;
       } else if (seccion == 'FUERTE') {
         mainDish ??= nombre;
+      } else if (seccion == 'JUGO' || seccion == 'BEBIDA') {
+        drink ??= nombre;
       }
     }
 
@@ -272,6 +275,10 @@ class ApiOwnerRepository
       );
     }
 
+    final rawEta = json['horaEstimada'] ?? json['horaLlegada'];
+    final estimatedArrival =
+        rawEta != null ? _parseDateTime(rawEta) : null;
+
     return OwnerOrder(
       id: id.isEmpty ? null : id,
       number: number,
@@ -280,6 +287,8 @@ class ApiOwnerRepository
       createdAt: _parseDateTime(json['creadoEn']),
       soup: soup,
       main: mainDish,
+      drink: drink,
+      estimatedArrival: estimatedArrival,
       takeaway: json['paraLlevar'] == true,
       paidByPlan: paidByPlan,
       validated: validated,
@@ -2249,6 +2258,10 @@ class ApiOwnerRepository
     _lastError = null;
     try {
       final knownZoneId = resolveKnownZoneId(zone);
+      final roundedLat =
+          lat != null ? double.parse(lat.toStringAsFixed(6)) : null;
+      final roundedLng =
+          lng != null ? double.parse(lng.toStringAsFixed(6)) : null;
       await guard(
         () => _api.send<Map<String, dynamic>>(
           'PATCH',
@@ -2257,12 +2270,16 @@ class ApiOwnerRepository
           body: {
             if (address.trim().isNotEmpty) 'direccion': address.trim(),
             'zonaId': ?knownZoneId,
-            'latitud': ?lat,
-            'longitud': ?lng,
+            'latitud': ?roundedLat,
+            'longitud': ?roundedLng,
           },
         ),
       );
-      await _session.profile.saveDinerProfile(zone: zone, lat: lat, lng: lng);
+      await _session.profile.saveDinerProfile(
+        zone: zone,
+        lat: roundedLat,
+        lng: roundedLng,
+      );
       return true;
     } on ApiException catch (e) {
       final detail = e.detail.trim();

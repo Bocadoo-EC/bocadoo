@@ -91,9 +91,9 @@ final ownerSettingsRepositoryProvider = Provider<IOwnerSettingsRepository>(
       : ref.watch(apiOwnerRepositoryProvider),
 );
 
-void _scheduleOrdersPoll(Ref ref) {
+void _scheduleOrdersPoll(Ref ref, {Duration interval = const Duration(seconds: 8)}) {
   if (AppMode.useMock) return;
-  final timer = Timer.periodic(const Duration(seconds: 8), (_) {
+  final timer = Timer.periodic(interval, (_) {
     if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
       ref.invalidateSelf();
     }
@@ -252,7 +252,7 @@ final activeOfferProvider = FutureProvider.autoDispose<FlashOffer?>((ref) {
 });
 
 final ordersOnTheWayProvider = FutureProvider.autoDispose<int>((ref) {
-  _scheduleOrdersPoll(ref);
+  _scheduleOrdersPoll(ref, interval: const Duration(seconds: 15));
   return ref.read(ownerCashRepositoryProvider).getOrdersOnTheWayCount(ref.read(ownerRestaurantIdProvider));
 });
 

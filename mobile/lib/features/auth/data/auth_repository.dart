@@ -386,12 +386,16 @@ class ApiAuthRepository implements IAuthRepository {
 
       final knownZoneId = resolveKnownZoneId(zone);
       final e164Phone = Phone.toE164(whatsapp);
+      final roundedLat =
+          lat != null ? double.parse(lat.toStringAsFixed(6)) : null;
+      final roundedLng =
+          lng != null ? double.parse(lng.toStringAsFixed(6)) : null;
       final patchBody = <String, dynamic>{
         if (e164Phone.isNotEmpty) 'telefono': e164Phone,
         if (address != null && address.trim().isNotEmpty)
           'direccion': address.trim(),
-        'latitud': ?lat,
-        'longitud': ?lng,
+        'latitud': ?roundedLat,
+        'longitud': ?roundedLng,
         'zonaId': ?knownZoneId,
         'precioSueltoCentavos': Money.toCents(looseLunchPrice),
       };

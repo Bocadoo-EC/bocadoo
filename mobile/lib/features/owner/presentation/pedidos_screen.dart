@@ -140,6 +140,8 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     final orders = ref.watch(activeOrdersProvider);
+    final lunchesToday =
+        ref.watch(dailySummaryProvider).value?.lunchesRedeemedToday ?? 0;
     final count = orders.value?.length ?? 0;
 
     return Scaffold(
@@ -171,7 +173,12 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
               ),
               data: (list) {
                 _maybeOpenFromScanner(list);
-                if (list.isEmpty) return _Empty(onBack: _back);
+                if (list.isEmpty) {
+                  return _Empty(
+                    onBack: _back,
+                    hasDispatchedToday: lunchesToday > 0,
+                  );
+                }
                 return RefreshIndicator(
                   onRefresh: () async => _refresh(),
                   child: ListView.separated(
@@ -247,8 +254,23 @@ class _OrderCard extends StatelessWidget {
               if (order.soup != null) line('Sopa', order.soup!),
               if (order.soup != null && order.main != null) const TextSpan(text: '\n'),
               if (order.main != null) line('Segundo', order.main!),
-              if (order.takeaway) TextSpan(children: [const TextSpan(text: '\n'), line('Modalidad', 'Para llevar')]),
-              if (order.paidByPlan) TextSpan(children: [const TextSpan(text: '\n'), line('Pago', 'Plan prepagado')]),
+              if (order.drink != null) ...[
+                if (order.soup != null || order.main != null) const TextSpan(text: '\n'),
+                line('Jugo', order.drink!),
+              ],
+              const TextSpan(text: '\n'),
+              line('Modalidad', order.takeaway ? 'Para llevar' : 'En local'),
+              if (order.estimatedArrival != null) ...[
+                const TextSpan(text: '\n'),
+                line('Llegada est.', OwnerFormat.time(order.estimatedArrival!)),
+              ],
+              const TextSpan(text: '\n'),
+              line(
+                'Pago',
+                order.paidByPlan
+                    ? 'Plan Activo - Almuerzo cubierto'
+                    : 'Pago por confirmar en caja',
+              ),
             ]),
             style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, height: 1.4, color: colors.onSurface),
           ),
@@ -422,9 +444,10 @@ class _ChargeOrderSheet extends StatelessWidget {
 }
 
 class _Empty extends StatelessWidget {
-  const _Empty({required this.onBack});
+  const _Empty({required this.onBack, required this.hasDispatchedToday});
 
   final VoidCallback onBack;
+  final bool hasDispatchedToday;
 
   @override
   Widget build(BuildContext context) {
@@ -439,7 +462,10 @@ class _Empty extends StatelessWidget {
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: colors.onSurface)),
           const SizedBox(height: 4),
-          Text('Todos los almuerzos fueron despachados.',
+          Text(
+              hasDispatchedToday
+                  ? 'Todos los almuerzos fueron despachados.'
+                  : 'Aún no hay comensales en camino para el menú de hoy.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant)),
           const SizedBox(height: 20),

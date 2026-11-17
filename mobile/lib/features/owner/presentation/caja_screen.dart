@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -146,6 +147,14 @@ class _OrdersStrip extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colorScheme;
+    ref.listen<AsyncValue<int>>(ordersOnTheWayProvider, (prev, next) {
+      final prevCount = prev?.value;
+      final nextCount = next.value;
+      if (prevCount != null && nextCount != null && nextCount > prevCount) {
+        HapticFeedback.mediumImpact();
+        SystemSound.play(SystemSoundType.alert);
+      }
+    });
     final count = ref.watch(ordersOnTheWayProvider).value ?? 0;
     return Material(
       color: colors.primaryContainer,
