@@ -107,6 +107,8 @@ class OwnerSettingsScreen extends ConsumerWidget {
                 const _LogoCard(),
                 const SizedBox(height: 12),
                 const _StoreOpenCard(),
+                const SizedBox(height: 12),
+                const _SingleLunchPriceCard(),
               ],
               const SizedBox(height: 12),
               const _Card(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -542,6 +544,111 @@ class _LocalCard extends ConsumerWidget {
           ]),
         ),
       ]),
+    );
+  }
+}
+
+class _SingleLunchPriceCard extends ConsumerStatefulWidget {
+  const _SingleLunchPriceCard();
+
+  @override
+  ConsumerState<_SingleLunchPriceCard> createState() =>
+      _SingleLunchPriceCardState();
+}
+
+class _SingleLunchPriceCardState extends ConsumerState<_SingleLunchPriceCard> {
+  final _ctrl = TextEditingController();
+  bool _seeded = false;
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final price = double.tryParse(_ctrl.text.trim().replaceAll(',', '.'));
+    if (price == null || price <= 0) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Ingresa un precio válido, ej. 3.00.')),
+      );
+      return;
+    }
+    if (AppMode.useMock) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Precio actualizado en modo demo.')),
+      );
+      return;
+    }
+    setState(() => _saving = true);
+    final repo = ref.read(apiOwnerRepositoryProvider);
+    final ok = await repo.updateSingleLunchPriceAndActivate(price);
+    if (!mounted) return;
+    setState(() => _saving = false);
+    if (ok) {
+      ref.invalidate(lunchPriceProvider);
+      ref.invalidate(localInfoProvider);
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Precio guardado y local activado para comensales.'),
+        ),
+      );
+    } else {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            repo.consumeLastError() ?? 'No se pudo guardar el precio.',
+          ),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    final current = ref.watch(lunchPriceProvider).value;
+    if (!_seeded && current != null && current > 0) {
+      _ctrl.text = current.toStringAsFixed(2);
+      _seeded = true;
+    }
+    return _Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const OwnerSectionLabel('Precio del almuerzo suelto'),
+          const SizedBox(height: 6),
+          Text(
+            'Necesario para mostrar tu local a los comensales.',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              color: colors.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Row(children: [
+            Expanded(
+              child: TextField(
+                controller: _ctrl,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                  hintText: 'Ej. 3.00',
+                  prefixText: '\$ ',
+                  isDense: true,
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            ElevatedButton(
+              onPressed: _saving ? null : _save,
+              child: Text(_saving ? 'Guardando...' : 'Guardar'),
+            ),
+          ]),
+        ],
+      ),
     );
   }
 }

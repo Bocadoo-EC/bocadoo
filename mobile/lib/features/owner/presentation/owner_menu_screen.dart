@@ -121,10 +121,16 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
     for (final k in _lunchKinds) {
       final names = _today[k] ?? const <String>[];
       for (var i = 0; i < names.length; i++) {
+        final matched = dishes
+            .where((d) =>
+                d.kind == k &&
+                d.name.trim().toLowerCase() == names[i].trim().toLowerCase())
+            .firstOrNull;
         courses.add(DailyMenuCourse(
-          id: '${k.name}-$i',
+          id: matched?.id ?? '${k.name}-$i',
           name: names[i],
           category: k.courseCategory,
+          price: matched?.price,
           isSoldOut: _soldOut.contains(names[i]),
         ));
       }
@@ -949,10 +955,15 @@ class _OptionsSheet extends ConsumerStatefulWidget {
 class _OptionsSheetState extends ConsumerState<_OptionsSheet> {
   late final List<String> _selected = widget.initial;
   final _quick = TextEditingController();
+  final _quickPrice = TextEditingController();
+
+  bool get _needsPrice =>
+      widget.kind == DishKind.sopa || widget.kind == DishKind.segundo;
 
   @override
   void dispose() {
     _quick.dispose();
+    _quickPrice.dispose();
     super.dispose();
   }
 
@@ -971,13 +982,25 @@ class _OptionsSheetState extends ConsumerState<_OptionsSheet> {
     final name = _quick.text.trim();
     if (name.isEmpty) return;
     final messenger = ScaffoldMessenger.of(context);
+    double? price;
+    if (_needsPrice) {
+      price = double.tryParse(_quickPrice.text.trim().replaceAll(',', '.'));
+      if (price == null || price <= 0) {
+        showInfoSnackBar(messenger, 'Ingresa un precio válido (ej. 2.50).');
+        return;
+      }
+    }
     try {
-      await ref
-          .read(ownerCatalogRepositoryProvider)
-          .addDish(ref.read(ownerRestaurantIdProvider), name: name, kind: widget.kind);
+      await ref.read(ownerCatalogRepositoryProvider).addDish(
+            ref.read(ownerRestaurantIdProvider),
+            name: name,
+            kind: widget.kind,
+            price: price,
+          );
       if (!mounted) return;
       ref.invalidate(catalogDishesProvider);
       _quick.clear();
+      _quickPrice.clear();
       if (!_selected.contains(name)) _toggle(name);
     } on ApiException catch (e) {
       if (mounted) showInfoSnackBar(messenger, e.userMessage);
@@ -1034,6 +1057,18 @@ class _OptionsSheetState extends ConsumerState<_OptionsSheet> {
                 onSubmitted: (_) => _addQuick(),
               ),
             ),
+            if (_needsPrice) ...[
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 88,
+                child: TextField(
+                  controller: _quickPrice,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(hintText: 'Precio \$', isDense: true),
+                  onSubmitted: (_) => _addQuick(),
+                ),
+              ),
+            ],
             const SizedBox(width: 8),
             OwnerSmallButton(label: 'Agregar', onPressed: _addQuick),
           ]),
@@ -1233,12 +1268,16 @@ class _NewDishSheet extends ConsumerStatefulWidget {
 
 class _NewDishSheetState extends ConsumerState<_NewDishSheet> {
   final _name = TextEditingController();
+  final _price = TextEditingController();
   late DishKind _kind = widget.initialKind;
   String? _error;
+
+  bool get _needsPrice => _kind == DishKind.sopa || _kind == DishKind.segundo;
 
   @override
   void dispose() {
     _name.dispose();
+    _price.dispose();
     super.dispose();
   }
 
@@ -1248,11 +1287,22 @@ class _NewDishSheetState extends ConsumerState<_NewDishSheet> {
       setState(() => _error = 'Escribe el nombre del plato.');
       return;
     }
+    double? price;
+    if (_needsPrice) {
+      price = double.tryParse(_price.text.trim().replaceAll(',', '.'));
+      if (price == null || price <= 0) {
+        setState(() => _error = 'Ingresa un precio válido para ${_kind.label.toLowerCase()}, ej. 3.00.');
+        return;
+      }
+    }
     final navigator = Navigator.of(context);
     try {
-      await ref
-          .read(ownerCatalogRepositoryProvider)
-          .addDish(ref.read(ownerRestaurantIdProvider), name: name, kind: _kind);
+      await ref.read(ownerCatalogRepositoryProvider).addDish(
+            ref.read(ownerRestaurantIdProvider),
+            name: name,
+            kind: _kind,
+            price: price,
+          );
       if (!mounted) return;
       ref.invalidate(catalogDishesProvider);
       navigator.pop();
@@ -1299,6 +1349,20 @@ class _NewDishSheetState extends ConsumerState<_NewDishSheet> {
               ),
             ],
           ]),
+          if (_needsPrice) ...[
+            const SizedBox(height: 14),
+            TextField(
+              controller: _price,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'Precio (\$)',
+                hintText: 'Ej. 3.00',
+              ),
+              onChanged: (_) {
+                if (_error != null) setState(() => _error = null);
+              },
+            ),
+          ],
           const SizedBox(height: 18),
           ElevatedButton(onPressed: _save, child: const Text('Guardar plato')),
         ]),

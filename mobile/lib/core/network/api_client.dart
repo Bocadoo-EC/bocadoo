@@ -112,7 +112,10 @@ class ApiClient {
   }) async {
     final response = await dio.request<T>(
       path,
-      data: body,
+      data: body ??
+          ((method == 'POST' || method == 'PUT' || method == 'PATCH')
+              ? const <String, dynamic>{}
+              : null),
       queryParameters: query,
       options: _options(
         method: method,

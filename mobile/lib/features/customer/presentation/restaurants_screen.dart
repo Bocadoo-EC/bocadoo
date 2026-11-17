@@ -30,7 +30,10 @@ class _RestaurantsScreenState extends ConsumerState<RestaurantsScreen> {
     super.dispose();
   }
 
-  void _openRestaurant(Restaurant r) => context.push('/customer/restaurants/${r.id}');
+  void _openRestaurant(Restaurant r) {
+    ref.invalidate(restaurantDetailProvider(r.id));
+    context.push('/customer/restaurants/${r.id}');
+  }
 
   Future<void> _quickOrder(CustomerController controller, Restaurant r) async {
     final ok = await controller.quickOrder(r);

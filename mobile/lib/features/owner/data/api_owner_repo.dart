@@ -2072,6 +2072,9 @@ class ApiOwnerRepository
         populateSoldOutMap: true,
       );
 
+      // Si el local sigue en BORRADOR, asegura horarios y precio suelto antes de activar.
+      await _activateIfDraft(menu, dishes);
+
       // Si el usuario marcó platos como agotados antes de publicar, sincronízalos.
       for (final course in menu.courses) {
         if (!course.isSoldOut) continue;
@@ -2096,12 +2099,141 @@ class ApiOwnerRepository
     } on ApiException catch (e) {
       final detail = e.detail.trim();
       _lastError =
-          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+          ((e.status == 400 || e.status == 422 || e.status == 409) &&
+                  detail.isNotEmpty)
               ? detail
               : e.userMessage;
       return false;
     } catch (_) {
       _lastError = 'No se pudo publicar el menú de hoy.';
+      return false;
+    }
+  }
+
+  Future<void> _activateIfDraft(DailyMenu menu, List<CatalogDish> dishes) async {
+    final rest = await guard(
+      () => _api.getMap('${ApiConfig.v1}/restaurante', restaurant: true),
+    );
+    if ((rest['estado'] ?? '').toString() == 'ACTIVO') return;
+
+    final horarios = await guard(
+      () => _api.getList('${ApiConfig.v1}/restaurante/horarios', restaurant: true),
+    );
+    if (horarios.isEmpty) {
+      await guard(
+        () => _api.send<List<dynamic>>(
+          'PUT',
+          '${ApiConfig.v1}/restaurante/horarios',
+          restaurant: true,
+          body: {
+            'horarios': [
+              for (var day = 1; day <= 5; day++)
+                {'diaSemana': day, 'abre': '12:00', 'cierra': '15:30'},
+            ],
+          },
+        ),
+      );
+    }
+
+    if (_asInt(rest['precioSueltoCentavos']) <= 0) {
+      var looseCents = 0;
+      for (final c in menu.courses) {
+        if (c.category.toLowerCase() == 'fuerte' &&
+            c.price != null &&
+            c.price! > 0) {
+          looseCents = Money.toCents(c.price!);
+          break;
+        }
+      }
+      if (looseCents <= 0) {
+        for (final c in menu.courses) {
+          if (c.price != null && c.price! > 0) {
+            final cents = Money.toCents(c.price!);
+            if (cents > looseCents) looseCents = cents;
+          }
+        }
+      }
+      if (looseCents <= 0) {
+        for (final d in dishes) {
+          if ((d.kind == DishKind.segundo || d.kind == DishKind.sopa) &&
+              d.price != null &&
+              d.price! > 0) {
+            final cents = Money.toCents(d.price!);
+            if (cents > looseCents) looseCents = cents;
+          }
+        }
+      }
+      if (looseCents > 0) {
+        await guard(
+          () => _api.send<Map<String, dynamic>>(
+            'PATCH',
+            '${ApiConfig.v1}/restaurante',
+            restaurant: true,
+            body: {'precioSueltoCentavos': looseCents},
+          ),
+        );
+      }
+    }
+
+    await guard(
+      () => _api.send<Map<String, dynamic>>(
+        'POST',
+        '${ApiConfig.v1}/restaurante/activar',
+        restaurant: true,
+      ),
+    );
+  }
+
+  /// Actualiza el precio del almuerzo suelto e intenta activar el local si está en borrador.
+  Future<bool> updateSingleLunchPriceAndActivate(double price) async {
+    _lastError = null;
+    try {
+      final cents = Money.toCents(price);
+      await guard(
+        () => _api.send<Map<String, dynamic>>(
+          'PATCH',
+          '${ApiConfig.v1}/restaurante',
+          restaurant: true,
+          body: {'precioSueltoCentavos': cents},
+        ),
+      );
+      final rest = await guard(
+        () => _api.getMap('${ApiConfig.v1}/restaurante', restaurant: true),
+      );
+      if ((rest['estado'] ?? '').toString() != 'ACTIVO') {
+        final horarios = await guard(
+          () => _api.getList('${ApiConfig.v1}/restaurante/horarios', restaurant: true),
+        );
+        if (horarios.isEmpty) {
+          await guard(
+            () => _api.send<List<dynamic>>(
+              'PUT',
+              '${ApiConfig.v1}/restaurante/horarios',
+              restaurant: true,
+              body: {
+                'horarios': [
+                  for (var day = 1; day <= 5; day++)
+                    {'diaSemana': day, 'abre': '12:00', 'cierra': '15:30'},
+                ],
+              },
+            ),
+          );
+        }
+        await guard(
+          () => _api.send<Map<String, dynamic>>(
+            'POST',
+            '${ApiConfig.v1}/restaurante/activar',
+            restaurant: true,
+          ),
+        );
+      }
+      return true;
+    } on ApiException catch (e) {
+      final detail = e.detail.trim();
+      _lastError = detail.isNotEmpty ? detail : e.userMessage;
+      return false;
+    } catch (_) {
+      _lastError = 'No se pudo actualizar el precio del almuerzo suelto.';
       return false;
     }
   }

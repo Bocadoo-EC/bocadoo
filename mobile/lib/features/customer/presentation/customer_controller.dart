@@ -277,11 +277,15 @@ class CustomerController extends ChangeNotifier {
         planTemplates: _state.planTemplates,
         undo: _state.undo,
       ));
-      if (_state.plansRestaurantId == null && restaurants.isNotEmpty) {
-        await selectPlansRestaurant(restaurants.first.id);
+      if (restaurants.isNotEmpty) {
+        final targetId = _state.plansRestaurantId != null &&
+                restaurants.any((r) => r.id == _state.plansRestaurantId)
+            ? _state.plansRestaurantId!
+            : restaurants.first.id;
+        await selectPlansRestaurant(targetId);
       }
       _syncOrderPolling(order, table: table);
-      unawaited(_hydrateRestaurants(restaurants));
+      unawaited(_hydrateRestaurants(restaurants, force: silent));
     } catch (e) {
       if (_state.passes.isNotEmpty) {
         _emit(_state.copyWith(status: CustomerStatus.success, isOffline: true));
@@ -591,14 +595,17 @@ class CustomerController extends ChangeNotifier {
     }
   }
 
-  Future<void> _hydrateRestaurants(List<Restaurant> base) async {
+  Future<void> _hydrateRestaurants(
+    List<Restaurant> base, {
+    bool force = false,
+  }) async {
     if (base.isEmpty) return;
     final updated = List<Restaurant>.from(base);
     var changed = false;
     var fetched = 0;
-    for (var i = 0; i < updated.length && fetched < 5; i++) {
+    for (var i = 0; i < updated.length && fetched < 8; i++) {
       if (_disposed) return;
-      if (updated[i].hasMenu) continue;
+      if (!force && updated[i].hasMenu) continue;
       fetched++;
       try {
         final detail = await _repository.getRestaurantById(updated[i].id);

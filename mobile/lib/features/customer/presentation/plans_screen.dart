@@ -64,8 +64,11 @@ class PlansScreen extends ConsumerWidget {
     final b = context.bocadooColors;
     final singleCents = (current.singleLunchPrice * 100).round();
 
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
+    return RefreshIndicator(
+      onRefresh: () => controller.loadDashboard(silent: true),
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
       children: [
         _SummaryCard(restaurant: current, pass: s.passFor(current.id)),
         const SizedBox(height: 16),
@@ -129,6 +132,7 @@ class PlansScreen extends ConsumerWidget {
         const SizedBox(height: 4),
         const _WhyPrepay(),
       ],
+      ),
     );
   }
 }
