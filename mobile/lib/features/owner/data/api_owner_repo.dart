@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/analytics/events_service.dart';
+import '../../../core/config/zones.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/contracts/repositories.dart';
 import '../../../core/network/api_client.dart';
@@ -2238,6 +2239,41 @@ class ApiOwnerRepository
     }
   }
 
+  /// Actualiza dirección, zona y coordenadas del local en el servidor y caché local.
+  Future<bool> updateLocalLocation({
+    required String address,
+    String? zone,
+    double? lat,
+    double? lng,
+  }) async {
+    _lastError = null;
+    try {
+      final knownZoneId = resolveKnownZoneId(zone);
+      await guard(
+        () => _api.send<Map<String, dynamic>>(
+          'PATCH',
+          '${ApiConfig.v1}/restaurante',
+          restaurant: true,
+          body: {
+            if (address.trim().isNotEmpty) 'direccion': address.trim(),
+            'zonaId': ?knownZoneId,
+            'latitud': ?lat,
+            'longitud': ?lng,
+          },
+        ),
+      );
+      await _session.profile.saveDinerProfile(zone: zone, lat: lat, lng: lng);
+      return true;
+    } on ApiException catch (e) {
+      final detail = e.detail.trim();
+      _lastError = detail.isNotEmpty ? detail : e.userMessage;
+      return false;
+    } catch (_) {
+      _lastError = 'No se pudo guardar la ubicación del local.';
+      return false;
+    }
+  }
+
   @override
   Future<bool> unpublishMenu(String restaurantId) async {
     _lastError = null;
@@ -3038,10 +3074,21 @@ class ApiOwnerRepository
       }
     }
     final remoteLogo = data['logoUrl']?.toString();
+    final zonaMap = data['zona'];
+    var zone = zonaMap is Map ? (zonaMap['nombre'] ?? '').toString() : '';
+    var lat = (data['latitud'] as num?)?.toDouble();
+    var lng = (data['longitud'] as num?)?.toDouble();
+    final profile = _session.profile;
+    if (zone.isEmpty) zone = await profile.getZone() ?? '';
+    lat ??= await profile.getLat();
+    lng ??= await profile.getLng();
     return LocalInfo(
       name: (data['nombre'] ?? '').toString(),
       address: (data['direccion'] ?? '').toString(),
       seats: _asInt(data['puestos']),
+      zone: zone,
+      latitude: lat,
+      longitude: lng,
       logo: localLogo,
       logoUrl: remoteLogo != null && remoteLogo.isNotEmpty ? remoteLogo : null,
     );

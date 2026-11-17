@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../../core/config/api_capabilities.dart';
@@ -11,6 +12,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/external_links.dart';
 import '../../../core/widgets/appearance_selector.dart';
 import '../../../core/widgets/bocadoo_logo.dart';
+import '../../../core/widgets/location_picker_map.dart';
 import '../data/api_owner_repo.dart';
 import '../domain/models/extras_models.dart';
 import '../domain/models/metrics_models.dart';
@@ -76,6 +78,8 @@ class OwnerSettingsScreen extends ConsumerWidget {
           Expanded(
             child: ListView(padding: const EdgeInsets.fromLTRB(16, 16, 16, 32), children: [
               _RoleCard(role: role),
+              const SizedBox(height: 12),
+              const _LocalCard(),
               if (isOwner) ...[
                 const SizedBox(height: 12),
                 _LinkCard(
@@ -118,8 +122,6 @@ class OwnerSettingsScreen extends ConsumerWidget {
               ])),
               const SizedBox(height: 12),
               const _SupportCard(),
-              const SizedBox(height: 12),
-              const _LocalCard(),
               const SizedBox(height: 24),
               OutlinedButton.icon(
                 onPressed: () async {
@@ -518,10 +520,131 @@ class _SupportCard extends StatelessWidget {
 class _LocalCard extends ConsumerWidget {
   const _LocalCard();
 
+  Future<void> _editLocation(
+    BuildContext context,
+    WidgetRef ref,
+    LocalInfo? info,
+  ) async {
+    const zones = <String, LatLng>{
+      'Frente a la PUCE': LatLng(-0.2093, -78.4910),
+      'La Floresta': LatLng(-0.2055, -78.4855),
+      'La Mariscal': LatLng(-0.2022, -78.4932),
+      'Centro Histórico': LatLng(-0.2201, -78.5123),
+      'Cumbayá': LatLng(-0.2025, -78.4310),
+      'UDLA Granados': LatLng(-0.1695, -78.4728),
+      'EPN / Salesiana': LatLng(-0.2116, -78.4900),
+      'Villaflora': LatLng(-0.2448, -78.5162),
+    };
+    final addrCtrl = TextEditingController(text: info?.address ?? '');
+    var selectedZone = zones.containsKey(info?.zone) ? info!.zone : zones.keys.first;
+    var pin = (info?.latitude != null && info?.longitude != null)
+        ? LatLng(info!.latitude!, info.longitude!)
+        : zones[selectedZone]!;
+
+    final saved = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          final colors = ctx.colorScheme;
+          return SafeArea(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                20,
+                0,
+                20,
+                MediaQuery.viewInsetsOf(ctx).bottom + 20,
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'Ubicación del local',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w900,
+                        color: colors.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: addrCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Dirección',
+                        hintText: 'Ej. Av. 12 de Octubre y Patria',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        for (final z in zones.keys)
+                          ChoiceChip(
+                            label: Text(z),
+                            selected: selectedZone == z,
+                            onSelected: (_) => setSheetState(() {
+                              selectedZone = z;
+                              pin = zones[z]!;
+                            }),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    LocationPickerMap(
+                      zones: zones,
+                      selectedZone: selectedZone,
+                      onZoneSelected: (z) => setSheetState(() => selectedZone = z),
+                      onLocationChanged: (p) => pin = p,
+                      height: 230,
+                    ),
+                    const SizedBox(height: 16),
+                    ElevatedButton.icon(
+                      onPressed: () => Navigator.of(ctx).pop(true),
+                      icon: const Icon(Icons.check_rounded),
+                      label: const Text('Guardar ubicación'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+    if (saved != true || !context.mounted) return;
+    if (AppMode.useMock) return;
+    final repo = ref.read(apiOwnerRepositoryProvider);
+    final ok = await repo.updateLocalLocation(
+      address: addrCtrl.text,
+      zone: selectedZone,
+      lat: pin.latitude,
+      lng: pin.longitude,
+    );
+    if (!context.mounted) return;
+    if (ok) {
+      ref.invalidate(localInfoProvider);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Ubicación actualizada en el mapa.')),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+              repo.consumeLastError() ?? 'No se pudo guardar la ubicación.'),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colorScheme;
     final info = ref.watch(localInfoProvider).value;
+    final isOwner = ref.watch(ownerRoleProvider) == OwnerRole.owner;
     return _Card(
       child: Row(children: [
         Container(
@@ -538,11 +661,46 @@ class _LocalCard extends ConsumerWidget {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(info?.name ?? ref.watch(ownerRestaurantNameProvider),
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: colors.onSurface)),
-            if (info != null)
-              Text('${info.address} · ${info.seats} puestos',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant)),
+            if (info != null) ...[
+              Text(
+                [
+                  if (info.address.trim().isNotEmpty) info.address.trim(),
+                  if (info.zone.trim().isNotEmpty) info.zone.trim(),
+                  '${info.seats} puestos',
+                ].join(' · '),
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant),
+              ),
+              if (info.latitude != null && info.longitude != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Row(children: [
+                    Icon(Icons.location_on_outlined, size: 14, color: colors.primary),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        '${info.latitude!.toStringAsFixed(5)}, ${info.longitude!.toStringAsFixed(5)}',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant),
+                      ),
+                    ),
+                  ]),
+                )
+              else if (info.address.trim().isEmpty && info.zone.trim().isEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    'Ubicación no registrada en el servidor',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant),
+                  ),
+                ),
+            ],
           ]),
         ),
+        if (isOwner)
+          IconButton(
+            tooltip: 'Editar ubicación',
+            onPressed: () => _editLocation(context, ref, info),
+            icon: Icon(Icons.edit_location_alt_outlined, color: colors.primary),
+          ),
       ]),
     );
   }
@@ -643,6 +801,10 @@ class _SingleLunchPriceCardState extends ConsumerState<_SingleLunchPriceCard> {
             ),
             const SizedBox(width: 10),
             ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                minimumSize: const Size(0, 48),
+                padding: const EdgeInsets.symmetric(horizontal: 18),
+              ),
               onPressed: _saving ? null : _save,
               child: Text(_saving ? 'Guardando...' : 'Guardar'),
             ),

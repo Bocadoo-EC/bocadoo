@@ -580,8 +580,17 @@ class ApiCustomerRepository implements ICustomerRepository {
 
   @override
   Future<CustomerProfile> getProfile() async {
-    final meMap = await guard(() => _api.getMap('${ApiConfig.v1}/auth/me'));
-    final me = MeInfo.fromJson(meMap);
+    MeInfo me;
+    try {
+      final meMap = await guard(() => _api.getMap('${ApiConfig.v1}/auth/me'));
+      me = MeInfo.fromJson(meMap);
+    } catch (_) {
+      me = MeInfo(
+        userId: _session?.userId ?? '',
+        name: _session?.userName ?? 'Comensal',
+        restaurants: _session?.restaurants ?? const [],
+      );
+    }
 
     String? habitualPlanName;
     String? habitualRestId;

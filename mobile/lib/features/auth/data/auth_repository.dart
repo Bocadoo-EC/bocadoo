@@ -382,6 +382,7 @@ class ApiAuthRepository implements IAuthRepository {
       if (!loginResult.ok) return loginResult;
 
       await _session.profile.saveOwnerRuc(ruc);
+      await _session.profile.saveDinerProfile(zone: zone, lat: lat, lng: lng);
 
       final knownZoneId = resolveKnownZoneId(zone);
       final e164Phone = Phone.toE164(whatsapp);

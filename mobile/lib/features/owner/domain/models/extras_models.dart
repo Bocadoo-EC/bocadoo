@@ -160,6 +160,9 @@ class LocalInfo {
     required this.name,
     required this.address,
     required this.seats,
+    this.zone = '',
+    this.latitude,
+    this.longitude,
     this.logo,
     this.logoUrl,
   });
@@ -167,6 +170,9 @@ class LocalInfo {
   final String name;
   final String address;
   final int seats;
+  final String zone;
+  final double? latitude;
+  final double? longitude;
 
   /// Logo subido (JPEG/PNG en memoria); `null` = se muestra el monograma o [logoUrl].
   final Uint8List? logo;
