@@ -6,13 +6,10 @@ import 'package:material_ui/material_ui.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../../core/config/api_capabilities.dart';
-import '../../../core/config/app_mode.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/contracts/qr_parser.dart';
 import '../../../core/theme/app_theme.dart';
-import '../../auth/data/auth_repository.dart';
 import '../domain/feedback_rules.dart';
-import 'account_screen.dart' show customerProfileProvider;
 import 'customer_controller.dart';
 import 'customer_widgets.dart';
 import 'feedback_card.dart';
@@ -48,17 +45,6 @@ class _PaseScreenState extends ConsumerState<PaseScreen> {
     super.dispose();
   }
 
-  Future<void> _logout() async {
-    if (!AppMode.useMock) {
-      await ref.read(authRepositoryProvider).logout();
-      ref.invalidate(customerRepositoryProvider);
-      ref.invalidate(customerControllerProvider);
-      ref.invalidate(customerProfileProvider);
-    }
-    if (!mounted) return;
-    context.go('/login');
-  }
-
   @override
   Widget build(BuildContext context) {
     final controller = ref.watch(customerControllerProvider);
@@ -66,18 +52,20 @@ class _PaseScreenState extends ConsumerState<PaseScreen> {
       listenable: controller,
       builder: (context, _) {
         final s = controller.state;
-        if (s.passes.isEmpty &&
+        final hasAnyPassOrLive =
+            s.passes.isNotEmpty || s.activeOrder != null || s.activeTable != null;
+        if (!hasAnyPassOrLive &&
             (s.isLoading || s.status == CustomerStatus.initial)) {
           return const _PaseSkeleton();
         }
-        if (s.passes.isEmpty && s.isError) {
+        if (!hasAnyPassOrLive && s.isError) {
           return CustomerErrorView(
             title: 'Error al cargar pase',
             message: s.errorMessage ?? 'No pudimos cargar tu pase.',
             onRetry: controller.loadDashboard,
           );
         }
-        if (s.passes.isEmpty) return _EmptyPase(onLogout: _logout);
+        final stampRestaurantId = s.currentPass?.restaurantId;
         return RefreshIndicator(
           onRefresh: () => controller.loadDashboard(silent: true),
           child: SingleChildScrollView(
@@ -86,7 +74,7 @@ class _PaseScreenState extends ConsumerState<PaseScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _Hero(state: s, controller: controller, onLogout: _logout),
+                _Hero(state: s, controller: controller),
                 Transform.translate(
                   offset: const Offset(0, -48),
                   child: Padding(
@@ -102,11 +90,12 @@ class _PaseScreenState extends ConsumerState<PaseScreen> {
                           const SizedBox(height: 16),
                           FeedbackCard(controller: controller),
                         ],
-                        if (s.stampCards[s.currentPass!.restaurantId]
-                            case final card?) ...[
-                          const SizedBox(height: 16),
-                          _StampSection(card: card, controller: controller),
-                        ],
+                        if (stampRestaurantId != null)
+                          if (s.stampCards[stampRestaurantId]
+                              case final card?) ...[
+                            const SizedBox(height: 16),
+                            _StampSection(card: card, controller: controller),
+                          ],
                         const SizedBox(height: 16),
                         _TableButton(hasTable: s.activeTable != null),
                         const SizedBox(height: 20),
@@ -133,12 +122,10 @@ String _modeLabel(QrMode mode, CustomerUiState s) => switch (mode) {
 class _Hero extends StatelessWidget {
   final CustomerUiState state;
   final CustomerController controller;
-  final VoidCallback onLogout;
 
   const _Hero({
     required this.state,
     required this.controller,
-    required this.onLogout,
   });
 
   @override
@@ -146,7 +133,7 @@ class _Hero extends StatelessWidget {
     final b = context.bocadooColors;
     final colors = context.colorScheme;
     final fg = b.imageForeground;
-    final pass = state.currentPass!;
+    final pass = state.currentPass;
     final modes = state.availableQrModes;
     final mode = state.qrMode;
 
@@ -158,7 +145,7 @@ class _Hero extends StatelessWidget {
       padding: EdgeInsets.fromLTRB(
         20,
         MediaQuery.paddingOf(context).top + 16,
-        12,
+        20,
         72,
       ),
       child: Column(
@@ -190,7 +177,9 @@ class _Hero extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      pass.restaurantName,
+                      pass?.restaurantName ??
+                          state.activeOrder?.restaurantName ??
+                          'Bocadoo',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -209,7 +198,9 @@ class _Hero extends StatelessWidget {
                   vertical: 5,
                 ),
                 decoration: BoxDecoration(
-                  color: b.successContainer,
+                  color: pass != null
+                      ? b.successContainer
+                      : fg.withValues(alpha: 0.18),
                   borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
                 ),
                 child: Row(
@@ -219,26 +210,21 @@ class _Hero extends StatelessWidget {
                       width: 8,
                       height: 8,
                       decoration: BoxDecoration(
-                        color: b.success,
+                        color: pass != null ? b.success : fg,
                         shape: BoxShape.circle,
                       ),
                     ),
                     const SizedBox(width: 6),
                     Text(
-                      'Pase activo',
+                      pass != null ? 'Pase activo' : 'Sin plan',
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w900,
-                        color: b.success,
+                        color: pass != null ? b.success : fg,
                       ),
                     ),
                   ],
                 ),
-              ),
-              IconButton(
-                tooltip: 'Cerrar sesión',
-                onPressed: onLogout,
-                icon: Icon(Icons.logout_rounded, size: 20, color: fg),
               ),
             ],
           ),
@@ -321,34 +307,81 @@ class _Hero extends StatelessWidget {
             padding: const EdgeInsets.only(right: 8),
             child: Column(
               children: [
-                Text(
-                  pass.restaurantName,
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w900,
-                    height: 1.15,
+                if (pass != null) ...[
+                  Text(
+                    pass.restaurantName,
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w900,
+                      height: 1.15,
+                      color: fg,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  _BigCount(
+                    value: '${pass.remainingLunches}',
+                    unit: 'almuerzos',
+                    size: 52,
                     color: fg,
                   ),
-                ),
-                const SizedBox(height: 6),
-                _BigCount(
-                  value: '${pass.remainingLunches}',
-                  unit: 'almuerzos',
-                  size: 52,
-                  color: fg,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Vence ${formatShortDate(pass.expiresAt)}',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: fg.withValues(alpha: 0.85),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Vence ${formatShortDate(pass.expiresAt)}',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: fg.withValues(alpha: 0.85),
+                    ),
                   ),
-                ),
+                ] else if (state.activeOrder != null) ...[
+                  Text(
+                    state.activeOrder!.restaurantName,
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w900,
+                      height: 1.15,
+                      color: fg,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Preorden #${state.activeOrder!.orderNumber}',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
+                      color: fg.withValues(alpha: 0.9),
+                    ),
+                  ),
+                ] else ...[
+                  Text(
+                    'Ahorra en cada almuerzo',
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w900,
+                      height: 1.15,
+                      color: fg,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Adquiere un plan en tu restaurante favorito y olvídate del efectivo diario.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: fg.withValues(alpha: 0.88),
+                    ),
+                  ),
+                ],
                 if (mode == QrMode.preorden && state.activeOrder != null) ...[
                   const SizedBox(height: 10),
                   Container(
@@ -487,6 +520,75 @@ class _QrCard extends StatelessWidget {
       fontWeight: FontWeight.w600,
       color: colors.onSurfaceVariant,
     );
+
+    if (state.availableQrModes.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(22),
+        decoration: BoxDecoration(
+          color: colors.surface,
+          borderRadius: BorderRadius.circular(32),
+          border: Border.all(color: colors.outlineVariant),
+          boxShadow: [
+            BoxShadow(
+              color: colors.primary.withValues(alpha: 0.10),
+              blurRadius: 28,
+              offset: const Offset(0, 12),
+            ),
+          ],
+        ),
+        child: Column(
+          children: [
+            Container(
+              width: 64,
+              height: 64,
+              decoration: BoxDecoration(
+                color: colors.primaryContainer,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.local_offer_rounded,
+                size: 30,
+                color: colors.primary,
+              ),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              'Todavía no tienes un plan activo',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w900,
+                color: colors.onSurface,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Elige un paquete semanal o mensual y presenta tu QR en caja para ahorrar en cada comida.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: colors.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 18),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () => context.go('/customer/plans'),
+                icon: const Icon(Icons.confirmation_number_outlined),
+                label: const Text('Ver planes y ahorrar'),
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextButton(
+              onPressed: () => context.go('/customer/restaurants'),
+              child: Text('Explorar restaurantes cercanos', style: linkStyle),
+            ),
+          ],
+        ),
+      );
+    }
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -1015,77 +1117,6 @@ class _RecentActivity extends StatelessWidget {
               ),
             ),
       ],
-    );
-  }
-}
-
-class _EmptyPase extends StatelessWidget {
-  final VoidCallback onLogout;
-
-  const _EmptyPase({required this.onLogout});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colorScheme;
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Align(
-              alignment: Alignment.centerRight,
-              child: IconButton(
-                tooltip: 'Cerrar sesión',
-                onPressed: onLogout,
-                icon: Icon(Icons.logout_rounded, color: colors.onSurface),
-              ),
-            ),
-            const Spacer(),
-            Center(
-              child: Container(
-                width: 64,
-                height: 64,
-                decoration: BoxDecoration(
-                  color: colors.primaryContainer,
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  Icons.restaurant_rounded,
-                  size: 32,
-                  color: colors.primary,
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'Sin planes activos',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.w900,
-                color: colors.onSurface,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Encuentra un restaurante cercano y adquiere tu primer paquete.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w600,
-                color: colors.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 32),
-            ElevatedButton(
-              onPressed: () => context.go('/customer/restaurants'),
-              child: const Text('Explorar restaurantes'),
-            ),
-            const Spacer(),
-          ],
-        ),
-      ),
     );
   }
 }

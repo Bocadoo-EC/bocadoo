@@ -465,8 +465,14 @@ class ApiCustomerRepository implements ICustomerRepository {
 
     final prefs = await SharedPreferences.getInstance();
     for (final item in items) {
-      final estado = (item['estado'] ?? '').toString();
-      if (estado == 'EXPIRADA' || estado == 'CANCELADA') continue;
+      final estado = (item['estado'] ?? '').toString().toUpperCase();
+      if (estado == 'EXPIRADA' ||
+          estado == 'CANCELADA' ||
+          estado == 'RECHAZADA' ||
+          estado == 'FINALIZADA' ||
+          estado == 'ENTREGADA') {
+        continue;
+      }
 
       final id = (item['id'] ?? '').toString();
       final numero = (item['numero'] ?? '').toString();
@@ -479,6 +485,12 @@ class ApiCustomerRepository implements ICustomerRepository {
         final seenByNumber =
             numero.isNotEmpty && prefs.getBool('pedido_visto_$numero') == true;
         if (seenById || seenByNumber) continue;
+        final createdRaw = item['creadoEn']?.toString();
+        final created = createdRaw != null ? DateTime.tryParse(createdRaw) : null;
+        if (created != null &&
+            EcuadorTime.now().difference(created.toUtc().subtract(const Duration(hours: 5))).inHours >= 12) {
+          continue;
+        }
       }
 
       return _mapPedidoToActiveOrder(item);
@@ -1318,10 +1330,10 @@ class ApiCustomerRepository implements ICustomerRepository {
       if (name.isNotEmpty) parts.add(name);
     }
 
-    final estado = (json['estado'] ?? 'EN_CAMINO').toString();
+    final estado = (json['estado'] ?? 'EN_CAMINO').toString().toUpperCase();
     final status = switch (estado) {
       'CANJEADA' => 'LISTO',
-      'SERVIDA' => 'ENTREGADO',
+      'SERVIDA' || 'ENTREGADA' || 'FINALIZADA' => 'ENTREGADO',
       _ => 'PREPARANDO',
     };
 

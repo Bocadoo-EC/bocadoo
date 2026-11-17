@@ -435,8 +435,13 @@ class CustomerController extends ChangeNotifier {
   }) async {
     lastActionError = null;
     if (_state.activeOrder != null && !_state.activeOrder!.isDelivered) {
-      lastActionError = 'Ya tienes una orden activa pendiente.';
-      return false;
+      final latest = await _repository.getActiveOrder();
+      if (latest != null && !latest.isDelivered) {
+        _emit(_state.copyWith(activeOrder: latest));
+        lastActionError = 'Ya tienes una orden activa pendiente.';
+        return false;
+      }
+      _emit(_state.copyWith(clearActiveOrder: true));
     }
     try {
       final order = await _repository.preorder(
