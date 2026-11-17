@@ -6,6 +6,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../../core/contracts/models.dart';
 import '../../../core/theme/app_theme.dart';
+import '../domain/models/cash_models.dart';
 import '../domain/models/extras_models.dart';
 import 'owner_controller.dart';
 import 'owner_format.dart';
@@ -26,9 +27,12 @@ class _CajaScreenState extends ConsumerState<CajaScreen> {
   @override
   void initState() {
     super.initState();
-    // Refresca la cuenta regresiva de "Lleno (Nm)".
+    // Refresca la cuenta regresiva de "Lleno (Nm)" y solicitudes de plan entrantes.
     _ticker = Timer.periodic(const Duration(seconds: 20), (_) {
-      if (mounted) setState(() {});
+      if (!mounted) return;
+      ref.invalidate(planRequestsProvider);
+      ref.invalidate(ordersOnTheWayProvider);
+      setState(() {});
     });
   }
 
@@ -182,6 +186,8 @@ class _CajaBody extends ConsumerWidget {
     final colors = context.colorScheme;
     final offer = ref.watch(activeOfferProvider).value;
     final tables = ref.watch(pendingTablesProvider).value ?? const <PendingTable>[];
+    final planRequests =
+        ref.watch(planRequestsProvider).value ?? const <OwnerPlanRequest>[];
     final isOwner = ref.watch(ownerRoleProvider) == OwnerRole.owner;
     final charges = summary.transactions.where((t) => t.amount > 0).take(20).toList();
     final total = charges.fold<double>(0, (sum, t) => sum + t.amount);
@@ -189,6 +195,10 @@ class _CajaBody extends ConsumerWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
       children: [
+        if (planRequests.isNotEmpty) ...[
+          _PlanRequestsSection(requests: planRequests),
+          const SizedBox(height: 12),
+        ],
         for (final t in tables) ...[
           _TableBanner(
             table: t,
@@ -551,6 +561,164 @@ class _CajaError extends StatelessWidget {
             OutlinedButton(onPressed: onRetry, child: const Text('Reintentar')),
           ]),
         ),
+      ),
+    );
+  }
+}
+
+class _PlanRequestsSection extends ConsumerStatefulWidget {
+  const _PlanRequestsSection({required this.requests});
+
+  final List<OwnerPlanRequest> requests;
+
+  @override
+  ConsumerState<_PlanRequestsSection> createState() => _PlanRequestsSectionState();
+}
+
+class _PlanRequestsSectionState extends ConsumerState<_PlanRequestsSection> {
+  String? _busyId;
+
+  Future<void> _charge(OwnerPlanRequest req) async {
+    final method = await showModalBottomSheet<OwnerPayMethod>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        final colors = ctx.colorScheme;
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('Cobrar plan · ${req.clientName}',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: colors.onSurface)),
+                const SizedBox(height: 4),
+                Text('${req.planName} (${req.lunches} almuerzos) · ${OwnerFormat.money(req.price)}',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant)),
+                const SizedBox(height: 16),
+                for (final m in OwnerPayMethod.values) ...[
+                  ElevatedButton(
+                    onPressed: () => Navigator.of(ctx).pop(m),
+                    child: Text(switch (m) {
+                      OwnerPayMethod.cash => 'Cobrar en Efectivo',
+                      OwnerPayMethod.transfer => 'Cobrar por Transferencia',
+                      OwnerPayMethod.deuna => 'Cobrar por Deuna',
+                    }),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (method == null || !mounted) return;
+    setState(() => _busyId = req.id);
+    final repo = ref.read(apiOwnerRepositoryProvider);
+    final ok = await repo.chargePlanRequest(req.id, method: method);
+    if (!mounted) return;
+    setState(() => _busyId = null);
+    if (ok) {
+      ref.invalidate(planRequestsProvider);
+      ref.invalidate(dailySummaryProvider);
+      ref.invalidate(ownerClientsProvider);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Plan ${req.planName} activado para ${req.clientName}.')),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(repo.lastError ?? 'No se pudo cobrar la solicitud.')),
+      );
+    }
+  }
+
+  Future<void> _reject(OwnerPlanRequest req) async {
+    setState(() => _busyId = req.id);
+    final repo = ref.read(apiOwnerRepositoryProvider);
+    final ok = await repo.rejectPlanRequest(req.id);
+    if (!mounted) return;
+    setState(() => _busyId = null);
+    if (ok) {
+      ref.invalidate(planRequestsProvider);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Solicitud de ${req.clientName} rechazada.')),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(repo.lastError ?? 'No se pudo rechazar la solicitud.')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: colors.primaryContainer.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+        border: Border.all(color: colors.primary.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(children: [
+            Icon(Icons.notifications_active_outlined, size: 18, color: colors.primary),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Solicitudes de plan (${widget.requests.length})',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: colors.onSurface),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 10),
+          for (final req in widget.requests) ...[
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: colors.surface,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: colors.outlineVariant),
+              ),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                Row(children: [
+                  Expanded(
+                    child: Text(req.clientName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: colors.onSurface)),
+                  ),
+                  Text(OwnerFormat.money(req.price),
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: colors.primary)),
+                ]),
+                const SizedBox(height: 2),
+                Text('${req.planName} · ${req.lunches} almuerzos',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant)),
+                const SizedBox(height: 10),
+                Row(children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: _busyId == req.id ? null : () => _reject(req),
+                      child: const Text('Rechazar'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: _busyId == req.id ? null : () => _charge(req),
+                      child: const Text('Cobrar'),
+                    ),
+                  ),
+                ]),
+              ]),
+            ),
+            if (req != widget.requests.last) const SizedBox(height: 8),
+          ],
+        ],
       ),
     );
   }

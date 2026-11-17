@@ -1428,8 +1428,8 @@ class ApiCustomerRepository implements ICustomerRepository {
   ) {
     return switch (section) {
       'SOPA' => 'Sopa',
-      'FUERTE' => 'Plato Fuerte',
-      'BEBIDA' => 'Bebida',
+      'FUERTE' || 'SEGUNDO' || 'PLATO_FUERTE' => 'Plato Fuerte',
+      'BEBIDA' || 'JUGO' => 'Bebida',
       'POSTRE' => 'Postre',
       'ADICIONAL' =>
         (lowerTags.contains('desayuno') && precioCentavos != null)

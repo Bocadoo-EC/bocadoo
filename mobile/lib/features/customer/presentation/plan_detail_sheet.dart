@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../../core/contracts/models.dart';
 import '../../../core/theme/app_theme.dart';
@@ -20,10 +21,10 @@ class PlanDetailSheet extends ConsumerStatefulWidget {
 class _PlanDetailSheetState extends ConsumerState<PlanDetailSheet> {
   bool _showFullTerms = false;
   bool _sending = false;
+  bool _requested = false;
 
   Future<void> _confirm(CustomerController controller, PlanTemplate plan) async {
     final messenger = ScaffoldMessenger.of(context);
-    final router = GoRouter.of(context);
     setState(() => _sending = true);
     final ok = await controller.requestPlan(plan);
     if (!mounted) return;
@@ -35,12 +36,7 @@ class _PlanDetailSheetState extends ConsumerState<PlanDetailSheet> {
       }
       return;
     }
-    router.pop();
-    messenger.showSnackBar(SnackBar(
-      behavior: SnackBarBehavior.floating,
-      margin: const EdgeInsets.fromLTRB(16, 0, 16, 76),
-      content: Text('¡Solicitud de ${plan.name} enviada! Acércate a caja para activar.'),
-    ));
+    setState(() => _requested = true);
   }
 
   @override
@@ -76,7 +72,15 @@ class _PlanDetailSheetState extends ConsumerState<PlanDetailSheet> {
                     onRetry: () => ref.invalidate(planDetailProvider(widget.planId)),
                   ),
           )
-        else ...[
+        else if (_requested) ...[
+          Expanded(
+            child: _RequestQrView(
+              plan: plan,
+              restaurant: restaurant,
+              onDone: () => context.pop(),
+            ),
+          ),
+        ] else ...[
           Expanded(child: _details(context, plan, restaurant)),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
@@ -420,6 +424,85 @@ class _Term extends StatelessWidget {
           ),
         ),
       ]),
+    );
+  }
+}
+
+class _RequestQrView extends StatelessWidget {
+  const _RequestQrView({
+    required this.plan,
+    required this.restaurant,
+    required this.onDone,
+  });
+
+  final PlanTemplate plan;
+  final Restaurant restaurant;
+  final VoidCallback onDone;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    final b = context.bocadooColors;
+    final qrPayload = 'BCD-PLAN-REQ:${plan.id}';
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+      children: [
+        Center(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: b.successContainer,
+              borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.check_circle_rounded, size: 16, color: b.success),
+              const SizedBox(width: 6),
+              Text('Solicitud enviada a caja',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: b.success)),
+            ]),
+          ),
+        ),
+        const SizedBox(height: 16),
+        Center(
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: b.qrBackground,
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: colors.outlineVariant),
+            ),
+            child: QrImageView(
+              data: qrPayload,
+              size: 180,
+              backgroundColor: b.qrBackground,
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        Text(
+          plan.name,
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: colors.onSurface),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '${restaurant.name} · ${plan.lunches} almuerzos · ${formatMoney(plan.price)}',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: colors.onSurfaceVariant),
+        ),
+        const SizedBox(height: 12),
+        Text(
+          'Acércate a caja, indica tu nombre o muestra este QR para pagar y activar tu plan.',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant),
+        ),
+        const SizedBox(height: 24),
+        ElevatedButton(
+          onPressed: onDone,
+          child: const Text('Listo'),
+        ),
+      ],
     );
   }
 }

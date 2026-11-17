@@ -213,6 +213,12 @@ final metricsProvider = FutureProvider.autoDispose.family<OwnerMetrics, MetricsP
       .getMetrics(ref.read(ownerRestaurantIdProvider), period: period);
 });
 
+/// Solicitudes de plan enviadas por comensales pendientes de cobro en caja (P-01).
+final planRequestsProvider = FutureProvider.autoDispose<List<OwnerPlanRequest>>((ref) {
+  if (AppMode.useMock) return Future.value(const []);
+  return ref.read(apiOwnerRepositoryProvider).getPlanRequests();
+});
+
 /// Resumen del turno. Se recarga con `ref.invalidate`.
 final dailySummaryProvider =
     FutureProvider.autoDispose<TransactionSummary>((ref) {

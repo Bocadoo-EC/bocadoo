@@ -132,6 +132,15 @@ class _MapScreenState extends ConsumerState<MapScreen> {
 
   void _openRestaurant(Restaurant r) => context.go('/customer/restaurants/${r.id}');
 
+  void _acceptArea() {
+    ref.read(customerControllerProvider).applySearchArea(
+          center: _me,
+          label: _place,
+          radiusMeters: _range,
+        );
+    _back();
+  }
+
   void _back() => context.canPop() ? context.pop() : context.go('/customer/restaurants');
 
   @override
@@ -268,7 +277,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       ),
       Positioned(
         right: 12,
-        bottom: _selected != null || _route != null ? 250 : 120,
+        bottom: _selected != null || _route != null ? 250 : 156,
         child: FloatingActionButton.small(
           heroTag: 'map-recenter',
           tooltip: 'Centrar en mi ubicación',
@@ -305,11 +314,13 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                 : _HintCard(
                     count: visible.length,
                     farAway: farAway,
+                    range: _range,
                     onShowAll: () {
                       setState(() => _range = null);
                       _recenter();
                     },
                     onZones: () => setState(() => _phase = _Phase.choosing),
+                    onAccept: _acceptArea,
                   ),
       ),
     ]);
@@ -649,12 +660,21 @@ BoxDecoration _floatingCard(BuildContext context) {
 }
 
 class _HintCard extends StatelessWidget {
-  const _HintCard({required this.count, required this.farAway, required this.onShowAll, required this.onZones});
+  const _HintCard({
+    required this.count,
+    required this.farAway,
+    required this.range,
+    required this.onShowAll,
+    required this.onZones,
+    required this.onAccept,
+  });
 
   final int count;
   final bool farAway;
+  final int? range;
   final VoidCallback onShowAll;
   final VoidCallback onZones;
+  final VoidCallback onAccept;
 
   @override
   Widget build(BuildContext context) {
@@ -663,19 +683,34 @@ class _HintCard extends StatelessWidget {
         ? ('Estás lejos de los locales de Bocadoo. Elige una zona de Quito.', 'Elegir zona', onZones)
         : count == 0
             ? ('No hay locales en este radio.', 'Ver todos', onShowAll)
-            : (count == 1 ? '1 local en este radio. Tócalo para ver cómo llegar.' : '$count locales en este radio. Toca uno para ver cómo llegar.', null, null);
+            : (count == 1 ? '1 local en este radio.' : '$count locales en este radio.', null, null);
+    final acceptLabel = range == null
+        ? 'Aceptar (todos los locales)'
+        : 'Aceptar (${_distance(range!)})';
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
       decoration: _floatingCard(context),
-      child: Row(children: [
-        Icon(Icons.touch_app_outlined, color: colors.primary),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text(text, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: colors.onSurface)),
-        ),
-        if (action != null)
-          FilledButton.tonal(style: compactButtonStyle(context), onPressed: onAction, child: Text(action)),
-      ]),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(children: [
+            Icon(Icons.touch_app_outlined, color: colors.primary),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(text, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: colors.onSurface)),
+            ),
+            if (action != null)
+              FilledButton.tonal(style: compactButtonStyle(context), onPressed: onAction, child: Text(action)),
+          ]),
+          const SizedBox(height: 10),
+          ElevatedButton.icon(
+            onPressed: onAccept,
+            icon: const Icon(Icons.check_rounded, size: 18),
+            label: Text(acceptLabel),
+          ),
+        ],
+      ),
     );
   }
 }

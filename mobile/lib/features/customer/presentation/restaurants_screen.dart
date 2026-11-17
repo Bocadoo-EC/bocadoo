@@ -154,6 +154,21 @@ class _RestaurantsScreenState extends ConsumerState<RestaurantsScreen> {
               style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant),
             ),
           ]),
+          if (s.searchCenter != null && s.searchRadiusMeters != null) ...[
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: InputChip(
+                avatar: Icon(Icons.radar_rounded, size: 16, color: colors.primary),
+                label: Text(
+                  '${s.searchZoneLabel ?? 'Zona'} · ${s.searchRadiusMeters! < 1000 ? '${s.searchRadiusMeters} m' : '${(s.searchRadiusMeters! / 1000).toStringAsFixed(1).replaceAll('.', ',')} km'}',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: colors.primary),
+                ),
+                onDeleted: controller.clearSearchArea,
+                deleteIconTooltipMessage: 'Quitar filtro de zona',
+              ),
+            ),
+          ],
           const SizedBox(height: 12),
           if (filtered.isEmpty)
             _NoResults(onClear: () {

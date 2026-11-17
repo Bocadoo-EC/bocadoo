@@ -2,10 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:latlong2/latlong.dart';
 
 import '../../../core/config/app_mode.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/contracts/repositories.dart';
+import '../../../core/location/location_service.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/network/api_exception.dart';
 import '../../../core/network/polling.dart';
@@ -44,6 +46,9 @@ class CustomerUiState {
   final List<Restaurant> restaurants;
   final String searchQuery;
   final Set<RestaurantFilter> filters;
+  final LatLng? searchCenter;
+  final String? searchZoneLabel;
+  final int? searchRadiusMeters;
   final String? plansRestaurantId;
   final List<PlanTemplate> planTemplates;
   final bool isLoadingPlans;
@@ -64,6 +69,9 @@ class CustomerUiState {
     this.restaurants = const [],
     this.searchQuery = '',
     this.filters = const {},
+    this.searchCenter,
+    this.searchZoneLabel,
+    this.searchRadiusMeters,
     this.plansRestaurantId,
     this.planTemplates = const [],
     this.isLoadingPlans = false,
@@ -114,6 +122,14 @@ class CustomerUiState {
       if (filters.contains(RestaurantFilter.near) && r.distanceKm >= 1.0) {
         return false;
       }
+      if (searchCenter != null && searchRadiusMeters != null) {
+        if (!r.hasLocation) return false;
+        final meters = LocationService.meters(
+          searchCenter!,
+          LatLng(r.latitude!, r.longitude!),
+        );
+        if (meters > searchRadiusMeters!) return false;
+      }
       if (filters.contains(RestaurantFilter.withPlan) && !r.hasPlan) {
         return false;
       }
@@ -156,6 +172,10 @@ class CustomerUiState {
     List<Restaurant>? restaurants,
     String? searchQuery,
     Set<RestaurantFilter>? filters,
+    LatLng? searchCenter,
+    String? searchZoneLabel,
+    int? searchRadiusMeters,
+    bool clearSearchArea = false,
     String? plansRestaurantId,
     List<PlanTemplate>? planTemplates,
     bool? isLoadingPlans,
@@ -177,6 +197,11 @@ class CustomerUiState {
       restaurants: restaurants ?? this.restaurants,
       searchQuery: searchQuery ?? this.searchQuery,
       filters: filters ?? this.filters,
+      searchCenter: clearSearchArea ? null : (searchCenter ?? this.searchCenter),
+      searchZoneLabel:
+          clearSearchArea ? null : (searchZoneLabel ?? this.searchZoneLabel),
+      searchRadiusMeters:
+          clearSearchArea ? null : (searchRadiusMeters ?? this.searchRadiusMeters),
       plansRestaurantId: plansRestaurantId ?? this.plansRestaurantId,
       planTemplates: planTemplates ?? this.planTemplates,
       isLoadingPlans: isLoadingPlans ?? this.isLoadingPlans,
@@ -194,6 +219,7 @@ class CustomerController extends ChangeNotifier {
   Timer? _undoTimer;
   Future<void> Function()? _undoAction;
   LifecyclePollingController? _orderPoller;
+  bool _disposed = false;
 
   /// Último mensaje de error en una acción (preorden o solicitud de plan).
   String? lastActionError;
@@ -244,6 +270,9 @@ class CustomerController extends ChangeNotifier {
         restaurants: restaurants,
         searchQuery: _state.searchQuery,
         filters: _state.filters,
+        searchCenter: _state.searchCenter,
+        searchZoneLabel: _state.searchZoneLabel,
+        searchRadiusMeters: _state.searchRadiusMeters,
         plansRestaurantId: _state.plansRestaurantId,
         planTemplates: _state.planTemplates,
         undo: _state.undo,
@@ -252,6 +281,7 @@ class CustomerController extends ChangeNotifier {
         await selectPlansRestaurant(restaurants.first.id);
       }
       _syncOrderPolling(order, table: table);
+      unawaited(_hydrateRestaurants(restaurants));
     } catch (e) {
       if (_state.passes.isNotEmpty) {
         _emit(_state.copyWith(status: CustomerStatus.success, isOffline: true));
@@ -353,7 +383,29 @@ class CustomerController extends ChangeNotifier {
     _emit(_state.copyWith(filters: next));
   }
 
-  void clearFilters() => _emit(_state.copyWith(searchQuery: '', filters: {}));
+  void clearFilters() => _emit(_state.copyWith(
+        searchQuery: '',
+        filters: {},
+        clearSearchArea: true,
+      ));
+
+  void applySearchArea({
+    required LatLng center,
+    required String label,
+    required int? radiusMeters,
+  }) {
+    if (radiusMeters == null) {
+      _emit(_state.copyWith(clearSearchArea: true));
+      return;
+    }
+    _emit(_state.copyWith(
+      searchCenter: center,
+      searchZoneLabel: label,
+      searchRadiusMeters: radiusMeters,
+    ));
+  }
+
+  void clearSearchArea() => _emit(_state.copyWith(clearSearchArea: true));
 
   Future<bool> claimReward(String restaurantId) async {
     final ok = await _repository.claimReward(restaurantId);
@@ -539,8 +591,28 @@ class CustomerController extends ChangeNotifier {
     }
   }
 
+  Future<void> _hydrateRestaurants(List<Restaurant> base) async {
+    if (base.isEmpty) return;
+    final updated = List<Restaurant>.from(base);
+    var changed = false;
+    for (var i = 0; i < updated.length; i++) {
+      if (_disposed) return;
+      try {
+        final detail = await _repository.getRestaurantById(updated[i].id);
+        if (detail != null && !_disposed) {
+          updated[i] = detail;
+          changed = true;
+        }
+      } catch (_) {}
+    }
+    if (changed && !_disposed) {
+      _emit(_state.copyWith(restaurants: updated));
+    }
+  }
+
   @override
   void dispose() {
+    _disposed = true;
     _undoTimer?.cancel();
     _orderPoller?.dispose();
     super.dispose();

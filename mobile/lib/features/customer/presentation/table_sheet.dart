@@ -31,6 +31,7 @@ class TableSheet extends ConsumerStatefulWidget {
 
 class _TableSheetState extends ConsumerState<TableSheet> {
   late String _time = ref.read(customerControllerProvider).state.activeTable?.time ?? '13:00';
+  String? _selectedRestaurantId;
   SharedTable? _table;
   bool _loading = true;
   bool _failed = false;
@@ -40,13 +41,23 @@ class _TableSheetState extends ConsumerState<TableSheet> {
   Timer? _copiedTimer;
   LifecyclePollingController? _poller;
 
-  String get _restaurantId =>
-      widget.restaurantId ?? ref.read(customerControllerProvider).state.currentPass?.restaurantId ?? 'r1';
+  String? get _restaurantId {
+    final s = ref.read(customerControllerProvider).state;
+    return widget.restaurantId ??
+        _selectedRestaurantId ??
+        s.activeTable?.restaurantId ??
+        s.currentPass?.restaurantId ??
+        (s.restaurants.length == 1 ? s.restaurants.first.id : null);
+  }
 
   @override
   void initState() {
     super.initState();
-    _open();
+    if (_restaurantId != null) {
+      _open();
+    } else {
+      _loading = false;
+    }
   }
 
   @override
@@ -103,6 +114,14 @@ class _TableSheetState extends ConsumerState<TableSheet> {
   }
 
   Future<void> _open() async {
+    final restaurantId = _restaurantId;
+    if (restaurantId == null) {
+      setState(() {
+        _loading = false;
+        _failed = false;
+      });
+      return;
+    }
     setState(() {
       _loading = true;
       _failed = false;
@@ -118,7 +137,7 @@ class _TableSheetState extends ConsumerState<TableSheet> {
         table = await repo.getSharedTable(active.id);
       }
       table ??= await repo.openSharedTable(
-        restaurantId: _restaurantId,
+        restaurantId: restaurantId,
         time: _time,
       );
       if (!mounted) return;
@@ -211,12 +230,20 @@ class _TableSheetState extends ConsumerState<TableSheet> {
         Expanded(
           child: _loading && t == null
               ? const SocialLoading('Preparando tu mesa')
-              : _failed || t == null
-                  ? CustomerErrorView(
-                      title: 'Error al crear mesa',
-                      message: _errorMsg ?? 'No pudimos preparar tu mesa.',
-                      onRetry: _open,
+              : _restaurantId == null && t == null
+                  ? _RestaurantPicker(
+                      restaurants: ref.read(customerControllerProvider).state.restaurants,
+                      onSelect: (id) {
+                        setState(() => _selectedRestaurantId = id);
+                        _open();
+                      },
                     )
+                  : _failed || t == null
+                      ? CustomerErrorView(
+                          title: 'Error al crear mesa',
+                          message: _errorMsg ?? 'No pudimos preparar tu mesa.',
+                          onRetry: _open,
+                        )
                   : ListView(padding: const EdgeInsets.fromLTRB(16, 0, 16, 24), children: [
                       _LocalHeader(table: t),
                       const SizedBox(height: 16),
@@ -509,5 +536,72 @@ class _Members extends StatelessWidget {
           ]),
         ),
     ]);
+  }
+}
+
+class _RestaurantPicker extends StatelessWidget {
+  const _RestaurantPicker({required this.restaurants, required this.onSelect});
+
+  final List<Restaurant> restaurants;
+  final ValueChanged<String> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    if (restaurants.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            'No hay restaurantes disponibles en este momento para crear una mesa.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant),
+          ),
+        ),
+      );
+    }
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+      children: [
+        const SocialLabel('Elige dónde van a almorzar'),
+        const SizedBox(height: 10),
+        for (final r in restaurants) ...[
+          Material(
+            color: colors.surface,
+            borderRadius: BorderRadius.circular(18),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(18),
+              onTap: () => onSelect(r.id),
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: colors.outlineVariant),
+                ),
+                child: Row(children: [
+                  Icon(Icons.restaurant_rounded, color: colors.primary),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(r.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: colors.onSurface)),
+                      if (r.zone.isNotEmpty)
+                        Text(r.zone,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant)),
+                    ]),
+                  ),
+                  Icon(Icons.chevron_right_rounded, color: colors.onSurfaceVariant),
+                ]),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
+      ],
+    );
   }
 }
