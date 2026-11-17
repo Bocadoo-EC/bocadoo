@@ -28,7 +28,7 @@ class _CajaScreenState extends ConsumerState<CajaScreen> {
   void initState() {
     super.initState();
     // Refresca la cuenta regresiva de "Lleno (Nm)" y solicitudes de plan entrantes.
-    _ticker = Timer.periodic(const Duration(seconds: 20), (_) {
+    _ticker = Timer.periodic(const Duration(seconds: 45), (_) {
       if (!mounted) return;
       ref.invalidate(planRequestsProvider);
       ref.invalidate(ordersOnTheWayProvider);
@@ -600,11 +600,7 @@ class _PlanRequestsSectionState extends ConsumerState<_PlanRequestsSection> {
                 for (final m in OwnerPayMethod.values) ...[
                   ElevatedButton(
                     onPressed: () => Navigator.of(ctx).pop(m),
-                    child: Text(switch (m) {
-                      OwnerPayMethod.cash => 'Cobrar en Efectivo',
-                      OwnerPayMethod.transfer => 'Cobrar por Transferencia',
-                      OwnerPayMethod.deuna => 'Cobrar por Deuna',
-                    }),
+                    child: Text('Cobrar con ${m.label}'),
                   ),
                   const SizedBox(height: 8),
                 ],
@@ -629,7 +625,7 @@ class _PlanRequestsSectionState extends ConsumerState<_PlanRequestsSection> {
       );
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(repo.lastError ?? 'No se pudo cobrar la solicitud.')),
+        SnackBar(content: Text(repo.consumeLastError() ?? 'No se pudo cobrar la solicitud.')),
       );
     }
   }
@@ -647,7 +643,7 @@ class _PlanRequestsSectionState extends ConsumerState<_PlanRequestsSection> {
       );
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(repo.lastError ?? 'No se pudo rechazar la solicitud.')),
+        SnackBar(content: Text(repo.consumeLastError() ?? 'No se pudo rechazar la solicitud.')),
       );
     }
   }

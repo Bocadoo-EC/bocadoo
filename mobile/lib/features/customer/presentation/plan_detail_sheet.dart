@@ -487,7 +487,7 @@ class _RequestQrView extends StatelessWidget {
         ),
         const SizedBox(height: 4),
         Text(
-          '${restaurant.name} · ${plan.lunches} almuerzos · ${formatMoney(plan.price)}',
+          '${restaurant.name} · ${plan.lunches} almuerzos · ${formatMoney(plan.priceCents / 100)}',
           textAlign: TextAlign.center,
           style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: colors.onSurfaceVariant),
         ),

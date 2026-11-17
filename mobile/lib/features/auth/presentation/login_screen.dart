@@ -40,9 +40,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       final expired = sessionNotifier.expiredMessage;
       if (expired != null && expired.isNotEmpty) {
         sessionNotifier.clearExpiredMessage();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(expired)),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(expired)));
       }
     });
 
@@ -88,8 +87,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     final eErr = email.isEmpty
         ? 'Ingresa tu correo electrónico para continuar.'
         : !RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)
-            ? 'Por favor ingresa un correo electrónico válido (ej: nombre@correo.ec)'
-            : null;
+        ? 'Por favor ingresa un correo electrónico válido (ej: nombre@correo.ec)'
+        : null;
     final pErr = pass.isEmpty ? 'Por favor ingresa tu contraseña.' : null;
     setState(() {
       _emailError = eErr;
@@ -102,9 +101,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   Future<void> _login() async {
     if (!_validate()) return;
     setState(() => _loading = true);
-    final expectedRole =
-        _role == _UserRole.customer ? AppRole.diner : AppRole.owner;
-    final result = await ref.read(authRepositoryProvider).login(
+    final expectedRole = _role == _UserRole.customer
+        ? AppRole.diner
+        : AppRole.owner;
+    final result = await ref
+        .read(authRepositoryProvider)
+        .login(
           identifier: _emailCtrl.text.trim(),
           password: _passCtrl.text,
           expectedRole: expectedRole,
@@ -112,7 +114,24 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     if (!mounted) return;
     setState(() => _loading = false);
     if (!result.ok) {
-      setState(() => _serverError = result.errorMessage);
+      final msg = result.errorMessage ?? 'No pudimos iniciar sesión.';
+      setState(() => _serverError = msg);
+      if (msg.contains('pertenece a un restaurante') ||
+          msg.contains('no tiene un restaurante')) {
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Rol incorrecto'),
+            content: Text(msg),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('Entendido'),
+              ),
+            ],
+          ),
+        );
+      }
       return;
     }
     if (_role == _UserRole.customer) {
@@ -145,23 +164,37 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     color: cs.primary,
                     borderRadius: BorderRadius.circular(14),
                   ),
-                  child: Icon(Icons.restaurant_menu_rounded, color: cs.onPrimary, size: 26),
+                  child: Icon(
+                    Icons.restaurant_menu_rounded,
+                    color: cs.onPrimary,
+                    size: 26,
+                  ),
                 ),
               ),
 
               const SizedBox(height: 20),
 
               Center(
-                child: Column(children: [
-                  Text(
-                    'Tu almuerzo,',
-                    style: TextStyle(fontSize: 32, fontWeight: FontWeight.w800, color: cs.onSurface),
-                  ),
-                  Text(
-                    'sin cartulinas.',
-                    style: TextStyle(fontSize: 32, fontWeight: FontWeight.w800, color: cs.primary),
-                  ),
-                ]),
+                child: Column(
+                  children: [
+                    Text(
+                      'Tu almuerzo,',
+                      style: TextStyle(
+                        fontSize: 32,
+                        fontWeight: FontWeight.w800,
+                        color: cs.onSurface,
+                      ),
+                    ),
+                    Text(
+                      'sin cartulinas.',
+                      style: TextStyle(
+                        fontSize: 32,
+                        fontWeight: FontWeight.w800,
+                        color: cs.primary,
+                      ),
+                    ),
+                  ],
+                ),
               ),
 
               const SizedBox(height: 8),
@@ -172,7 +205,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       ? 'Planes simples. Valida tu almuerzo con QR en Quito.'
                       : 'Gestiona comensales, planes prepagados y cobros QR.',
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: cs.onSurfaceVariant),
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: cs.onSurfaceVariant,
+                  ),
                 ),
               ),
 
@@ -185,20 +222,22 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   color: cs.secondaryContainer,
                   borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
                 ),
-                child: Row(children: [
-                  _Tab(
-                    label: 'Comensal',
-                    icon: Icons.person_rounded,
-                    selected: isCustomer,
-                    onTap: () => _changeRole(_UserRole.customer),
-                  ),
-                  _Tab(
-                    label: 'Dueño',
-                    icon: Icons.storefront_rounded,
-                    selected: !isCustomer,
-                    onTap: () => _changeRole(_UserRole.owner),
-                  ),
-                ]),
+                child: Row(
+                  children: [
+                    _Tab(
+                      label: 'Comensal',
+                      icon: Icons.person_rounded,
+                      selected: isCustomer,
+                      onTap: () => _changeRole(_UserRole.customer),
+                    ),
+                    _Tab(
+                      label: 'Dueño',
+                      icon: Icons.storefront_rounded,
+                      selected: !isCustomer,
+                      onTap: () => _changeRole(_UserRole.owner),
+                    ),
+                  ],
+                ),
               ),
 
               const SizedBox(height: 16),
@@ -207,28 +246,36 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               Align(
                 alignment: Alignment.centerLeft,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: cs.primaryContainer,
                     borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
                   ),
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    Icon(
-                      isCustomer ? Icons.credit_card_rounded : Icons.point_of_sale_rounded,
-                      size: 15,
-                      color: cs.onPrimaryContainer,
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      isCustomer ? 'PASE COMENSAL' : 'TERMINAL RESTAURANTE',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.5,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        isCustomer
+                            ? Icons.credit_card_rounded
+                            : Icons.point_of_sale_rounded,
+                        size: 15,
                         color: cs.onPrimaryContainer,
                       ),
-                    ),
-                  ]),
+                      const SizedBox(width: 6),
+                      Text(
+                        isCustomer ? 'PASE COMENSAL' : 'TERMINAL RESTAURANTE',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.5,
+                          color: cs.onPrimaryContainer,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
 
@@ -236,15 +283,25 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
               Text(
                 'CORREO ELECTRÓNICO',
-                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.6, color: cs.onSurfaceVariant),
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.6,
+                  color: cs.onSurfaceVariant,
+                ),
               ),
               const SizedBox(height: 8),
               TextField(
                 controller: _emailCtrl,
                 keyboardType: TextInputType.emailAddress,
                 decoration: InputDecoration(
-                  prefixIcon: Icon(Icons.email_outlined, color: cs.onSurfaceVariant),
-                  hintText: isCustomer ? 'carlos@email.com' : 'maria@lacuchara.ec',
+                  prefixIcon: Icon(
+                    Icons.email_outlined,
+                    color: cs.onSurfaceVariant,
+                  ),
+                  hintText: isCustomer
+                      ? 'carlos@email.com'
+                      : 'maria@lacuchara.ec',
                   errorText: _emailError,
                   suffixIcon: _emailCtrl.text.isNotEmpty
                       ? IconButton(
@@ -260,19 +317,29 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
               Text(
                 'CONTRASEÑA',
-                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.6, color: cs.onSurfaceVariant),
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.6,
+                  color: cs.onSurfaceVariant,
+                ),
               ),
               const SizedBox(height: 8),
               TextField(
                 controller: _passCtrl,
                 obscureText: _obscure,
                 decoration: InputDecoration(
-                  prefixIcon: Icon(Icons.lock_outline_rounded, color: cs.onSurfaceVariant),
+                  prefixIcon: Icon(
+                    Icons.lock_outline_rounded,
+                    color: cs.onSurfaceVariant,
+                  ),
                   hintText: '••••••••',
                   errorText: _passError,
                   suffixIcon: IconButton(
                     icon: Icon(
-                      _obscure ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                      _obscure
+                          ? Icons.visibility_off_outlined
+                          : Icons.visibility_outlined,
                       color: cs.onSurfaceVariant,
                     ),
                     onPressed: () => setState(() => _obscure = !_obscure),
@@ -285,7 +352,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               Align(
                 alignment: Alignment.centerRight,
                 child: TextButton(
-                  onPressed: () => context.push('/auth/olvide-contrasena', extra: _emailCtrl.text.trim()),
+                  onPressed: () => context.push(
+                    '/auth/olvide-contrasena',
+                    extra: _emailCtrl.text.trim(),
+                  ),
                   child: Text(
                     '¿Olvidaste tu contraseña?',
                     style: TextStyle(fontSize: 13, color: cs.primary),
@@ -301,7 +371,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     ? SizedBox(
                         height: 20,
                         width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: cs.onPrimary),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: cs.onPrimary,
+                        ),
                       )
                     : const Text('Iniciar sesión'),
               ),
@@ -330,19 +403,30 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
               const SizedBox(height: 20),
 
-              Row(children: [
-                Expanded(child: Divider(color: cs.outlineVariant)),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: Text('ó', style: TextStyle(fontSize: 14, color: cs.onSurfaceVariant)),
-                ),
-                Expanded(child: Divider(color: cs.outlineVariant)),
-              ]),
+              Row(
+                children: [
+                  Expanded(child: Divider(color: cs.outlineVariant)),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Text(
+                      'ó',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: cs.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                  Expanded(child: Divider(color: cs.outlineVariant)),
+                ],
+              ),
 
               const SizedBox(height: 16),
 
               OutlinedButton.icon(
-                onPressed: () => continueWithGoogle(context, role: isCustomer ? 'customer' : 'owner'),
+                onPressed: () => continueWithGoogle(
+                  context,
+                  role: isCustomer ? 'customer' : 'owner',
+                ),
                 icon: const Icon(Icons.g_mobiledata_rounded, size: 24),
                 label: const Text('Continuar con Google'),
               ),
@@ -350,21 +434,33 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               const SizedBox(height: 24),
 
               Center(
-                child: Wrap(alignment: WrapAlignment.center, children: [
-                  Text(
-                    '¿Primera vez en Bocadoo? ',
-                    style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
-                  ),
-                  GestureDetector(
-                    onTap: () => isCustomer
-                        ? context.push('/auth/registro/comensal')
-                        : context.push('/auth/registro/dueno'),
-                    child: Text(
-                      isCustomer ? 'Crear cuenta de Comensal' : 'Registrar mi Restaurante',
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: cs.primary),
+                child: Wrap(
+                  alignment: WrapAlignment.center,
+                  children: [
+                    Text(
+                      '¿Primera vez en Bocadoo? ',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: cs.onSurfaceVariant,
+                      ),
                     ),
-                  ),
-                ]),
+                    GestureDetector(
+                      onTap: () => isCustomer
+                          ? context.push('/auth/registro/comensal')
+                          : context.push('/auth/registro/dueno'),
+                      child: Text(
+                        isCustomer
+                            ? 'Crear cuenta de Comensal'
+                            : 'Registrar mi Restaurante',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: cs.primary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
 
               const SizedBox(height: 20),
@@ -391,7 +487,12 @@ class _Tab extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
 
-  const _Tab({required this.label, required this.icon, required this.selected, required this.onTap});
+  const _Tab({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -407,18 +508,25 @@ class _Tab extends StatelessWidget {
             color: selected ? cs.primary : null,
             borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
           ),
-          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Icon(icon, size: 18, color: selected ? cs.onPrimary : cs.onSurfaceVariant),
-            const SizedBox(width: 8),
-            Text(
-              label,
-              style: TextStyle(
-                fontWeight: FontWeight.w700,
-                fontSize: 15,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                icon,
+                size: 18,
                 color: selected ? cs.onPrimary : cs.onSurfaceVariant,
               ),
-            ),
-          ]),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 15,
+                  color: selected ? cs.onPrimary : cs.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

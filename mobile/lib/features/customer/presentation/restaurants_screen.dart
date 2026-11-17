@@ -165,7 +165,6 @@ class _RestaurantsScreenState extends ConsumerState<RestaurantsScreen> {
                   style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: colors.primary),
                 ),
                 onDeleted: controller.clearSearchArea,
-                deleteIconTooltipMessage: 'Quitar filtro de zona',
               ),
             ),
           ],

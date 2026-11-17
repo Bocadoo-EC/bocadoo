@@ -120,6 +120,9 @@ final GoRouter appRouter = GoRouter(
     if (path.startsWith('/owner/') && !sessionNotifier.hasRestaurant) {
       return '/customer/pase';
     }
+    if (path.startsWith('/customer/') && sessionNotifier.hasRestaurant) {
+      return '/owner/caja';
+    }
     return null;
   },
   routes: [

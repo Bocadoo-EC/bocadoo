@@ -45,7 +45,6 @@ class _TableSheetState extends ConsumerState<TableSheet> {
     final s = ref.read(customerControllerProvider).state;
     return widget.restaurantId ??
         _selectedRestaurantId ??
-        s.activeTable?.restaurantId ??
         s.currentPass?.restaurantId ??
         (s.restaurants.length == 1 ? s.restaurants.first.id : null);
   }

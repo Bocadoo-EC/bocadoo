@@ -595,8 +595,11 @@ class CustomerController extends ChangeNotifier {
     if (base.isEmpty) return;
     final updated = List<Restaurant>.from(base);
     var changed = false;
-    for (var i = 0; i < updated.length; i++) {
+    var fetched = 0;
+    for (var i = 0; i < updated.length && fetched < 5; i++) {
       if (_disposed) return;
+      if (updated[i].hasMenu) continue;
+      fetched++;
       try {
         final detail = await _repository.getRestaurantById(updated[i].id);
         if (detail != null && !_disposed) {
