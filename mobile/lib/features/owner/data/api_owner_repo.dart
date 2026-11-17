@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/analytics/events_service.dart';
 import '../../../core/config/zones.dart';
 import '../../../core/contracts/models.dart';
+import '../../../core/contracts/qr_parser.dart';
 import '../../../core/contracts/repositories.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/network/api_config.dart';
@@ -264,6 +265,11 @@ class ApiOwnerRepository
     final validated = estado == 'CANJEADA';
 
     if (id.isNotEmpty && number.isNotEmpty) {
+      BocadooQrParser.generateOrderCode(
+        number,
+        orderId: id,
+        restaurantId: _session.activeRestaurantId,
+      );
       final prev = _ordersByNumber[number];
       _ordersByNumber[number] = _OrderCacheEntry(
         id: id,
@@ -299,18 +305,255 @@ class ApiOwnerRepository
   // IOwnerRepository (Escáner O2 + Cierre / Resumen O1, O4)
   // ---------------------------------------------------------------------------
 
+  final Set<String> _redeemedCodes = <String>{};
+  final List<TransactionItem> _sessionValidatedTransactions = <TransactionItem>[];
+  static final _uuidRegex = RegExp(
+    r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+  );
+
+  Future<OwnerOrder?> _findOrderByAnyCode(
+    String rawPayload,
+    String restaurantId,
+  ) async {
+    final cleaned = BocadooQrParser.sanitizeManualInput(rawPayload);
+    final resolvedNum = BocadooQrParser.resolveOrderNumber(rawPayload);
+    if (resolvedNum != null) {
+      if (_uuidRegex.hasMatch(resolvedNum)) {
+        return resolveOrderById(resolvedNum);
+      }
+      return resolveOrderByNumber(resolvedNum);
+    }
+    final trimmed = rawPayload.trim();
+    final upper = trimmed.toUpperCase();
+    if (upper.startsWith('BCD-ORD-') && trimmed.length > 8) {
+      final q = trimmed.substring(8).trim();
+      return _uuidRegex.hasMatch(q)
+          ? resolveOrderById(q)
+          : resolveOrderByNumber(q);
+    }
+    if (trimmed.startsWith('#') && trimmed.length > 1) {
+      return resolveOrderByNumber(trimmed.substring(1).trim());
+    }
+    if (_uuidRegex.hasMatch(trimmed)) {
+      return resolveOrderById(trimmed);
+    }
+    if (cleaned.length == BocadooQrParser.shortCodeLength) {
+      final active = await getActiveOrders(restaurantId);
+      for (final o in active) {
+        final c1 = BocadooQrParser.generateOrderCode(
+          o.number,
+          orderId: o.id,
+          restaurantId: restaurantId,
+        );
+        final c2 = BocadooQrParser.generateOrderCode(o.number);
+        if (c1 == cleaned || c2 == cleaned) return o;
+      }
+    }
+    return null;
+  }
+
+  Future<String?> _findTableIdByAnyCode(
+    String rawPayload,
+    String restaurantId,
+  ) async {
+    final cleaned = BocadooQrParser.sanitizeManualInput(rawPayload);
+    final resolvedId = BocadooQrParser.resolveTableId(rawPayload);
+    if (resolvedId != null && resolvedId.isNotEmpty) return resolvedId;
+    final trimmed = rawPayload.trim();
+    final upper = trimmed.toUpperCase();
+    if (upper.startsWith('BCD-MESA-') && trimmed.length > 9) {
+      return trimmed.substring(9).trim();
+    }
+    if (cleaned.length == BocadooQrParser.shortCodeLength) {
+      final tables = await getPendingTables(restaurantId);
+      for (final t in tables) {
+        final c1 = BocadooQrParser.generateTableCode(
+          t.id,
+          restaurantId: restaurantId,
+        );
+        final c2 = BocadooQrParser.generateTableCode(t.id);
+        if (c1 == cleaned || c2 == cleaned) return t.id;
+      }
+    }
+    return null;
+  }
+
   @override
   Future<ScanResult> validateQrCode(String rawPayload) async {
     _lastError = null;
     final restaurantId = _session.activeRestaurantId ?? '';
-    final intent = 'validar:$restaurantId:$rawPayload';
+    final cleaned = BocadooQrParser.sanitizeManualInput(rawPayload);
+    final codeKey = cleaned.length == BocadooQrParser.shortCodeLength
+        ? cleaned
+        : rawPayload.trim().toUpperCase();
+
+    // Regla 5.1: Validación de pertenencia al local.
+    final codeRestId = BocadooQrParser.restaurantForCode(rawPayload);
+    if (codeRestId != null &&
+        codeRestId.isNotEmpty &&
+        restaurantId.isNotEmpty &&
+        codeRestId != restaurantId) {
+      return const ScanResult(
+        isValid: false,
+        outcome: 'ROJO',
+        title: 'Es de otro local',
+        supportingLine: 'Este código pertenece a otro restaurante',
+        actionRequired: 'NINGUNA',
+      );
+    }
+
+    // Regla 5.4: Bloqueo inmediato de doble escaneo (Idempotencia).
+    if (_redeemedCodes.contains(codeKey)) {
+      return const ScanResult(
+        isValid: false,
+        outcome: 'ROJO',
+        title: 'Ya canjeado',
+        supportingLine: 'Este código ya fue canjeado anteriormente',
+        actionRequired: 'NINGUNA',
+      );
+    }
+
+    // Preorden activa (6 caracteres, BCD-ORD-, #N o UUID).
+    final order = await _findOrderByAnyCode(rawPayload, restaurantId);
+    if (order != null) {
+      final ordKey = 'ORD:${order.number}';
+      if (_redeemedCodes.contains(ordKey)) {
+        return ScanResult(
+          isValid: false,
+          outcome: 'ROJO',
+          title: 'Ya canjeado',
+          supportingLine: 'Este código ya fue canjeado anteriormente',
+          studentName: order.dinerName,
+          actionRequired: 'NINGUNA',
+        );
+      }
+      if (order.paidByPlan && !order.validated) {
+        final okVal = await validateOrder(restaurantId, order.number);
+        if (!okVal) {
+          return ScanResult(
+            isValid: false,
+            outcome: 'ROJO',
+            title: 'No se pudo canjear',
+            supportingLine:
+                _lastError ?? 'No se pudo validar el plan de la preorden.',
+            studentName: order.dinerName,
+            actionRequired: 'NINGUNA',
+          );
+        }
+      }
+      final entry = _ordersByNumber[order.number] ??
+          _OrderCacheEntry(
+            id: order.id ?? order.number,
+            number: order.number,
+            paidByPlan: order.paidByPlan,
+            validated: order.validated,
+            amount: order.amount,
+          );
+      try {
+        await _commitDeliverOrder(entry);
+      } catch (e) {
+        return ScanResult(
+          isValid: false,
+          outcome: 'ROJO',
+          title: 'No se pudo completar',
+          supportingLine:
+              _lastError ?? 'No se pudo marcar el pedido como entregado.',
+          studentName: order.dinerName,
+          actionRequired: 'NINGUNA',
+        );
+      }
+      _redeemedCodes.add(ordKey);
+      _redeemedCodes.add(codeKey);
+      _sessionValidatedTransactions.insert(
+        0,
+        TransactionItem(
+          id: 'ord-${order.number}-${DateTime.now().millisecondsSinceEpoch}',
+          customerName: order.dinerName,
+          type: order.paidByPlan ? 'Validado' : 'Pedido #${order.number}',
+          amount: order.paidByPlan ? 0 : order.amount,
+          paymentMethod: order.paidByPlan ? 'Plan' : 'Efectivo',
+          timestamp: DateTime.now(),
+        ),
+      );
+      final dishSummary = [
+        if (order.soup != null && order.soup!.isNotEmpty) order.soup!,
+        if (order.main != null && order.main!.isNotEmpty) order.main!,
+      ].join(' · ');
+      return ScanResult(
+        isValid: true,
+        outcome: 'VERDE',
+        title: 'Preorden #${order.number} registrada',
+        supportingLine:
+            dishSummary.isNotEmpty ? dishSummary : 'Pedido completado',
+        studentName: order.dinerName,
+        passId: ordKey,
+        actionRequired: 'NINGUNA',
+      );
+    }
+
+    // Mesa activa (6 caracteres o BCD-MESA-).
+    final tableId = await _findTableIdByAnyCode(rawPayload, restaurantId);
+    if (tableId != null) {
+      final tableKey = 'MESA:$tableId';
+      if (_redeemedCodes.contains(tableKey)) {
+        return const ScanResult(
+          isValid: false,
+          outcome: 'ROJO',
+          title: 'Ya canjeado',
+          supportingLine: 'Este código ya fue canjeado anteriormente',
+          actionRequired: 'NINGUNA',
+        );
+      }
+      final preview = await previewTable(restaurantId, tableId);
+      final chargeId = await chargeTable(restaurantId, tableId);
+      if (chargeId == null) {
+        return ScanResult(
+          isValid: false,
+          outcome: 'ROJO',
+          title: 'No se pudo cobrar la mesa',
+          supportingLine: _lastError ?? 'Verifica el estado de la mesa.',
+          actionRequired: 'NINGUNA',
+        );
+      }
+      final cashCollected = preview.lines.fold<double>(
+        0,
+        (sum, l) => sum + (l.via == TableChargeVia.cash ? l.amount : 0),
+      );
+      final lunchesFromPlan = preview.lines
+          .where((l) => l.via == TableChargeVia.plan || l.via == TableChargeVia.hostPlan)
+          .length;
+      _redeemedCodes.add(tableKey);
+      _redeemedCodes.add(codeKey);
+      _sessionValidatedTransactions.insert(
+        0,
+        TransactionItem(
+          id: chargeId,
+          customerName: 'Mesa $tableId',
+          type: cashCollected > 0 ? 'Venta Suelta' : 'Validado',
+          amount: cashCollected,
+          paymentMethod: cashCollected > 0 ? 'Efectivo' : 'Plan',
+          timestamp: DateTime.now(),
+        ),
+      );
+      return ScanResult(
+        isValid: true,
+        outcome: 'VERDE',
+        title: 'Mesa $tableId registrada',
+        supportingLine: '$lunchesFromPlan con plan · cobro registrado',
+        passId: tableKey,
+        actionRequired: 'NINGUNA',
+      );
+    }
+
+    final backendCode = BocadooQrParser.resolveRawPayload(rawPayload);
+    final intent = 'validar:$restaurantId:$backendCode';
     final ik = _idempotency.keyFor(intent);
     try {
       final data = await guard(
         () => _api.send<Map<String, dynamic>>(
               'POST',
               '${ApiConfig.v1}/caja/validar',
-              body: {'codigoQr': rawPayload},
+              body: {'codigoQr': backendCode},
               restaurant: true,
               idempotencyKey: ik,
             ).then((v) => v ?? <String, dynamic>{}),
@@ -346,6 +589,21 @@ class ApiOwnerRepository
           'qr-${DateTime.now().microsecondsSinceEpoch}';
       if (consumoId != null && consumoId.isNotEmpty) {
         _consumoIdByPassId[passId] = consumoId;
+      }
+
+      if (resultado == 'OK' || resultado == 'OK_ADVERTENCIA') {
+        _redeemedCodes.add(codeKey);
+        _sessionValidatedTransactions.insert(
+          0,
+          TransactionItem(
+            id: passId,
+            customerName: clienteNombre ?? 'Comensal',
+            type: 'Validado',
+            amount: 0,
+            paymentMethod: 'Plan',
+            timestamp: redeemedAt ?? DateTime.now(),
+          ),
+        );
       }
 
       switch (resultado) {
@@ -384,11 +642,9 @@ class ApiOwnerRepository
         case 'DUPLICADO':
           return ScanResult(
             isValid: false,
-            outcome: 'GRIS',
-            title: 'Ya almorzó hoy',
-            supportingLine: mensaje.isNotEmpty
-                ? mensaje
-                : 'Ya registró su almuerzo hoy',
+            outcome: 'ROJO',
+            title: 'Ya canjeado',
+            supportingLine: 'Este código ya fue canjeado anteriormente',
             studentName: clienteNombre,
             studentCareer: planNombre,
             redeemedAt: redeemedAt,
@@ -444,9 +700,7 @@ class ApiOwnerRepository
             isValid: false,
             outcome: 'ROJO',
             title: 'Es de otro local',
-            supportingLine: mensaje.isNotEmpty
-                ? mensaje
-                : 'Este pase pertenece a otro restaurante',
+            supportingLine: 'Este código pertenece a otro restaurante',
             studentName: clienteNombre,
             actionRequired: 'NINGUNA',
           );
@@ -625,7 +879,6 @@ class ApiOwnerRepository
 
     for (final p in rawPedidos.whereType<Map>()) {
       final totalCents = _asInt(p['totalCentavos']);
-      if (totalCents <= 0) continue;
       final fecha = (p['fecha'] ?? '').toString();
       if (fecha.isNotEmpty && fecha != today) continue;
 
@@ -636,17 +889,26 @@ class ApiOwnerRepository
       final comensal = p['comensal'] is Map ? p['comensal'] as Map : null;
       final name = (cliente?['nombre'] ?? comensal?['nombre'] ?? 'Comensal')
           .toString();
+      final almuerzo = p['almuerzo'] is Map ? p['almuerzo'] as Map : null;
+      final paidByPlan = almuerzo?['cubiertoPorPlan'] == true;
 
       out.add(
         TransactionItem(
           id: (p['id'] ?? '').toString(),
           customerName: name,
-          type: 'Pedido #$numero',
+          type: paidByPlan && totalCents == 0 ? 'Validado' : 'Pedido #$numero',
           amount: Money.fromCents(totalCents),
-          paymentMethod: 'Efectivo',
+          paymentMethod: paidByPlan && totalCents == 0 ? 'Plan' : 'Efectivo',
           timestamp: _parseDateTime(p['servidoEn'] ?? p['creadoEn']),
         ),
       );
+    }
+
+    final existingIds = out.map((e) => e.id).toSet();
+    for (final tx in _sessionValidatedTransactions) {
+      if (!existingIds.contains(tx.id)) {
+        out.add(tx);
+      }
     }
 
     out.sort((a, b) => b.timestamp.compareTo(a.timestamp));

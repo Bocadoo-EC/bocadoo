@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/analytics/events_service.dart';
 import '../../../core/config/support_config.dart';
 import '../../../core/contracts/models.dart';
+import '../../../core/contracts/qr_parser.dart';
 import '../../../core/contracts/repositories.dart';
 import '../../../core/location/location_service.dart';
 import '../../../core/network/api_client.dart';
@@ -107,7 +108,10 @@ class ApiCustomerRepository implements ICustomerRepository {
         remainingLunches: remaining,
         expiresAt: expiresAt,
         status: status,
-        qrToken: qrToken,
+        qrToken: BocadooQrParser.toShortCode(
+          qrToken.isNotEmpty ? qrToken : passId,
+          restaurantId: restId,
+        ),
         restaurantId: restId,
         restaurantName: restName,
         avatarUrl: rest['logoUrl']?.toString(),
@@ -141,7 +145,8 @@ class ApiCustomerRepository implements ICustomerRepository {
       ),
     );
     eventsService.track('comensal.qr_generado', restaurantId: restId);
-    return (data['codigo'] ?? '').toString();
+    final raw = (data['codigo'] ?? '').toString();
+    return BocadooQrParser.toShortCode(raw, restaurantId: restId);
   }
 
   @override
@@ -1021,7 +1026,7 @@ class ApiCustomerRepository implements ICustomerRepository {
       restaurantName: restaurantName,
       hostName: hostName,
       time: time,
-      qrPayload: 'BCD-MESA-$id',
+      qrPayload: BocadooQrParser.generateTableCode(id, restaurantId: restaurantId),
       shareUrl: 'bocadoo://mesa/$invitacion',
       mode: mode,
       members: members,
@@ -1346,7 +1351,11 @@ class ApiCustomerRepository implements ICustomerRepository {
       orderNumber: numero.isEmpty ? id : numero,
       status: status,
       restaurantName: (rest['nombre'] ?? '').toString(),
-      qrPayload: (json['qr'] ?? id).toString(),
+      qrPayload: BocadooQrParser.generateOrderCode(
+        numero.isEmpty ? id : numero,
+        orderId: id.isEmpty ? null : id,
+        restaurantId: (rest['id'] ?? '').toString(),
+      ),
       detail: parts.join(' · '),
       soup: soup,
       main: main,

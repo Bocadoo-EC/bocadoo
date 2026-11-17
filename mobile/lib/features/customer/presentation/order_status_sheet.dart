@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../../core/contracts/models.dart';
+import '../../../core/contracts/qr_parser.dart';
 import '../../../core/theme/app_theme.dart';
 import 'customer_controller.dart';
 import 'customer_widgets.dart' show formatMoney;
@@ -165,10 +166,17 @@ class _OrderStatusSheetState extends ConsumerState<OrderStatusSheet> {
               borderRadius: BorderRadius.circular(22),
               border: Border.all(color: colors.outlineVariant),
             ),
-            child: SocialQr(value: order.qrPayload, size: 150),
+            child: SocialQr(
+              value: BocadooQrParser.generateOrderCode(order.orderNumber, orderId: order.id),
+              size: 150,
+            ),
           ),
           const SizedBox(height: 10),
-          SocialBadge(label: order.qrPayload, background: colors.primaryContainer, foreground: colors.primary),
+          SocialBadge(
+            label: BocadooQrParser.generateOrderCode(order.orderNumber, orderId: order.id),
+            background: colors.primaryContainer,
+            foreground: colors.primary,
+          ),
         ]),
       ),
       const SizedBox(height: 14),

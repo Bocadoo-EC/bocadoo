@@ -95,10 +95,165 @@ class MockOwnerRepository
   // IOwnerRepository
   // ---------------------------------------------------------------------------
 
+  final Set<String> _redeemedCodes = <String>{};
+  String? _lastValidatedCodeKey;
+
+  DemoPreorder? _findPreorderByCode(String rawPayload) {
+    final cleaned = BocadooQrParser.sanitizeManualInput(rawPayload);
+    final resolvedNum = BocadooQrParser.resolveOrderNumber(rawPayload);
+    if (resolvedNum != null) {
+      return _store.preorderByNumber(resolvedNum);
+    }
+    final upper = rawPayload.trim().toUpperCase();
+    if (upper.startsWith('BCD-ORD-')) {
+      return _store.preorderByNumber(rawPayload.trim().substring('BCD-ORD-'.length).trim());
+    }
+    if (upper.startsWith('#') && upper.length > 1) {
+      return _store.preorderByNumber(upper.substring(1).trim());
+    }
+    if (cleaned.length == BocadooQrParser.shortCodeLength) {
+      for (final o in _store.preorders) {
+        final code = BocadooQrParser.generateOrderCode(
+          o.number,
+          orderId: o.number,
+          restaurantId: o.restaurantId,
+        );
+        if (code == cleaned) return o;
+      }
+    }
+    return null;
+  }
+
+  SharedTable? _findTableByCode(String rawPayload) {
+    final cleaned = BocadooQrParser.sanitizeManualInput(rawPayload);
+    final resolvedId = BocadooQrParser.resolveTableId(rawPayload);
+    if (resolvedId != null) {
+      return _store.tables[resolvedId.toUpperCase()] ?? _store.tables[resolvedId];
+    }
+    final upper = rawPayload.trim().toUpperCase();
+    if (upper.startsWith('BCD-MESA-')) {
+      final id = rawPayload.trim().substring('BCD-MESA-'.length).trim().toUpperCase();
+      return _store.tables[id];
+    }
+    if (cleaned.length == BocadooQrParser.shortCodeLength) {
+      for (final t in _store.tables.values) {
+        final code = BocadooQrParser.generateTableCode(
+          t.id,
+          restaurantId: t.restaurantId,
+        );
+        if (code == cleaned) return t;
+      }
+    }
+    return null;
+  }
+
   @override
   Future<ScanResult> validateQrCode(String rawPayload) async {
     await _simulateLatency();
     final now = _clock();
+    final cleaned = BocadooQrParser.sanitizeManualInput(rawPayload);
+    final codeKey = cleaned.length == BocadooQrParser.shortCodeLength
+        ? cleaned
+        : rawPayload.trim().toUpperCase();
+
+    // 1. Verificar si es una preorden (código de 6 caracteres o BCD-ORD-).
+    final preorder = _findPreorderByCode(rawPayload);
+    if (preorder != null) {
+      if (preorder.restaurantId != restaurantId) {
+        return const ScanResult(
+          isValid: false,
+          outcome: 'ROJO',
+          title: 'Es de otro local',
+          supportingLine: 'Este código pertenece a otro restaurante',
+          actionRequired: 'NINGUNA',
+        );
+      }
+      final ordKey = 'ORD:${preorder.number}';
+      if (!preorder.isOpen ||
+          _redeemedCodes.contains(ordKey) ||
+          _redeemedCodes.contains(codeKey)) {
+        return ScanResult(
+          isValid: false,
+          outcome: 'ROJO',
+          title: 'Ya canjeado',
+          supportingLine: 'Este código ya fue canjeado anteriormente',
+          studentName: preorder.dinerName,
+          actionRequired: 'NINGUNA',
+        );
+      }
+      _lastValidatedCodeKey = codeKey;
+      return ScanResult(
+        isValid: true,
+        outcome: 'VERDE',
+        title: 'Preorden #${preorder.number} registrada',
+        supportingLine: '${preorder.soup} · ${preorder.main}',
+        studentName: preorder.dinerName,
+        passId: ordKey,
+        actionRequired: 'NINGUNA',
+      );
+    }
+
+    // 2. Verificar si es una mesa activa (código de 6 caracteres o BCD-MESA-).
+    final table = _findTableByCode(rawPayload);
+    if (table != null) {
+      if (table.restaurantId != restaurantId) {
+        return const ScanResult(
+          isValid: false,
+          outcome: 'ROJO',
+          title: 'Es de otro local',
+          supportingLine: 'Este código pertenece a otro restaurante',
+          actionRequired: 'NINGUNA',
+        );
+      }
+      final tableKey = 'MESA:${table.id}';
+      if (_store.settledTables.contains(table.id) ||
+          _redeemedCodes.contains(tableKey) ||
+          _redeemedCodes.contains(codeKey)) {
+        return ScanResult(
+          isValid: false,
+          outcome: 'ROJO',
+          title: 'Ya canjeado',
+          supportingLine: 'Este código ya fue canjeado anteriormente',
+          studentName: table.hostName,
+          actionRequired: 'NINGUNA',
+        );
+      }
+      _lastValidatedCodeKey = codeKey;
+      return ScanResult(
+        isValid: true,
+        outcome: 'VERDE',
+        title: 'Mesa ${table.id} registrada',
+        supportingLine: '${table.members.length} comensales · ${table.hostName}',
+        studentName: table.hostName,
+        passId: tableKey,
+        actionRequired: 'NINGUNA',
+      );
+    }
+
+    // 3. Verificar pertenencia al local registrada en el generador de códigos.
+    final codeRestId = BocadooQrParser.restaurantForCode(rawPayload);
+    if (codeRestId != null &&
+        codeRestId.isNotEmpty &&
+        codeRestId != restaurantId) {
+      return const ScanResult(
+        isValid: false,
+        outcome: 'ROJO',
+        title: 'Es de otro local',
+        supportingLine: 'Este código pertenece a otro restaurante',
+        actionRequired: 'NINGUNA',
+      );
+    }
+
+    // 4. Bloqueo de doble escaneo por código único ya consumido.
+    if (_redeemedCodes.contains(codeKey)) {
+      return const ScanResult(
+        isValid: false,
+        outcome: 'ROJO',
+        title: 'Ya canjeado',
+        supportingLine: 'Este código ya fue canjeado anteriormente',
+        actionRequired: 'NINGUNA',
+      );
+    }
 
     final qr = BocadooQrParser.parseAndValidate(rawPayload, now);
 
@@ -132,6 +287,7 @@ class MockOwnerRepository
       );
     }
 
+    _lastValidatedCodeKey = codeKey;
     return _evaluate(student, now);
   }
 
@@ -140,14 +296,68 @@ class MockOwnerRepository
     await _simulateLatency();
     final now = _clock();
 
+    if (passId.startsWith('ORD:')) {
+      final orderNumber = passId.substring(4);
+      final order = _store.preorderByNumber(orderNumber);
+      if (order == null ||
+          order.restaurantId != restaurantId ||
+          !order.isOpen ||
+          _redeemedCodes.contains(passId)) {
+        return false;
+      }
+      _redeemedCodes.add(passId);
+      if (_lastValidatedCodeKey != null) {
+        _redeemedCodes.add(_lastValidatedCodeKey!);
+      }
+      if (order.hasPlan) {
+        if (!order.validated) {
+          final ok = await validateOrder(restaurantId, orderNumber);
+          if (!ok) return false;
+        }
+        order
+          ..status = PreorderStatus.delivered
+          ..deliveredAt = now;
+        _store.changed();
+        return true;
+      } else {
+        return deliverOrder(restaurantId, orderNumber);
+      }
+    }
+
+    if (passId.startsWith('MESA:')) {
+      final tableId = passId.substring(5);
+      final table = _store.tables[tableId];
+      if (table == null ||
+          table.restaurantId != restaurantId ||
+          _store.settledTables.contains(tableId) ||
+          _redeemedCodes.contains(passId)) {
+        return false;
+      }
+      _redeemedCodes.add(passId);
+      if (_lastValidatedCodeKey != null) {
+        _redeemedCodes.add(_lastValidatedCodeKey!);
+      }
+      final chargeId = await chargeTable(restaurantId, tableId);
+      return chargeId != null;
+    }
+
     final student = _studentByPassId(passId);
     if (student == null) return false;
+    if (student.restaurantId != restaurantId) return false;
 
-    // Idempotencia: si ya se canjeó hace < 60 s no se descuenta otra vez.
+    // Idempotencia: si ya se canjeó hace < 60 s o con el mismo código, bloquear.
     if (_recentRedemption(student, now) != null) return false;
+    if (_lastValidatedCodeKey != null &&
+        _redeemedCodes.contains(_lastValidatedCodeKey!)) {
+      return false;
+    }
 
     final plan = student.nextRedeemablePlan(now);
     if (plan == null) return false;
+
+    if (_lastValidatedCodeKey != null) {
+      _redeemedCodes.add(_lastValidatedCodeKey!);
+    }
 
     plan.remaining -= 1;
     final redemption = _Redemption(
@@ -167,6 +377,22 @@ class MockOwnerRepository
         timestamp: now,
       ),
     );
+
+    // Si este comensal tenía una preorden EN_CAMINO con plan en este local,
+    // márcala como entregada/canjeada para descontar de "X en camino".
+    for (final o in _store.preorders) {
+      if (o.restaurantId == restaurantId &&
+          o.isOpen &&
+          o.dinerName.toLowerCase() == student.name.toLowerCase()) {
+        o
+          ..validated = true
+          ..status = PreorderStatus.delivered
+          ..deliveredAt = now;
+        _redeemedCodes.add('ORD:${o.number}');
+        _store.changed();
+        break;
+      }
+    }
     return true;
   }
 
@@ -1063,7 +1289,7 @@ class MockOwnerRepository
         isValid: false,
         outcome: 'ROJO',
         title: 'Es de otro local',
-        supportingLine: 'Este plan pertenece a otro restaurante.',
+        supportingLine: 'Este código pertenece a otro restaurante',
         action: 'VENDER_PLAN',
       );
     }
@@ -1074,9 +1300,9 @@ class MockOwnerRepository
       return _result(
         student,
         isValid: false,
-        outcome: 'GRIS',
-        title: 'Ya validado',
-        supportingLine: 'Ya se descontó hace un momento.',
+        outcome: 'ROJO',
+        title: 'Ya canjeado',
+        supportingLine: 'Este código ya fue canjeado anteriormente',
         action: 'NINGUNA',
         redemption: recent,
       );

@@ -198,8 +198,8 @@ class _CajaBody extends ConsumerWidget {
     final planRequests =
         ref.watch(planRequestsProvider).value ?? const <OwnerPlanRequest>[];
     final isOwner = ref.watch(ownerRoleProvider) == OwnerRole.owner;
-    final charges = summary.transactions.where((t) => t.amount > 0).take(20).toList();
-    final total = charges.fold<double>(0, (sum, t) => sum + t.amount);
+    final charges = summary.transactions.take(20).toList();
+    final total = summary.transactions.fold<double>(0, (sum, t) => sum + t.amount);
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
@@ -231,7 +231,12 @@ class _CajaBody extends ConsumerWidget {
         ElevatedButton.icon(
           onPressed: () => context.push('/owner/registrar-consumo'),
           icon: const Icon(Icons.receipt_long_rounded),
-          label: const Text('Cobro suelto (POS · Almuerzos y Carta)', maxLines: 1, overflow: TextOverflow.ellipsis),
+          label: const Text(
+            'Cobro suelto (POS)',
+            maxLines: 1,
+            softWrap: false,
+            overflow: TextOverflow.ellipsis,
+          ),
         ),
         const SizedBox(height: 10),
         Row(children: [
@@ -518,7 +523,7 @@ class _ChargeRow extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 8),
-        Text(OwnerFormat.money(item.amount),
+        Text(item.amount > 0 ? OwnerFormat.money(item.amount) : 'Plan',
             style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: colors.onSurface)),
       ]),
     );

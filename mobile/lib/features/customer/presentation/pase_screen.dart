@@ -53,7 +53,9 @@ class _PaseScreenState extends ConsumerState<PaseScreen> {
       builder: (context, _) {
         final s = controller.state;
         final hasAnyPassOrLive =
-            s.passes.isNotEmpty || s.activeOrder != null || s.activeTable != null;
+            s.passes.isNotEmpty ||
+            s.activeOrder != null ||
+            s.activeTable != null;
         if (!hasAnyPassOrLive &&
             (s.isLoading || s.status == CustomerStatus.initial)) {
           return const _PaseSkeleton();
@@ -123,10 +125,7 @@ class _Hero extends StatelessWidget {
   final CustomerUiState state;
   final CustomerController controller;
 
-  const _Hero({
-    required this.state,
-    required this.controller,
-  });
+  const _Hero({required this.state, required this.controller});
 
   @override
   Widget build(BuildContext context) {
@@ -621,7 +620,15 @@ class _QrCard extends StatelessWidget {
               child: Stack(
                 clipBehavior: Clip.none,
                 children: [
-                  _Qr(value: state.qrValue, size: 160),
+                  _Qr(
+                    value: BocadooQrParser.toShortCode(
+                      state.qrValue,
+                      restaurantId: mode == QrMode.plan
+                          ? state.currentPass?.restaurantId
+                          : null,
+                    ),
+                    size: 160,
+                  ),
                   Positioned(
                     right: -16,
                     bottom: -16,
@@ -639,6 +646,28 @@ class _QrCard extends StatelessWidget {
                     ),
                   ),
                 ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+            decoration: BoxDecoration(
+              color: colors.primaryContainer,
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(
+              BocadooQrParser.toShortCode(
+                state.qrValue,
+                restaurantId: mode == QrMode.plan
+                    ? state.currentPass?.restaurantId
+                    : null,
+              ),
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 2.0,
+                color: colors.primary,
               ),
             ),
           ),
@@ -735,7 +764,30 @@ class _QrCard extends StatelessWidget {
                           borderRadius: BorderRadius.circular(28),
                           border: Border.all(color: colors.outlineVariant),
                         ),
-                        child: _Qr(value: value, size: 280),
+                        child: _Qr(
+                          value: BocadooQrParser.toShortCode(value),
+                          size: 280,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: colors.primaryContainer,
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          BocadooQrParser.toShortCode(value),
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: 2.5,
+                            color: colors.primary,
+                          ),
+                        ),
                       ),
                       const SizedBox(height: 16),
                       Text(

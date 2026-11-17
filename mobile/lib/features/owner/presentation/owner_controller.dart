@@ -367,60 +367,18 @@ class OwnerController extends Notifier<OwnerState> {
   /// Prefijos de los QR que no son pases (escáner universal de Caja).
   static const tablePrefix = 'BCD-MESA-';
   static const orderPrefix = 'BCD-ORD-';
-  static final _uuidRegex = RegExp(
-    r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
-  );
 
   /// Valida un QR leído por la cámara o ingresado a mano. Reconoce todos los
-  /// formatos: pase de plan (`BCD1.`), mesa (`BCD-MESA-`), preorden (`BCD-ORD-`,
-  /// UUID o `#N`).
+  /// formatos: código corto de 6 caracteres, pase de plan (`BCD1.`), mesa
+  /// (`BCD-MESA-`), preorden (`BCD-ORD-`, UUID o `#N`).
   Future<void> onCodeDetected(String rawPayload) async {
     if (_busy || state is OwnerSuccess || state is OwnerError || state is OwnerRedirect) return;
     final code = rawPayload.trim();
     if (code.isEmpty) return;
 
-    final upper = code.toUpperCase();
-    if (upper.startsWith(tablePrefix) && code.length > tablePrefix.length) {
-      state = OwnerRedirect(
-        '/owner/cobrar-mesa/${code.substring(tablePrefix.length).trim()}',
-      );
-      return;
-    }
-    if (upper.startsWith(orderPrefix) && code.length > orderPrefix.length) {
-      state = OwnerRedirect(
-        '/owner/pedidos?cobrar=${code.substring(orderPrefix.length).trim()}',
-      );
-      return;
-    }
-
     _busy = true;
     state = const OwnerScanning(isProcessing: true);
     try {
-      if (!AppMode.useMock) {
-        final apiRepo = ref.read(apiOwnerRepositoryProvider);
-        if (_uuidRegex.hasMatch(code)) {
-          final order = await apiRepo.resolveOrderById(code);
-          if (order != null) {
-            state = OwnerRedirect('/owner/pedidos?cobrar=${order.number}');
-          } else {
-            state = OwnerError(
-              apiRepo.consumeLastError() ?? 'No encontramos ese pedido.',
-            );
-          }
-          return;
-        }
-        if (code.startsWith('#') && code.length > 1) {
-          final numQuery = code.substring(1).trim();
-          final order = await apiRepo.resolveOrderByNumber(numQuery);
-          if (order != null) {
-            state = OwnerRedirect('/owner/pedidos?cobrar=${order.number}');
-          } else {
-            state = const OwnerError('No encontramos ese pedido activo.');
-          }
-          return;
-        }
-      }
-
       final result = await _repo.validateQrCode(code);
       final passId = result.passId;
       if (!result.isValid || passId == null) {

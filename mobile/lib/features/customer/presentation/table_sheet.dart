@@ -8,6 +8,7 @@ import 'package:material_ui/material_ui.dart';
 import '../../../core/config/api_capabilities.dart';
 import '../../../core/config/app_mode.dart';
 import '../../../core/contracts/models.dart';
+import '../../../core/contracts/qr_parser.dart';
 import '../../../core/network/api_exception.dart';
 import '../../../core/network/polling.dart';
 import '../../../core/theme/app_theme.dart';
@@ -416,7 +417,16 @@ class _QrCard extends StatelessWidget {
             border: Border.all(color: colors.outlineVariant),
           ),
           child: Column(children: [
-            SocialQr(value: table.qrPayload, size: 150),
+            SocialQr(
+              value: BocadooQrParser.generateTableCode(table.id, restaurantId: table.restaurantId),
+              size: 150,
+            ),
+            const SizedBox(height: 8),
+            SocialBadge(
+              label: BocadooQrParser.generateTableCode(table.id, restaurantId: table.restaurantId),
+              background: colors.primaryContainer,
+              foreground: colors.primary,
+            ),
             const SizedBox(height: 6),
             Text(n == 1 ? '1 comensal' : '$n comensales',
                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: b.qrForeground)),

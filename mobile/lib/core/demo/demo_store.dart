@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../contracts/models.dart';
+import '../contracts/qr_parser.dart';
 
 /// Estado de una preorden en el almacén de demostración.
 enum PreorderStatus { pending, delivered, acknowledged, cancelled }
@@ -179,7 +180,7 @@ class DemoStore extends ChangeNotifier {
       restaurantName: 'La Cuchara de San Blas',
       hostName: 'Carlos Mejía',
       time: '13:00',
-      qrPayload: 'BCD-MESA-M1234',
+      qrPayload: BocadooQrParser.generateTableCode('M1234', restaurantId: ownerRestaurantId),
       // TODO: Definir el enlace de invitación de la app (ficha Fase 5, B12).
       shareUrl: 'https://bocadoo.ec/app/comensal/mesa/M1234',
       occupancyLabel: 'Fluido · Llegas y te sientas',
@@ -191,6 +192,14 @@ class DemoStore extends ChangeNotifier {
         TableMember(id: 'mem-3', name: 'Mateo Ruiz', soup: soups[0], main: mains[0].name, takeaway: true),
       ],
     );
+
+    for (final o in preorders) {
+      BocadooQrParser.generateOrderCode(
+        o.number,
+        orderId: o.number,
+        restaurantId: o.restaurantId,
+      );
+    }
 
     feedback.addAll([
       DemoFeedback(

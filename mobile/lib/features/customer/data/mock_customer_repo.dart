@@ -63,7 +63,7 @@ class MockCustomerRepository implements ICustomerRepository {
         totalLunches: 20,
         remainingLunches: 14,
         expiresAt: now.add(const Duration(days: 27)),
-        qrToken: BocadooQrParser.generateQrPayload(targetUserId),
+        qrToken: BocadooQrParser.generateQrPayload(targetUserId, now, 'r1'),
         restaurantId: 'r1',
         restaurantName: 'La Cuchara de San Blas',
       ),
@@ -75,7 +75,7 @@ class MockCustomerRepository implements ICustomerRepository {
         totalLunches: 20,
         remainingLunches: 6,
         expiresAt: now.add(const Duration(days: 12)),
-        qrToken: BocadooQrParser.generateQrPayload(targetUserId),
+        qrToken: BocadooQrParser.generateQrPayload('${targetUserId}_r2', now, 'r2'),
         restaurantId: 'r2',
         restaurantName: 'Verde Limón',
       ),
@@ -89,7 +89,12 @@ class MockCustomerRepository implements ICustomerRepository {
   Future<String> refreshQrToken(String passId) async {
     // TODO: Conectar con provider de backend
     await _simulateNetwork();
-    final newToken = BocadooQrParser.generateQrPayload('u1');
+    final isR2 = passId == 'sub-2';
+    final newToken = BocadooQrParser.generateQrPayload(
+      isR2 ? 'u1_r2' : 'u1',
+      DateTime.now(),
+      isR2 ? 'r2' : 'r1',
+    );
     final cached = await _cache.getPass();
     if (cached != null && cached.id == passId) {
       await _cache.savePass(cached.copyWith(qrToken: newToken));
@@ -212,7 +217,7 @@ class MockCustomerRepository implements ICustomerRepository {
       restaurantName: r.name,
       hostName: _hostName,
       time: time,
-      qrPayload: 'BCD-MESA-$id',
+      qrPayload: BocadooQrParser.generateTableCode(id, restaurantId: r.id),
       // TODO: Definir el enlace de invitación de la app (ficha Fase 5, B12).
       shareUrl: 'https://bocadoo.ec/app/comensal/mesa/$id',
       occupancyLabel: _occupancyLabel(r.occupancy),
@@ -358,7 +363,11 @@ class MockCustomerRepository implements ICustomerRepository {
   static ActiveOrder _toActiveOrder(DemoPreorder o) => ActiveOrder(
         orderNumber: o.number,
         restaurantName: o.restaurantName,
-        qrPayload: 'BCD-ORD-${o.number}',
+        qrPayload: BocadooQrParser.generateOrderCode(
+        o.number,
+        orderId: o.number,
+        restaurantId: o.restaurantId,
+      ),
         status: o.status == PreorderStatus.delivered ? 'ENTREGADO' : 'PREPARANDO',
         detail: o.detail,
         soup: o.soup,

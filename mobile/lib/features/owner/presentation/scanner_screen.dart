@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:go_router/go_router.dart';
@@ -146,6 +147,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
     final processing = state is OwnerScanning && state.isProcessing;
 
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       backgroundColor: scheme.scrim,
       body: Stack(
         fit: StackFit.expand,
@@ -244,16 +246,6 @@ class _TopBar extends StatelessWidget {
                   ),
             ),
           ),
-          IconButton.filled(
-            tooltip: 'Cierre de caja',
-            style: IconButton.styleFrom(
-              backgroundColor: scheme.surface,
-              foregroundColor: scheme.onSurface,
-            ),
-            onPressed: () => context.push('/owner/cash-closing'),
-            icon: const Icon(Icons.point_of_sale),
-          ),
-          const SizedBox(width: 8),
           ValueListenableBuilder<MobileScannerState>(
             valueListenable: camera,
             builder: (context, value, _) {
@@ -284,12 +276,14 @@ class _StatusHint extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = context.colorScheme;
+    final whiteColor = context.bocadooColors.imageForeground;
     final style = Theme.of(context).textTheme.bodyLarge?.copyWith(
-          color: scheme.surface,
+          color: whiteColor,
           fontWeight: FontWeight.w600,
         );
+    final Widget child;
     if (processing) {
-      return Row(
+      child = Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           SizedBox(
@@ -304,16 +298,25 @@ class _StatusHint extends StatelessWidget {
           Text('Validando pase…', style: style),
         ],
       );
+    } else {
+      child = Column(mainAxisSize: MainAxisSize.min, children: [
+        Text('Apunta al código', textAlign: TextAlign.center, style: style),
+        const SizedBox(height: 4),
+        Text(
+          'Plan, preorden o mesa: se reconoce solo',
+          textAlign: TextAlign.center,
+          style: style?.copyWith(fontSize: 14, fontWeight: FontWeight.w500),
+        ),
+      ]);
     }
-    return Column(mainAxisSize: MainAxisSize.min, children: [
-      Text('Apunta al código', textAlign: TextAlign.center, style: style),
-      const SizedBox(height: 4),
-      Text(
-        'Plan, preorden o mesa: se reconoce solo',
-        textAlign: TextAlign.center,
-        style: style?.copyWith(fontSize: 14, fontWeight: FontWeight.w500),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        color: scheme.scrim.withValues(alpha: 0.68),
+        borderRadius: BorderRadius.circular(12),
       ),
-    ]);
+      child: child,
+    );
   }
 }
 
@@ -401,13 +404,19 @@ class _SimulatorSheet extends StatelessWidget {
             leading: Icon(Icons.groups_outlined, color: scheme.primary),
             title: const Text('Mesa M1234'),
             subtitle: const Text('QR de mesa con amigos · abre Cobrar mesa'),
-            onTap: () => Navigator.pop(context, 'BCD-MESA-M1234'),
+            onTap: () => Navigator.pop(
+              context,
+              BocadooQrParser.generateTableCode('M1234', restaurantId: 'r1'),
+            ),
           ),
           ListTile(
             leading: Icon(Icons.receipt_long_outlined, color: scheme.primary),
             title: const Text('Preorden #43'),
-            subtitle: const Text('QR de pedido · abre Cobrar pedido'),
-            onTap: () => Navigator.pop(context, 'BCD-ORD-43'),
+            subtitle: const Text('QR de pedido · canjea preorden'),
+            onTap: () => Navigator.pop(
+              context,
+              BocadooQrParser.generateOrderCode('43', restaurantId: 'r1'),
+            ),
           ),
           ListTile(
             leading: Icon(Icons.cancel_outlined, color: scheme.error),
@@ -417,6 +426,22 @@ class _SimulatorSheet extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _UpperCaseSixCharFormatter extends TextInputFormatter {
+  const _UpperCaseSixCharFormatter();
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final cleaned = BocadooQrParser.sanitizeManualInput(newValue.text);
+    return TextEditingValue(
+      text: cleaned,
+      selection: TextSelection.collapsed(offset: cleaned.length),
     );
   }
 }
@@ -440,9 +465,13 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
   }
 
   void _accept() {
-    final value = _text.text.trim();
+    final value = BocadooQrParser.sanitizeManualInput(_text.text);
     if (value.isEmpty) {
-      setState(() => _error = 'Escribe el código del pase.');
+      setState(() => _error = 'Escribe el código de 6 caracteres.');
+      return;
+    }
+    if (value.length < 6) {
+      setState(() => _error = 'El código debe tener 6 caracteres.');
       return;
     }
     Navigator.pop(context, value);
@@ -450,37 +479,46 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Ingresar código'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('Escribe el código que aparece bajo el QR del comensal.'),
-          const SizedBox(height: 16),
-          TextField(
-            controller: _text,
-            autofocus: true,
-            textInputAction: TextInputAction.done,
-            textCapitalization: TextCapitalization.characters,
-            decoration: InputDecoration(
-              hintText: 'BCD1.u1.…',
-              errorText: _error,
-            ),
-            onChanged: (_) {
-              if (_error != null) setState(() => _error = null);
-            },
-            onSubmitted: (_) => _accept(),
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: SingleChildScrollView(
+        child: AlertDialog(
+          insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+          title: const Text('Ingresar código'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Escribe el código de 6 caracteres bajo el QR del comensal.'),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _text,
+                autofocus: true,
+                maxLength: 6,
+                textInputAction: TextInputAction.done,
+                textCapitalization: TextCapitalization.characters,
+                inputFormatters: const [_UpperCaseSixCharFormatter()],
+                decoration: InputDecoration(
+                  hintText: 'Ej: A7K9P2',
+                  counterText: '',
+                  errorText: _error,
+                ),
+                onChanged: (_) {
+                  if (_error != null) setState(() => _error = null);
+                },
+                onSubmitted: (_) => _accept(),
+              ),
+            ],
           ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancelar'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(onPressed: _accept, child: const Text('Validar')),
+          ],
         ),
-        FilledButton(onPressed: _accept, child: const Text('Validar')),
-      ],
+      ),
     );
   }
 }

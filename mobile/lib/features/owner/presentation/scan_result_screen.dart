@@ -26,6 +26,7 @@ Future<void> openScannerFlow(BuildContext context, WidgetRef ref) async {
       await router.push(state.location);
       if (context.mounted) {
         ref.invalidate(dailySummaryProvider);
+        ref.invalidate(activeOrdersProvider);
         ref.invalidate(pendingTablesProvider);
         ref.invalidate(ordersOnTheWayProvider);
       }
@@ -33,6 +34,9 @@ Future<void> openScannerFlow(BuildContext context, WidgetRef ref) async {
     }
     if (state is! OwnerSuccess && state is! OwnerError) return;
     ref.invalidate(dailySummaryProvider);
+    ref.invalidate(activeOrdersProvider);
+    ref.invalidate(pendingTablesProvider);
+    ref.invalidate(ordersOnTheWayProvider);
 
     final name = switch (state) {
       OwnerSuccess(:final result) => result.studentName,
@@ -46,6 +50,9 @@ Future<void> openScannerFlow(BuildContext context, WidgetRef ref) async {
     if (!context.mounted) return;
     controller.reset();
     ref.invalidate(dailySummaryProvider);
+    ref.invalidate(activeOrdersProvider);
+    ref.invalidate(pendingTablesProvider);
+    ref.invalidate(ordersOnTheWayProvider);
 
     if (action == ScanDialogAction.scanAgain) continue;
     if (action == ScanDialogAction.sellPlan) {
