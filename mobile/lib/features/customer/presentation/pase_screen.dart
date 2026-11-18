@@ -23,27 +23,149 @@ class PaseScreen extends ConsumerStatefulWidget {
   ConsumerState<PaseScreen> createState() => _PaseScreenState();
 }
 
-class _PaseScreenState extends ConsumerState<PaseScreen> {
+class _PaseScreenState extends ConsumerState<PaseScreen>
+    with WidgetsBindingObserver {
   Timer? _qrTimer;
-  int _lastRemaining = BocadooQrParser.getRemainingSecondsInCycle();
+  late final CustomerController _controller;
+  int _qrCountdown = 30;
+  bool _isForeground = true;
+  bool _isRefreshingQr = false;
+  int _lastCelebrationTick = 0;
 
   @override
   void initState() {
     super.initState();
-    // El QR del plan rota cada ciclo para que una captura no sirva en caja.
-    _qrTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      final remaining = BocadooQrParser.getRemainingSecondsInCycle();
-      if (remaining > _lastRemaining) {
-        ref.read(customerControllerProvider).refreshQr();
+    WidgetsBinding.instance.addObserver(this);
+    _controller = ref.read(customerControllerProvider);
+    _lastCelebrationTick = _controller.state.redemptionCelebrationTick;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _controller.onPaseVisibilityChanged(true);
       }
-      _lastRemaining = remaining;
     });
+    // Cuenta regresiva local (30 s): refresca solo con Pase visible y poco antes de vencer.
+    _qrTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted || !_isForeground) return;
+      if (_qrCountdown > 0) {
+        _qrCountdown--;
+      }
+      if (_qrCountdown <= 3 && !_isRefreshingQr) {
+        unawaited(_triggerQrRefresh());
+      }
+    });
+  }
+
+  Future<void> _triggerQrRefresh() async {
+    if (_isRefreshingQr || !mounted || !_isForeground) return;
+    _isRefreshingQr = true;
+    try {
+      final refreshed = await _controller.refreshQr();
+      if (refreshed && mounted) {
+        _qrCountdown = 30;
+      }
+    } finally {
+      _isRefreshingQr = false;
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final resumed = state == AppLifecycleState.resumed;
+    if (resumed) {
+      _isForeground = true;
+      _controller.onPaseVisibilityChanged(true, resumedFromBackground: true);
+      if (_qrCountdown <= 5) {
+        unawaited(_triggerQrRefresh());
+      }
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      _isForeground = false;
+      _controller.onPaseVisibilityChanged(false);
+    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _qrTimer?.cancel();
+    _controller.onPaseVisibilityChanged(false);
     super.dispose();
+  }
+
+  void _showRedemptionAnimation(String title, String? subtitle) {
+    if (!mounted) return;
+    showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Cerrar confirmación',
+      barrierColor: context.colorScheme.scrim.withValues(alpha: 0.45),
+      transitionDuration: const Duration(milliseconds: 280),
+      pageBuilder: (ctx, anim, _) {
+        Future.delayed(const Duration(milliseconds: 2400), () {
+          if (ctx.mounted && Navigator.of(ctx).canPop()) {
+            Navigator.of(ctx).pop();
+          }
+        });
+        final colors = ctx.colorScheme;
+        final b = ctx.bocadooColors;
+        return Center(
+          child: ScaleTransition(
+            scale: CurvedAnimation(parent: anim, curve: Curves.easeOutBack),
+            child: Material(
+              color: colors.surface,
+              borderRadius: BorderRadius.circular(28),
+              elevation: 8,
+              child: Container(
+                width: 280,
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 72,
+                      height: 72,
+                      decoration: BoxDecoration(
+                        color: b.successContainer,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        Icons.check_circle_rounded,
+                        size: 46,
+                        color: b.success,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      title,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w900,
+                        color: colors.onSurface,
+                      ),
+                    ),
+                    if (subtitle != null && subtitle.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        subtitle,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: colors.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   @override
@@ -53,6 +175,14 @@ class _PaseScreenState extends ConsumerState<PaseScreen> {
       listenable: controller,
       builder: (context, _) {
         final s = controller.state;
+        if (s.redemptionCelebrationTick > _lastCelebrationTick) {
+          _lastCelebrationTick = s.redemptionCelebrationTick;
+          final title = s.redemptionCelebrationTitle ?? 'Almuerzo canjeado';
+          final subtitle = s.redemptionCelebrationSubtitle;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _showRedemptionAnimation(title, subtitle);
+          });
+        }
         final hasActiveOrder = s.activeOrder != null;
         final isSingleActiveOrder =
             hasActiveOrder && !s.activeOrder!.hasPlan && !s.activeOrder!.isDelivered;
@@ -959,6 +1089,16 @@ class _ActiveWalletCard extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
+                        color: colors.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Vuelve a presentar tu QR después de 30 segundos.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
                         color: colors.onSurfaceVariant,
                       ),
                     ),

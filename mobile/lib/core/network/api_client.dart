@@ -55,8 +55,9 @@ class ApiClient {
       ),
     );
 
+    _authInterceptor = _AuthInterceptor(dio, refreshDio, tokens, onSessionExpired);
     dio.interceptors.addAll([
-      _AuthInterceptor(dio, refreshDio, tokens, onSessionExpired),
+      _authInterceptor,
       _RestaurantInterceptor(tokens),
       _RetryInterceptor(dio),
       _ProblemInterceptor(onErrorReported),
@@ -65,6 +66,35 @@ class ApiClient {
   }
 
   late final Dio dio;
+  late final _AuthInterceptor _authInterceptor;
+
+  /// Fuerza la renovación del par access/refresh token (usado p. ej. por SSE ante TOKEN_VENCIDO).
+  Future<bool> refreshSession() => _authInterceptor.refreshSession();
+
+  /// Abre un stream SSE (`text/event-stream`) autenticado con `Authorization: Bearer`.
+  Future<Response<ResponseBody>> openSseStream(
+    String path, {
+    CancelToken? cancelToken,
+  }) {
+    return dio.get<ResponseBody>(
+      path,
+      cancelToken: cancelToken,
+      options: Options(
+        responseType: ResponseType.stream,
+        receiveTimeout: Duration.zero,
+        headers: const {
+          'Accept': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+        },
+        extra: const {
+          'restaurant': false,
+          'auth': true,
+          'retryable': false,
+          'skipRetry': true,
+        },
+      ),
+    );
+  }
 
   Future<Map<String, dynamic>> getMap(
     String path, {
@@ -178,6 +208,8 @@ class _AuthInterceptor extends Interceptor {
   Future<bool>? _refreshing;
 
   Future<bool> _refresh() => _refreshing ??= _doRefresh();
+
+  Future<bool> refreshSession() => _refresh();
 
   Future<bool> _doRefresh() async {
     try {
@@ -294,6 +326,7 @@ class _RetryInterceptor extends Interceptor {
   ];
 
   bool _canRetry(DioException err) {
+    if (err.requestOptions.extra['skipRetry'] == true) return false;
     final method = err.requestOptions.method.toUpperCase();
     final isSafeMethod =
         method == 'GET' || err.requestOptions.extra['retryable'] == true;

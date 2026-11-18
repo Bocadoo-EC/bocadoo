@@ -96,6 +96,8 @@ class ErrorMessages {
     'QR_INVALIDO': 'Este código no pertenece a Bocadoo o no corresponde a este local.',
     'CONSUMO_NO_ENCONTRADO': 'No encontramos ese almuerzo.',
     'CONSUMO_REVERTIDO': 'Ese almuerzo ya se devolvió a tu plan.',
+    'EVENTOS_SATURADO':
+        'Demasiadas conexiones en tiempo real. Reintentando en un momento.',
     'RECLAMO_VENCIDO': 'Ya pasó el plazo para reclamar este almuerzo.',
     'RECLAMO_YA_EXISTE': 'Ya reclamaste este almuerzo.',
     // Pedidos

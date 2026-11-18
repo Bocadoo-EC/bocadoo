@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -15,6 +16,7 @@ import '../../../core/network/idempotency.dart';
 import '../../../core/session/session_notifier.dart';
 import '../../../core/utils/formatters.dart';
 import 'local_customer_cache.dart';
+import 'pase_events_stream.dart';
 
 /// Implementación real de [ICustomerRepository] conectada a la API v1 de Bocadoo.
 class ApiCustomerRepository implements ICustomerRepository {
@@ -239,6 +241,26 @@ class ApiCustomerRepository implements ICustomerRepository {
     }
     return _passCache.savePass(pass);
   }
+
+  /// Abre el stream SSE `GET /v1/pase/eventos` autenticado con Bearer.
+  Future<Stream<PaseSseEvent>> connectPaseEvents({
+    CancelToken? cancelToken,
+  }) async {
+    final response = await guard(
+      () => _api.openSseStream(
+        '${ApiConfig.v1}/pase/eventos',
+        cancelToken: cancelToken,
+      ),
+    );
+    final body = response.data;
+    if (body == null) {
+      return const Stream<PaseSseEvent>.empty();
+    }
+    return parsePaseSseStream(body.stream);
+  }
+
+  /// Renueva el par de tokens (`POST /v1/auth/refresh`) cuando SSE emite `TOKEN_VENCIDO`.
+  Future<bool> refreshAuthSession() => _api.refreshSession();
 
   // ---------------------------------------------------------------------------
   // C1 · Sellos y mesa activa

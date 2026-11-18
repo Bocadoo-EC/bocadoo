@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
@@ -15,6 +16,7 @@ import '../../../core/network/polling.dart';
 import '../../../core/session/session_notifier.dart';
 import '../data/api_customer_repo.dart';
 import '../data/mock_customer_repo.dart';
+import '../data/pase_events_stream.dart';
 
 enum CustomerStatus { initial, loading, success, error }
 
@@ -55,6 +57,9 @@ class CustomerUiState {
   final bool isLoadingPlans;
   final UndoNotice? undo;
   final String? consumptionNotice;
+  final int redemptionCelebrationTick;
+  final String? redemptionCelebrationTitle;
+  final String? redemptionCelebrationSubtitle;
   final String? errorMessage;
   final bool isOffline;
   final Map<String, bool> todayMenuPublishedByRest;
@@ -81,6 +86,9 @@ class CustomerUiState {
     this.isLoadingPlans = false,
     this.undo,
     this.consumptionNotice,
+    this.redemptionCelebrationTick = 0,
+    this.redemptionCelebrationTitle,
+    this.redemptionCelebrationSubtitle,
     this.errorMessage,
     this.isOffline = false,
     this.todayMenuPublishedByRest = const {},
@@ -214,6 +222,9 @@ class CustomerUiState {
     bool clearUndo = false,
     String? consumptionNotice,
     bool clearConsumptionNotice = false,
+    int? redemptionCelebrationTick,
+    String? redemptionCelebrationTitle,
+    String? redemptionCelebrationSubtitle,
     String? errorMessage,
     bool? isOffline,
     Map<String, bool>? todayMenuPublishedByRest,
@@ -244,6 +255,12 @@ class CustomerUiState {
       consumptionNotice: clearConsumptionNotice
           ? null
           : consumptionNotice ?? this.consumptionNotice,
+      redemptionCelebrationTick:
+          redemptionCelebrationTick ?? this.redemptionCelebrationTick,
+      redemptionCelebrationTitle:
+          redemptionCelebrationTitle ?? this.redemptionCelebrationTitle,
+      redemptionCelebrationSubtitle:
+          redemptionCelebrationSubtitle ?? this.redemptionCelebrationSubtitle,
       errorMessage: errorMessage,
       isOffline: isOffline ?? this.isOffline,
       todayMenuPublishedByRest:
@@ -263,6 +280,13 @@ class CustomerController extends ChangeNotifier {
   Future<void> Function()? _undoAction;
   LifecyclePollingController? _orderPoller;
   bool _disposed = false;
+  bool _paseVisible = false;
+  bool _ssePausedByReplacement = false;
+  CancelToken? _sseCancelToken;
+  StreamSubscription<PaseSseEvent>? _sseSub;
+  Timer? _sseReconnectTimer;
+  Timer? _sseFallbackPoller;
+  int _sseRetryAttempt = 0;
 
   /// Último mensaje de error en una acción (preorden o solicitud de plan).
   String? lastActionError;
@@ -580,10 +604,10 @@ class CustomerController extends ChangeNotifier {
 
   /// Regenera el QR rotativo del plan en pantalla (anti-captura).
   /// Bloqueado cuando el restaurante aún no ha publicado el menú de hoy.
-  Future<void> refreshQr() async {
+  Future<bool> refreshQr() async {
     final pass = _state.currentPass;
     if (pass == null || !_state.hasPublishedTodayMenu(pass.restaurantId)) {
-      return;
+      return false;
     }
     try {
       final token = await _repository.refreshQrToken(pass.id);
@@ -592,6 +616,7 @@ class CustomerController extends ChangeNotifier {
       ];
       await _repository.saveCachedPass(updated[_state.passIndex]);
       _emit(_state.copyWith(passes: updated));
+      return true;
     } on ApiException catch (e) {
       if (e.code == 'MENU_NO_PUBLICADO') {
         final updatedMap = Map<String, bool>.from(_state.todayMenuPublishedByRest)
@@ -607,8 +632,238 @@ class CustomerController extends ChangeNotifier {
           todayMenuAvailabilityByRest: updatedAvail,
         ));
       }
+      return false;
     } catch (_) {
       // Se conserva el QR anterior hasta el siguiente ciclo.
+      return false;
+    }
+  }
+
+  /// Controla el stream SSE (`GET /v1/pase/eventos`) y el refresco inicial
+  /// del saldo mientras la pantalla Pase esté visible y en primer plano.
+  void onPaseVisibilityChanged(
+    bool visible, {
+    bool resumedFromBackground = false,
+  }) {
+    _paseVisible = visible;
+    if (!visible) {
+      _disconnectPaseSse(keepFallback: false);
+      return;
+    }
+    if (resumedFromBackground) {
+      _ssePausedByReplacement = false;
+    }
+    unawaited(_refreshBalanceOnce());
+    if (!AppMode.useMock && !_ssePausedByReplacement) {
+      unawaited(_connectPaseSse());
+    }
+  }
+
+  /// Refresca el saldo una vez al abrir Pase (devoluciones por reclamo no emiten SSE).
+  Future<void> _refreshBalanceOnce() async {
+    if (_disposed || _state.status == CustomerStatus.initial) return;
+    try {
+      final passes = await _repository.getActivePasses();
+      if (_disposed || !_paseVisible) return;
+      final nextMenuMap = await _resolveMenuPublishedForPasses(
+        passes,
+        _state.restaurants,
+      );
+      _emit(_state.copyWith(
+        passes: passes,
+        todayMenuPublishedByRest: nextMenuMap,
+      ));
+    } catch (_) {}
+  }
+
+  Future<void> _connectPaseSse() async {
+    if (_disposed || !_paseVisible || _ssePausedByReplacement || AppMode.useMock) {
+      return;
+    }
+    final repo = _repository;
+    if (repo is! ApiCustomerRepository) {
+      _startSseFallbackPolling();
+      return;
+    }
+
+    _disconnectPaseSse(keepFallback: false);
+    final cancelToken = CancelToken();
+    _sseCancelToken = cancelToken;
+
+    try {
+      final stream = await repo.connectPaseEvents(cancelToken: cancelToken);
+      if (_disposed || !_paseVisible || cancelToken.isCancelled) return;
+      _sseRetryAttempt = 0;
+      _sseFallbackPoller?.cancel();
+      _sseFallbackPoller = null;
+
+      _sseSub = stream.listen(
+        _handlePaseSseEvent,
+        onError: (Object error) {
+          if (cancelToken.isCancelled || _disposed || !_paseVisible) return;
+          _scheduleSseReconnectOrFallback(error: error);
+        },
+        onDone: () {
+          if (cancelToken.isCancelled || _disposed || !_paseVisible) return;
+          if (!_ssePausedByReplacement) {
+            _scheduleSseReconnectOrFallback();
+          }
+        },
+        cancelOnError: true,
+      );
+    } catch (e) {
+      if (cancelToken.isCancelled || _disposed || !_paseVisible) return;
+      _scheduleSseReconnectOrFallback(error: e);
+    }
+  }
+
+  void _handlePaseSseEvent(PaseSseEvent event) {
+    if (_disposed) return;
+    switch (event.type) {
+      case PaseEventType.latido:
+        return;
+      case PaseEventType.canjeRegistrado:
+        _applyBalanceFromEvent(
+          restauranteNombre: event.restauranteNombre,
+          saldoRestante: event.saldoRestante,
+        );
+        final restName = event.restauranteNombre?.trim();
+        final plato = event.platoNombre?.trim();
+        final subtitleParts = <String>[
+          if (restName != null && restName.isNotEmpty) restName,
+          if (plato != null && plato.isNotEmpty) plato,
+          if (event.saldoRestante != null)
+            'Te quedan ${event.saldoRestante} almuerzos',
+        ];
+        _emit(_state.copyWith(
+          consumptionNotice: subtitleParts.isNotEmpty
+              ? 'Almuerzo canjeado · ${subtitleParts.join(' · ')}'
+              : 'Almuerzo canjeado',
+          redemptionCelebrationTick: _state.redemptionCelebrationTick + 1,
+          redemptionCelebrationTitle: 'Almuerzo canjeado',
+          redemptionCelebrationSubtitle:
+              subtitleParts.isNotEmpty ? subtitleParts.join(' · ') : null,
+        ));
+      case PaseEventType.canjeRevertido:
+        _applyBalanceFromEvent(
+          restauranteNombre: event.restauranteNombre,
+          saldoRestante: event.saldoRestante,
+        );
+        final restName = event.restauranteNombre?.trim();
+        _emit(_state.copyWith(
+          consumptionNotice: restName != null && restName.isNotEmpty
+              ? 'Canje revertido en $restName · Saldo: ${event.saldoRestante ?? ''}'
+              : 'Canje revertido en caja',
+        ));
+      case PaseEventType.fin:
+        switch (event.finReason) {
+          case PaseFinReason.tokenVencido:
+            _disconnectPaseSse(keepFallback: false);
+            unawaited(_refreshTokenAndReconnectSse());
+          case PaseFinReason.reemplazada:
+            // Máximo 2 conexiones: no reconectar sola hasta volver a primer plano.
+            _ssePausedByReplacement = true;
+            _disconnectPaseSse(keepFallback: false);
+          case PaseFinReason.apagado:
+          case PaseFinReason.unknown:
+            _disconnectPaseSse(keepFallback: true);
+            _scheduleSseReconnectOrFallback(
+              explicitDelay: event.retryDelay ?? const Duration(seconds: 5),
+            );
+        }
+      case PaseEventType.unknown:
+        return;
+    }
+  }
+
+  void _applyBalanceFromEvent({
+    required String? restauranteNombre,
+    required int? saldoRestante,
+  }) {
+    if (saldoRestante == null || _state.passes.isEmpty) return;
+    final targetName = (restauranteNombre ?? '').trim().toLowerCase();
+    var matched = false;
+    final updated = <CustomerPass>[];
+    for (var i = 0; i < _state.passes.length; i++) {
+      final pass = _state.passes[i];
+      final sameName = targetName.isNotEmpty &&
+          pass.restaurantName.trim().toLowerCase() == targetName;
+      if (sameName ||
+          (targetName.isEmpty && i == _state.passIndex)) {
+        matched = true;
+        updated.add(pass.copyWith(remainingLunches: saldoRestante));
+      } else {
+        updated.add(pass);
+      }
+    }
+    if (!matched && _state.currentPass != null) {
+      final idx = _state.passIndex.clamp(0, _state.passes.length - 1);
+      updated[idx] = updated[idx].copyWith(remainingLunches: saldoRestante);
+    }
+    _emit(_state.copyWith(passes: updated));
+    if (updated.isNotEmpty) {
+      final idx = _state.passIndex.clamp(0, updated.length - 1);
+      unawaited(_repository.saveCachedPass(updated[idx]));
+    }
+  }
+
+  Future<void> _refreshTokenAndReconnectSse() async {
+    final repo = _repository;
+    if (repo is! ApiCustomerRepository || _disposed || !_paseVisible) return;
+    final refreshed = await repo.refreshAuthSession();
+    if (refreshed && !_disposed && _paseVisible && !_ssePausedByReplacement) {
+      await _connectPaseSse();
+    } else if (!_disposed && _paseVisible) {
+      _startSseFallbackPolling();
+    }
+  }
+
+  void _scheduleSseReconnectOrFallback({
+    Object? error,
+    Duration? explicitDelay,
+  }) {
+    if (_disposed || !_paseVisible || _ssePausedByReplacement) return;
+    _startSseFallbackPolling();
+    _sseReconnectTimer?.cancel();
+
+    final isSaturated =
+        error is ApiException && error.code == 'EVENTOS_SATURADO';
+    final delay = explicitDelay ??
+        Duration(
+          seconds: isSaturated
+              ? (10 * (_sseRetryAttempt + 1)).clamp(10, 60)
+              : const [5, 10, 20, 30][_sseRetryAttempt.clamp(0, 3)],
+        );
+    _sseRetryAttempt++;
+    _sseReconnectTimer = Timer(delay, () {
+      if (!_disposed && _paseVisible && !_ssePausedByReplacement) {
+        unawaited(_connectPaseSse());
+      }
+    });
+  }
+
+  void _startSseFallbackPolling() {
+    if (_disposed || !_paseVisible || _sseFallbackPoller != null) return;
+    _sseFallbackPoller = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (_disposed || !_paseVisible) {
+        _sseFallbackPoller?.cancel();
+        _sseFallbackPoller = null;
+        return;
+      }
+      unawaited(_refreshBalanceOnce());
+    });
+  }
+
+  void _disconnectPaseSse({required bool keepFallback}) {
+    _sseCancelToken?.cancel();
+    _sseCancelToken = null;
+    _sseSub?.cancel();
+    _sseSub = null;
+    _sseReconnectTimer?.cancel();
+    _sseReconnectTimer = null;
+    if (!keepFallback) {
+      _sseFallbackPoller?.cancel();
+      _sseFallbackPoller = null;
     }
   }
 
@@ -940,6 +1195,7 @@ class CustomerController extends ChangeNotifier {
     _undoTimer?.cancel();
     _occupancyExpiryTimer?.cancel();
     _orderPoller?.dispose();
+    _disconnectPaseSse(keepFallback: false);
     super.dispose();
   }
 }
