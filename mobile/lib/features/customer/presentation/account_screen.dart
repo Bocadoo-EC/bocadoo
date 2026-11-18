@@ -1,11 +1,14 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/config/app_mode.dart';
 import '../../../core/config/support_config.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/appearance_selector.dart';
 import '../../../core/widgets/bocadoo_logo.dart';
+import '../../auth/data/auth_repository.dart';
 import 'customer_controller.dart';
 import 'customer_widgets.dart' show CustomerErrorView;
 import 'social_widgets.dart';
@@ -23,6 +26,17 @@ IconData _includeIcon(String item) => switch (item.toLowerCase()) {
   'postre' => Icons.icecream_outlined,
   _ => Icons.check_rounded,
 };
+
+Future<void> _logoutCustomer(BuildContext context, WidgetRef ref) async {
+  if (!AppMode.useMock) {
+    await ref.read(authRepositoryProvider).logout();
+    ref.invalidate(customerRepositoryProvider);
+    ref.invalidate(customerControllerProvider);
+    ref.invalidate(customerProfileProvider);
+  }
+  if (!context.mounted) return;
+  context.go('/login');
+}
 
 /// C6 · Mi cuenta: perfil, plan habitual, apariencia y ayuda por WhatsApp.
 class AccountScreen extends ConsumerWidget {
@@ -67,13 +81,13 @@ class AccountScreen extends ConsumerWidget {
   }
 }
 
-class _Body extends StatelessWidget {
+class _Body extends ConsumerWidget {
   const _Body({required this.profile});
 
   final CustomerProfile profile;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colorScheme;
     final support = profile.supportWhatsApp.isNotEmpty
         ? whatsAppUri(
@@ -224,6 +238,16 @@ class _Body extends StatelessWidget {
             ),
           ),
         ],
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: () => _logoutCustomer(context, ref),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: colors.error,
+            side: BorderSide(color: colors.error.withValues(alpha: 0.4)),
+          ),
+          icon: const Icon(Icons.logout_rounded),
+          label: const Text('Cerrar sesión'),
+        ),
         const SizedBox(height: 24),
         const Center(child: BocadooLogo.wordmark(size: 24)),
       ],
