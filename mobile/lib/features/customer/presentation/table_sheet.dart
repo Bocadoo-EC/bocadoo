@@ -7,7 +7,6 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../../core/config/api_capabilities.dart';
 import '../../../core/config/app_mode.dart';
-import '../../../core/config/app_mode.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/contracts/qr_parser.dart';
 import '../../../core/network/api_exception.dart';
