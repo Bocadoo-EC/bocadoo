@@ -75,8 +75,8 @@ class MockOwnerRepository
     const OwnerPlanTemplate(
       id: 'tpl-quincenal',
       name: 'Plan quincenal',
-      lunches: 10,
-      price: 28,
+      lunches: 15,
+      price: 42,
       validityDays: 15,
       kind: PlanKind.quincenal,
       quota: 30,

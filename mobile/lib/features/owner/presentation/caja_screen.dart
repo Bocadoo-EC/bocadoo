@@ -615,7 +615,11 @@ class _PlanRequestsSectionState extends ConsumerState<_PlanRequestsSection> {
                 Text('${req.planName} (${req.lunches} almuerzos) · ${OwnerFormat.money(req.price)}',
                     style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant)),
                 const SizedBox(height: 16),
-                for (final m in OwnerPayMethod.values) ...[
+                for (final m in const [
+                  OwnerPayMethod.efectivo,
+                  OwnerPayMethod.transferencia,
+                  OwnerPayMethod.deuna,
+                ]) ...[
                   ElevatedButton(
                     onPressed: () => Navigator.of(ctx).pop(m),
                     child: Text('Cobrar con ${m.label}'),

@@ -557,11 +557,11 @@ class MockCustomerRepository implements ICustomerRepository {
 
   static const List<PlanTemplate> _planTemplates = [
     PlanTemplate(id: 'p-semanal', restaurantId: 'r1', type: 'Semanal', name: 'Plan semanal', lunches: 5, priceCents: 1500, validityDays: 7),
-    PlanTemplate(id: 'p-quincenal', restaurantId: 'r1', type: 'Quincenal', name: 'Plan quincenal', lunches: 10, priceCents: 2800, validityDays: 18),
+    PlanTemplate(id: 'p-quincenal', restaurantId: 'r1', type: 'Quincenal', name: 'Plan quincenal', lunches: 15, priceCents: 4200, validityDays: 18),
     PlanTemplate(id: 'p-mensual', restaurantId: 'r1', type: 'Mensual', name: 'Plan mensual ejecutivo', lunches: 20, priceCents: 5500, validityDays: 35),
     PlanTemplate(id: 'p-r2-semanal', restaurantId: 'r2', type: 'Semanal', name: 'Semanal Verde', lunches: 5, priceCents: 1600, validityDays: 7),
     PlanTemplate(id: 'p-r2-mensual', restaurantId: 'r2', type: 'Mensual', name: 'Mensual Saludable', lunches: 20, priceCents: 6000, validityDays: 35),
-    PlanTemplate(id: 'p-r3-quincenal', restaurantId: 'r3', type: 'Quincenal', name: 'Quincenal Manaba', lunches: 10, priceCents: 3300, validityDays: 18),
+    PlanTemplate(id: 'p-r3-quincenal', restaurantId: 'r3', type: 'Quincenal', name: 'Quincenal Manaba', lunches: 15, priceCents: 4800, validityDays: 18),
     PlanTemplate(id: 'p-r3-mensual', restaurantId: 'r3', type: 'Mensual', name: 'Mensual Costeño', lunches: 20, priceCents: 6500, validityDays: 35),
     PlanTemplate(id: 'p-r4-mensual', restaurantId: 'r4', type: 'Mensual', name: 'Mensual USFQ', lunches: 20, priceCents: 6800, validityDays: 35),
   ];

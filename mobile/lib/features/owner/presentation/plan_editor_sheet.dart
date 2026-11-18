@@ -16,7 +16,7 @@ OwnerPlanTemplate _preset(PlanKind kind) => switch (kind) {
       PlanKind.semanal => const OwnerPlanTemplate(
           id: '', name: 'Plan semanal', lunches: 5, price: 15, validityDays: 7, kind: PlanKind.semanal, quota: 20),
       PlanKind.quincenal => const OwnerPlanTemplate(
-          id: '', name: 'Plan quincenal', lunches: 10, price: 28, validityDays: 15, kind: PlanKind.quincenal, quota: 30),
+          id: '', name: 'Plan quincenal', lunches: 15, price: 42, validityDays: 15, kind: PlanKind.quincenal, quota: 30),
       PlanKind.mensual => const OwnerPlanTemplate(
           id: '', name: 'Plan mensual ejecutivo', lunches: 20, price: 55, validityDays: 30, kind: PlanKind.mensual),
       PlanKind.libre => const OwnerPlanTemplate(

@@ -250,7 +250,7 @@ class _OrderCard extends StatelessWidget {
               line(
                 'Pago',
                 order.paidByPlan
-                    ? 'Plan Activo - Almuerzo cubierto'
+                    ? 'Pagado con Plan (\$0,00)'
                     : 'Pago por confirmar en caja',
               ),
             ]),

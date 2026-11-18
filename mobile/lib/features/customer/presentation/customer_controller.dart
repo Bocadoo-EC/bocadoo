@@ -498,6 +498,9 @@ class CustomerController extends ChangeNotifier {
         passIndex: matchingPassIdx >= 0 ? matchingPassIdx : _state.passIndex,
       ));
       _syncOrderPolling(order);
+      if (order.hasPlan) {
+        unawaited(loadDashboard(silent: true));
+      }
       _startUndo('Pedido enviado · Deshacer', () async {
         try {
           await _repository.cancelPreorder(order.orderNumber);

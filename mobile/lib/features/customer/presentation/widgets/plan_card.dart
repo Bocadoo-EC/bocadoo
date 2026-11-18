@@ -11,6 +11,7 @@ class PlanCard extends StatelessWidget {
     required this.plan,
     required this.singleLunchPriceCents,
     required this.onTap,
+    this.enabled = true,
     this.showRestaurantHeader = false,
     this.restaurantName,
     this.distanceLabel,
@@ -19,6 +20,7 @@ class PlanCard extends StatelessWidget {
   final PlanTemplate plan;
   final int singleLunchPriceCents;
   final VoidCallback onTap;
+  final bool enabled;
   final bool showRestaurantHeader;
   final String? restaurantName;
   final String? distanceLabel;
@@ -249,7 +251,7 @@ class PlanCard extends StatelessWidget {
                     ),
                     const SizedBox(width: 8),
                     FilledButton(
-                      onPressed: onTap,
+                      onPressed: enabled ? onTap : null,
                       style: FilledButton.styleFrom(
                         backgroundColor: colors.primary,
                         foregroundColor: colors.onPrimary,

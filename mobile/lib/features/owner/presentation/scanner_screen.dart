@@ -34,9 +34,10 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
     duration: const Duration(milliseconds: 1800),
   )..repeat(reverse: true);
 
-  /// `true` mientras hay un diálogo abierto o se está navegando al resultado,
+  /// `true` mientras hay un diálogo abierto o se está procesando un código,
   /// para que la cámara no dispare validaciones paralelas.
   bool _paused = false;
+  bool _isProcessingScan = false;
 
   @override
   void initState() {
@@ -75,7 +76,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
   // ---------------------------------------------------------------------------
 
   void _onDetect(BarcodeCapture capture) {
-    if (_paused) return;
+    if (_paused || _isProcessingScan) return;
     for (final barcode in capture.barcodes) {
       final value = barcode.rawValue;
       if (value != null && value.isNotEmpty) {
@@ -86,23 +87,29 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
   }
 
   Future<void> _submit(String rawToken) async {
-    if (_paused) return;
+    if (_paused || _isProcessingScan) return;
+    _isProcessingScan = true;
     _paused = true;
+    try {
+      await _camera.stop();
+    } catch (_) {}
     final controller = ref.read(ownerControllerProvider.notifier);
     await controller.onCodeDetected(rawToken);
     if (!mounted) return;
 
     final state = ref.read(ownerControllerProvider);
     if (state is OwnerSuccess || state is OwnerError || state is OwnerRedirect) {
-      await _camera.stop();
-      if (!mounted) return;
       if (context.canPop()) {
         context.pop(true);
       } else {
         context.go('/owner/caja');
       }
     } else {
+      _isProcessingScan = false;
       _paused = false;
+      if (mounted && _camera.value.hasCameraPermission) {
+        await _camera.start();
+      }
     }
   }
 

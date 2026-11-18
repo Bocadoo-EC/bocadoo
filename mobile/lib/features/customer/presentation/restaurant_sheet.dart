@@ -325,7 +325,10 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
                 const SizedBox(height: 10),
                 Builder(
                   builder: (context) {
-                    final hasPlanHere = s.passFor(r.id) != null;
+                    final activePass = s.passFor(r.id);
+                    final hasPlanHere = activePass != null &&
+                        activePass.remainingLunches > 0 &&
+                        !activePass.isExpired;
                     final baseCents = breakfastMode
                         ? Money.toCents(chosenBreakfast?.price ?? r.singleLunchPrice)
                         : Money.toCents(r.singleLunchPrice);
@@ -333,17 +336,57 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
                         _takeaway ? Money.toCents(r.takeawaySurcharge) : 0;
                     final totalCents =
                         hasPlanHere ? 0 : baseCents + surchargeCents;
-                    return ElevatedButton(
-                      onPressed: canOrder ? () => _order(controller, r) : null,
-                      child: Text(
-                        breakfastMode
-                            ? (hasPlanHere
-                                ? 'Preordenar desayuno (Plan)'
-                                : 'Preordenar desayuno · ${formatCents(totalCents)}')
-                            : (hasPlanHere
-                                ? 'Preordenar almuerzo (Plan)'
-                                : 'Preordenar almuerzo · ${formatCents(totalCents)}'),
-                      ),
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (hasPlanHere) ...[
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
+                            ),
+                            margin: const EdgeInsets.only(bottom: 8),
+                            decoration: BoxDecoration(
+                              color: context.bocadooColors.successContainer,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.verified_rounded,
+                                  size: 16,
+                                  color: context.bocadooColors.success,
+                                ),
+                                const SizedBox(width: 6),
+                                Flexible(
+                                  child: Text(
+                                    'Cubierto por tu Plan (Quedan ${activePass.remainingLunches} almuerzos)',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w800,
+                                      color: context.bocadooColors.success,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                        ElevatedButton(
+                          onPressed:
+                              canOrder ? () => _order(controller, r) : null,
+                          child: Text(
+                            breakfastMode
+                                ? (hasPlanHere
+                                    ? 'Preordenar desayuno con Plan (\$0,00)'
+                                    : 'Preordenar desayuno · ${formatCents(totalCents)}')
+                                : (hasPlanHere
+                                    ? 'Preordenar almuerzo con Plan (\$0,00)'
+                                    : 'Preordenar almuerzo · ${formatCents(totalCents)}'),
+                          ),
+                        ),
+                      ],
                     );
                   },
                 ),

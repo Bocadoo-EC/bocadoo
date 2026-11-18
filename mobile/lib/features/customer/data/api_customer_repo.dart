@@ -109,7 +109,7 @@ class ApiCustomerRepository implements ICustomerRepository {
         remainingLunches: remaining,
         expiresAt: expiresAt,
         status: status,
-        qrToken: BocadooQrParser.toShortCode(
+        qrToken: BocadooQrParser.generatePlanCode(
           qrToken.isNotEmpty ? qrToken : passId,
           restaurantId: restId,
         ),
@@ -147,7 +147,7 @@ class ApiCustomerRepository implements ICustomerRepository {
     );
     eventsService.track('comensal.qr_generado', restaurantId: restId);
     final raw = (data['codigo'] ?? '').toString();
-    return BocadooQrParser.toShortCode(raw, restaurantId: restId);
+    return BocadooQrParser.generatePlanCode(raw, restaurantId: restId);
   }
 
   @override

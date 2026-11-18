@@ -71,8 +71,8 @@ class _OnboardingOwnerScreenState extends ConsumerState<OnboardingOwnerScreen> {
         SuggestedPlanInput(
           tipo: 'QUINCENAL',
           nombre: 'Plan Quincenal',
-          almuerzos: 10,
-          precioCentavos: Money.toCents(_total(10)),
+          almuerzos: 15,
+          precioCentavos: Money.toCents(_total(15)),
           vigenciaDias: 15,
         ),
         SuggestedPlanInput(
@@ -198,7 +198,7 @@ class _OnboardingOwnerScreenState extends ConsumerState<OnboardingOwnerScreen> {
 
   Widget _buildPaso1(BuildContext context, ColorScheme cs) {
     final ahorraSemanal = _total(5);
-    final ahorraQuincenal = ahorraSemanal * 2 - _total(10);
+    final ahorraQuincenal = ahorraSemanal * 3 - _total(15);
     final ahorraMensual = ahorraSemanal * 4 - _total(20);
 
     return Column(
@@ -225,9 +225,9 @@ class _OnboardingOwnerScreenState extends ConsumerState<OnboardingOwnerScreen> {
         const SizedBox(height: 12),
         _PlanCard(
           tag: 'QUINCENAL',
-          almuerzos: 10,
-          total: _total(10),
-          precioAlmuerzo: _precioAlmuerzo(10),
+          almuerzos: 15,
+          total: _total(15),
+          precioAlmuerzo: _precioAlmuerzo(15),
           ahorra: 'Ahorra ${_fmt(ahorraQuincenal)}',
           highlighted: false,
         ),

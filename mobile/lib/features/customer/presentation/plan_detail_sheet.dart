@@ -82,24 +82,78 @@ class _PlanDetailSheetState extends ConsumerState<PlanDetailSheet> {
           ),
         ] else ...[
           Expanded(child: _details(context, plan, restaurant)),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              ElevatedButton(
-                onPressed: _sending ? null : () => _confirm(controller, plan!),
-                child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  Flexible(child: Text('Confirmar y solicitar plan', overflow: TextOverflow.ellipsis)),
-                  SizedBox(width: 8),
-                  Icon(Icons.arrow_forward_rounded, size: 18),
-                ]),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Solicitas sin pago inmediato · Pagas en caja en efectivo o transferencia al activar',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant),
-              ),
-            ]),
+          Builder(
+            builder: (context) {
+              final existingPass = s.passFor(restaurant!.id);
+              final hasActiveHere = existingPass != null &&
+                  existingPass.remainingLunches > 0 &&
+                  !existingPass.isExpired;
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (hasActiveHere) ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        margin: const EdgeInsets.only(bottom: 10),
+                        decoration: BoxDecoration(
+                          color: context.bocadooColors.successContainer,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: context.bocadooColors.success.withValues(
+                              alpha: 0.35,
+                            ),
+                          ),
+                        ),
+                        child: Text(
+                          'Ya cuentas con un plan activo en este restaurante (${existingPass.remainingLunches} almuerzos restantes)',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: colors.onSurface,
+                          ),
+                        ),
+                      ),
+                    ],
+                    ElevatedButton(
+                      onPressed: (_sending || hasActiveHere)
+                          ? null
+                          : () => _confirm(controller, plan!),
+                      child: const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Flexible(
+                            child: Text(
+                              'Confirmar y solicitar plan',
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          SizedBox(width: 8),
+                          Icon(Icons.arrow_forward_rounded, size: 18),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      hasActiveHere
+                          ? 'Podrás solicitar otro plan cuando tu saldo llegue a 0 o venza.'
+                          : 'Solicitas sin pago inmediato · Pagas en caja en efectivo o transferencia al activar',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: colors.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
           ),
         ],
       ]),

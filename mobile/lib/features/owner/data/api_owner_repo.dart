@@ -329,6 +329,7 @@ class ApiOwnerRepository
   // ---------------------------------------------------------------------------
 
   final Set<String> _redeemedCodes = <String>{};
+  final Map<String, DateTime> _recentRedeemAt = <String, DateTime>{};
   final List<TransactionItem> _sessionValidatedTransactions = <TransactionItem>[];
   static final _uuidRegex = RegExp(
     r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
@@ -436,18 +437,33 @@ class ApiOwnerRepository
       );
     }
 
-    // Preorden activa (6 caracteres, BCD-ORD-, #N o UUID).
-    final order = await _findOrderByAnyCode(rawPayload, restaurantId);
-    if (order != null) {
-      final result = await confirmAndRedeemOrder(
-        order.number,
-        restaurantId,
-        rawCodeKey: codeKey,
-      );
-      if (!result.isValid && result.supportingLine.isNotEmpty) {
-        _lastError = result.supportingLine;
+    // Preorden activa (ORD-XXXXXX, BCD-ORD-, 6 caracteres, #N o UUID).
+    final upperRaw = rawPayload.trim().toUpperCase();
+    final isExplicitOrder =
+        upperRaw.startsWith(BocadooQrParser.orderPrefix) ||
+        upperRaw.startsWith('BCD-ORD-');
+    if (!upperRaw.startsWith(BocadooQrParser.planPrefix)) {
+      final order = await _findOrderByAnyCode(rawPayload, restaurantId);
+      if (order != null) {
+        final result = await confirmAndRedeemOrder(
+          order.number,
+          restaurantId,
+          rawCodeKey: codeKey,
+        );
+        if (!result.isValid && result.supportingLine.isNotEmpty) {
+          _lastError = result.supportingLine;
+        }
+        return result;
       }
-      return result;
+      if (isExplicitOrder) {
+        return const ScanResult(
+          isValid: false,
+          outcome: 'ROJO',
+          title: 'Preorden no encontrada',
+          supportingLine: 'No encontramos esa preorden activa.',
+          actionRequired: 'NINGUNA',
+        );
+      }
     }
 
     // Mesa activa (6 caracteres o BCD-MESA-).
@@ -504,7 +520,19 @@ class ApiOwnerRepository
       );
     }
 
-    final backendCode = BocadooQrParser.resolveRawPayload(rawPayload);
+    final backendCode = BocadooQrParser.resolveRawPayload(rawPayload) ??
+        BocadooQrParser.stripPlanPrefix(rawPayload);
+    final nowScan = DateTime.now();
+    final lastAt = _recentRedeemAt[codeKey];
+    if (lastAt != null && nowScan.difference(lastAt).inSeconds < 5) {
+      return const ScanResult(
+        isValid: false,
+        outcome: 'ROJO',
+        title: 'Ya canjeado',
+        supportingLine: 'Este código ya fue escaneado hace unos segundos.',
+        actionRequired: 'NINGUNA',
+      );
+    }
     final intent = 'validar:$restaurantId:$backendCode';
     final ik = _idempotency.keyFor(intent);
     try {
@@ -551,18 +579,30 @@ class ApiOwnerRepository
       }
 
       if (resultado == 'OK' || resultado == 'OK_ADVERTENCIA') {
+        final now = DateTime.now();
         _redeemedCodes.add(codeKey);
-        _sessionValidatedTransactions.insert(
-          0,
-          TransactionItem(
-            id: passId,
-            customerName: clienteNombre ?? 'Comensal',
-            type: 'Canje de plan',
-            amount: 0,
-            paymentMethod: 'Canje de plan (\$0,00)',
-            timestamp: redeemedAt ?? DateTime.now(),
-          ),
+        _recentRedeemAt[codeKey] = now;
+        final txTime = redeemedAt ?? now;
+        final isDup = _sessionValidatedTransactions.any(
+          (tx) =>
+              tx.id == passId ||
+              (tx.customerName == (clienteNombre ?? 'Comensal') &&
+                  tx.type == 'Canje de plan' &&
+                  txTime.difference(tx.timestamp).abs().inSeconds < 5),
         );
+        if (!isDup) {
+          _sessionValidatedTransactions.insert(
+            0,
+            TransactionItem(
+              id: passId,
+              customerName: clienteNombre ?? 'Comensal',
+              type: 'Canje de plan',
+              amount: 0,
+              paymentMethod: 'Canje de plan (\$0,00)',
+              timestamp: txTime,
+            ),
+          );
+        }
       }
 
       switch (resultado) {
@@ -871,6 +911,13 @@ class ApiOwnerRepository
       if (tx.type.startsWith('Pedido #') && ventaOrderRefs.contains(tx.type)) {
         continue;
       }
+      final hasRecentDuplicate = out.any(
+        (existing) =>
+            existing.type == tx.type &&
+            existing.customerName == tx.customerName &&
+            existing.timestamp.difference(tx.timestamp).abs().inSeconds < 5,
+      );
+      if (hasRecentDuplicate) continue;
       out.add(tx);
     }
 

@@ -514,15 +514,37 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
                 SliverToBoxAdapter(
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(16, 18, 16, 12),
-                    child: Text(
-                      selectedRest != null
-                          ? 'Planes en ${selectedRest.name}'
-                          : 'Planes disponibles',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                        color: colors.onSurface,
-                      ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          selectedRest != null
+                              ? 'Planes en ${selectedRest.name}'
+                              : 'Planes disponibles',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                            color: colors.onSurface,
+                          ),
+                        ),
+                        if (selectedRest != null) ...[
+                          Builder(
+                            builder: (context) {
+                              final activeHere = s.passFor(selectedRest.id);
+                              final hasActive = activeHere != null &&
+                                  activeHere.remainingLunches > 0 &&
+                                  !activeHere.isExpired;
+                              if (!hasActive) return const SizedBox.shrink();
+                              return Padding(
+                                padding: const EdgeInsets.only(top: 10),
+                                child: _ActivePlanNoticeBanner(
+                                  remaining: activeHere.remainingLunches,
+                                ),
+                              );
+                            },
+                          ),
+                        ],
+                      ],
                     ),
                   ),
                 ),
@@ -557,11 +579,16 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
                         final item = visibleItems[i];
                         final singleCents =
                             (item.restaurant.singleLunchPrice * 100).round();
+                        final activeHere = s.passFor(item.restaurant.id);
+                        final hasActive = activeHere != null &&
+                            activeHere.remainingLunches > 0 &&
+                            !activeHere.isExpired;
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 12),
                           child: PlanCard(
                             plan: item.plan,
                             singleLunchPriceCents: singleCents,
+                            enabled: !hasActive,
                             showRestaurantHeader: true,
                             restaurantName: item.restaurant.name,
                             distanceLabel: _formatDistance(item.distanceMeters),
@@ -961,6 +988,42 @@ class _EmptyPlansState extends StatelessWidget {
               ),
             ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ActivePlanNoticeBanner extends StatelessWidget {
+  const _ActivePlanNoticeBanner({required this.remaining});
+
+  final int remaining;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    final b = context.bocadooColors;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: b.successContainer,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: b.success.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.info_outline_rounded, size: 18, color: b.success),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Ya cuentas con un plan activo en este restaurante ($remaining almuerzos restantes)',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: colors.onSurface,
+              ),
+            ),
+          ),
         ],
       ),
     );

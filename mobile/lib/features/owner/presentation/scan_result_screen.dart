@@ -123,7 +123,7 @@ class _ScanResultDialogState extends ConsumerState<ScanResultDialog> {
     showInfoSnackBar(messenger, ok ? 'Descuento revertido' : 'No se pudo deshacer el descuento');
   }
 
-  static String _lunchesLeft(int n) => n == 1 ? 'Le queda 1 almuerzo' : 'Le quedan $n almuerzos';
+  static String _lunchesLeft(int n) => n == 1 ? 'Queda 1 almuerzo' : 'Quedan $n almuerzos';
 
   _View _view() {
     final shown = _shown;
@@ -135,7 +135,7 @@ class _ScanResultDialogState extends ConsumerState<ScanResultDialog> {
         return _View(_Tone.warning, Icons.warning_amber_rounded, r.title, detail,
             action: ScanDialogAction.sellPlan, actionLabel: 'Ofrecer nuevo plan');
       }
-      return _View(_Tone.success, Icons.check_circle_outline_rounded, 'Almuerzo registrado', _lunchesLeft(left));
+      return _View(_Tone.success, Icons.check_circle_outline_rounded, 'Almuerzo canjeado', _lunchesLeft(left));
     }
     if (shown is OwnerError) {
       final r = shown.result;
