@@ -271,6 +271,17 @@ class _TableSheetState extends ConsumerState<TableSheet> {
                           ),
                         ],
                       ]),
+                      if (!_times.contains(t.time)) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          'Hora programada: ${t.time}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: colors.primary,
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 16),
                       _QrCard(table: t),
                       const SizedBox(height: 14),

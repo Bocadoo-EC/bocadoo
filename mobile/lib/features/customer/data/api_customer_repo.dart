@@ -872,25 +872,36 @@ class ApiCustomerRepository implements ICustomerRepository {
       arrivalUtc = nowUtc.add(const Duration(hours: 11));
     }
 
-    final res = await guard(
-      () => _api.send<Map<String, dynamic>>(
-        'POST',
-        '${ApiConfig.v1}/mis/mesas',
-        body: {
-          'restaurante': restaurantId,
-          'horaLlegada': arrivalUtc.toIso8601String(),
-          'modo': 'CADA_UNO',
-          'paraLlevar': false,
-        },
-      ),
-    );
-    final table = await _mapMesaResponseToSharedTable(res ?? const {});
-    eventsService.track(
-      'comensal.mesa_abierta',
-      restaurantId: restaurantId,
-      props: {'hora': table.time},
-    );
-    return table;
+    final intent = 'mesa-open:$restaurantId:$time';
+    final key = _idempotency.keyFor(intent);
+    try {
+      final res = await guard(
+        () => _api.send<Map<String, dynamic>>(
+          'POST',
+          '${ApiConfig.v1}/mis/mesas',
+          body: {
+            'restaurante': restaurantId,
+            'horaLlegada': arrivalUtc.toIso8601String(),
+            'modo': 'CADA_UNO',
+            'paraLlevar': false,
+          },
+          idempotencyKey: key,
+        ),
+      );
+      _idempotency.done(intent);
+      final table = await _mapMesaResponseToSharedTable(res ?? const {});
+      eventsService.track(
+        'comensal.mesa_abierta',
+        restaurantId: restaurantId,
+        props: {'hora': table.time},
+      );
+      return table;
+    } on ApiException catch (e) {
+      if (e.status == 400 || e.status == 404 || e.status == 409) {
+        _idempotency.done(intent);
+      }
+      rethrow;
+    }
   }
 
   @override
