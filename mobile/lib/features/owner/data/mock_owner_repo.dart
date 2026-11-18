@@ -4,6 +4,7 @@ import '../../../core/contracts/models.dart';
 import '../../../core/contracts/qr_parser.dart';
 import '../../../core/contracts/repositories.dart';
 import '../../../core/demo/demo_store.dart';
+import '../../../core/network/idempotency.dart';
 import '../../../core/utils/formatters.dart';
 import '../domain/models/cash_models.dart';
 import '../domain/models/extras_models.dart';
@@ -57,6 +58,12 @@ class MockOwnerRepository
 
   /// Venta del POS → almuerzos servidos en esa venta.
   final Map<String, int> _posLunchUnits = {};
+
+  /// Canje de plan → cantidad total de almuerzos (titular + invitados extras).
+  final Map<String, int> _planRedemptionUnits = {};
+  final Map<String, _RedemptionBatch> _batchesById = {};
+  final Map<String, String> _lastBatchByPassId = {};
+  final Map<String, String> _pendingBatchIdByPassId = {};
 
   FlashOffer? _activeOffer;
   bool _shiftClosed = false;
@@ -354,10 +361,7 @@ class MockOwnerRepository
     }
 
     plan.remaining -= 1;
-    if (student.userId == DemoStore.dinerUserId) {
-      final curr = _store.remainingLunchesByRest[student.restaurantId] ?? 0;
-      if (curr > 0) _store.remainingLunchesByRest[student.restaurantId] = curr - 1;
-    }
+    _adjustDemoDinerBalance(student, -1);
     final redemption = _Redemption(
       id: _nextId('red'),
       userId: student.userId,
@@ -376,6 +380,18 @@ class MockOwnerRepository
         detail: 'Canje de plan · Almuerzo del día (Prepagado)',
       ),
     );
+    _planRedemptionUnits[redemption.id] = 1;
+    final batchId = _pendingBatchIdByPassId.remove(passId) ?? uuidV4();
+    _batchesById[batchId] = _RedemptionBatch(
+      batchId: batchId,
+      passId: passId,
+      userId: student.userId,
+      restaurantId: student.restaurantId,
+      customerName: student.name,
+      transactionId: redemption.id,
+      redemptions: [redemption],
+    );
+    _lastBatchByPassId[passId] = batchId;
 
     // Si este comensal tenía una preorden EN_CAMINO con plan en este local,
     // márcala como entregada/canjeada para descontar de "X en camino".
@@ -444,7 +460,7 @@ class MockOwnerRepository
 
     final redeemed = today
             .where((t) => t.type == 'Validado' || t.type == 'Canje de plan')
-            .length +
+            .fold<int>(0, (sum, t) => sum + (_planRedemptionUnits[t.id] ?? 1)) +
         today.fold<int>(0, (sum, t) => sum + (_posLunchUnits[t.id] ?? 0));
     final plansSold = today.where((t) => t.type == 'Venta Plan').length;
     final income = today.fold<double>(0, (sum, t) => sum + t.amount);
@@ -703,9 +719,110 @@ class MockOwnerRepository
     return true;
   }
 
+  void _adjustDemoDinerBalance(_Student student, int delta) {
+    if (student.userId != DemoStore.dinerUserId) return;
+    final key = _store.remainingLunchesByRest.containsKey(student.restaurantId)
+        ? student.restaurantId
+        : DemoStore.ownerRestaurantId;
+    final curr = _store.remainingLunchesByRest[key] ?? 0;
+    final next = (curr + delta).clamp(0, 9999);
+    _store.remainingLunchesByRest[key] = next;
+    _store.changed();
+  }
+
+  @override
+  Future<bool> commitExtraGuests({
+    required String passId,
+    required int extraGuests,
+    String? batchRedemptionId,
+  }) async {
+    await _simulateLatency();
+    if (extraGuests <= 0) return true;
+    final batch = (batchRedemptionId != null
+            ? _batchesById[batchRedemptionId]
+            : null) ??
+        _batchesById[_lastBatchByPassId[passId]];
+    if (batch == null || batch.undone) return false;
+    final student = _studentsByUserId[batch.userId] ?? _studentByPassId(passId);
+    if (student == null) return false;
+
+    final now = _clock();
+    if (student.redeemableBalance(now) < extraGuests) return false;
+
+    for (var i = 0; i < extraGuests; i++) {
+      final plan = student.nextRedeemablePlan(now);
+      if (plan == null) break;
+      plan.remaining -= 1;
+      final extraR = _Redemption(
+        id: _nextId('red'),
+        userId: student.userId,
+        planId: plan.id,
+        timestamp: now,
+      );
+      _redemptions.add(extraR);
+      batch.redemptions.add(extraR);
+    }
+
+    _adjustDemoDinerBalance(student, -extraGuests);
+    final total = batch.redemptions.length;
+    _planRedemptionUnits[batch.transactionId] = total;
+
+    final txIdx = _transactions.indexWhere((t) => t.id == batch.transactionId);
+    if (txIdx >= 0) {
+      _transactions[txIdx] = _transactions[txIdx].copyWith(
+        detail: total == 1
+            ? 'Canje de plan · Almuerzo del día (Prepagado)'
+            : 'Canje de plan · $total almuerzos (Prepagado)',
+      );
+    }
+    return true;
+  }
+
+  @override
+  Future<bool> undoBatchRedemption(
+    String batchRedemptionId, {
+    String? fallbackPassId,
+  }) async {
+    await _simulateLatency();
+    final batch = _batchesById[batchRedemptionId] ??
+        (fallbackPassId != null
+            ? _batchesById[_lastBatchByPassId[fallbackPassId]]
+            : null);
+    if (batch == null) {
+      return fallbackPassId != null ? _undoLegacyRedeem(fallbackPassId) : false;
+    }
+    if (batch.undone) return false;
+    batch.undone = true;
+
+    final student = _studentsByUserId[batch.userId];
+    var restored = 0;
+    for (final r in batch.redemptions) {
+      if (r.annulled) continue;
+      r.annulled = true;
+      restored++;
+      for (final p in student?.plans ?? const <_Plan>[]) {
+        if (p.id == r.planId) p.remaining += 1;
+      }
+    }
+    if (student != null && restored > 0) {
+      _adjustDemoDinerBalance(student, restored);
+    }
+    _transactions.removeWhere((t) => t.id == batch.transactionId);
+    _planRedemptionUnits.remove(batch.transactionId);
+    return restored > 0;
+  }
+
   @override
   Future<bool> undoRedeem(String passId) async {
+    final batchId = _lastBatchByPassId[passId];
+    if (batchId != null && !(_batchesById[batchId]?.undone ?? true)) {
+      return undoBatchRedemption(batchId, fallbackPassId: passId);
+    }
     await _simulateLatency();
+    return _undoLegacyRedeem(passId);
+  }
+
+  bool _undoLegacyRedeem(String passId) {
     final student = _studentByPassId(passId);
     if (student == null) return false;
     for (final r in _redemptions.reversed) {
@@ -714,7 +831,9 @@ class MockOwnerRepository
       for (final p in student.plans) {
         if (p.id == r.planId) p.remaining += 1;
       }
+      _adjustDemoDinerBalance(student, 1);
       _transactions.removeWhere((t) => t.id == r.id);
+      _planRedemptionUnits.remove(r.id);
       return true;
     }
     return false;
@@ -1516,6 +1635,9 @@ class MockOwnerRepository
     int? remaining,
     _Redemption? redemption,
   }) {
+    final batchId = isValid
+        ? (_pendingBatchIdByPassId[student.passId] ??= uuidV4())
+        : null;
     return ScanResult(
       isValid: isValid,
       outcome: outcome,
@@ -1527,6 +1649,7 @@ class MockOwnerRepository
       totalLunches: student.plans.fold<int>(0, (s, p) => s + p.total),
       remainingLunches: remaining,
       redemptionId: redemption?.id,
+      batchRedemptionId: batchId,
       redeemedAt: redemption?.timestamp,
       actionRequired: action,
     );
@@ -1727,4 +1850,25 @@ class _Redemption {
   final String planId;
   final DateTime timestamp;
   bool annulled = false;
+}
+
+class _RedemptionBatch {
+  _RedemptionBatch({
+    required this.batchId,
+    required this.passId,
+    required this.userId,
+    required this.restaurantId,
+    required this.customerName,
+    required this.transactionId,
+    required this.redemptions,
+  });
+
+  final String batchId;
+  final String passId;
+  final String userId;
+  final String restaurantId;
+  final String customerName;
+  final String transactionId;
+  final List<_Redemption> redemptions;
+  bool undone = false;
 }

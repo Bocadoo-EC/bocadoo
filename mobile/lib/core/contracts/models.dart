@@ -723,6 +723,7 @@ class ScanResult {
   final int? totalLunches;
   final int? remainingLunches;
   final String? redemptionId;
+  final String? batchRedemptionId;
   final DateTime? redeemedAt;
   final String? actionRequired; // VENDER_PLAN, COBRAR_SUELTO, NINGUNA
 
@@ -738,6 +739,7 @@ class ScanResult {
     this.totalLunches,
     this.remainingLunches,
     this.redemptionId,
+    this.batchRedemptionId,
     this.redeemedAt,
     this.actionRequired,
   });
@@ -759,6 +761,7 @@ class ScanResult {
     int? totalLunches,
     int? remainingLunches,
     String? redemptionId,
+    String? batchRedemptionId,
     DateTime? redeemedAt,
     String? actionRequired,
   }) {
@@ -774,6 +777,7 @@ class ScanResult {
       totalLunches: totalLunches ?? this.totalLunches,
       remainingLunches: remainingLunches ?? this.remainingLunches,
       redemptionId: redemptionId ?? this.redemptionId,
+      batchRedemptionId: batchRedemptionId ?? this.batchRedemptionId,
       redeemedAt: redeemedAt ?? this.redeemedAt,
       actionRequired: actionRequired ?? this.actionRequired,
     );

@@ -95,6 +95,19 @@ abstract class IOwnerCashRepository {
   /// Revierte el último almuerzo descontado del pase.
   Future<bool> undoRedeem(String passId);
 
+  /// Registra invitados extras (`extraGuests`) asociados al lote de canje en curso.
+  Future<bool> commitExtraGuests({
+    required String passId,
+    required int extraGuests,
+    String? batchRedemptionId,
+  });
+
+  /// Revierte un lote completo de canje (`1` titular + `invitadosExtras`).
+  Future<bool> undoBatchRedemption(
+    String batchRedemptionId, {
+    String? fallbackPassId,
+  });
+
   Future<List<CatalogItem>> getCatalog(String restaurantId);
 
   /// Registra un consumo del POS. Devuelve el id de la venta.

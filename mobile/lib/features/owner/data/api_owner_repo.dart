@@ -57,6 +57,30 @@ class _MetricsCacheEntry {
   final DateTime at;
 }
 
+class _ApiRedemptionBatch {
+  _ApiRedemptionBatch({
+    required this.batchId,
+    required this.passId,
+    required this.restaurantId,
+    required this.customerName,
+    required this.transactionId,
+    this.primaryConsumoId,
+    this.clientId,
+  });
+
+  final String batchId;
+  final String passId;
+  final String restaurantId;
+  final String customerName;
+  final String transactionId;
+  final String? primaryConsumoId;
+  final String? clientId;
+  int extraGuests = 0;
+  final List<String> extraConsumoIds = [];
+  Future<void>? pendingDispatch;
+  bool undone = false;
+}
+
 /// Repositorio real del módulo Dueño/Caja (`O1`–`O16`, `P-01`).
 class ApiOwnerRepository
     implements
@@ -79,6 +103,8 @@ class ApiOwnerRepository
   final IdempotencyStore _idempotency = IdempotencyStore();
 
   final Map<String, String> _consumoIdByPassId = {};
+  final Map<String, _ApiRedemptionBatch> _batchesById = {};
+  final Map<String, String> _lastBatchByPassId = {};
   final Map<String, _SaleUndoKind> _saleUndoById = {};
   final Map<String, _OrderCacheEntry> _ordersByNumber = {};
   final Map<String, String> _orderDishByNumber = {};
@@ -613,10 +639,23 @@ class ApiOwnerRepository
         _consumoIdByPassId[passId] = consumoId;
       }
 
+      String? batchId;
       if (resultado == 'OK' || resultado == 'OK_ADVERTENCIA') {
         final now = DateTime.now();
         _recentRedeemAt[codeKey] = now;
         final txTime = redeemedAt ?? now;
+        batchId = uuidV4();
+        _batchesById[batchId] = _ApiRedemptionBatch(
+          batchId: batchId,
+          passId: passId,
+          restaurantId: restaurantId,
+          customerName: clienteNombre ?? 'Comensal',
+          transactionId: passId,
+          primaryConsumoId: consumoId,
+          clientId: clienteId,
+        );
+        _lastBatchByPassId[passId] = batchId;
+
         final isDup = _sessionValidatedTransactions.any(
           (tx) =>
               tx.id == passId ||
@@ -663,6 +702,7 @@ class ApiOwnerRepository
             passId: passId,
             remainingLunches: remaining,
             redemptionId: consumoId,
+            batchRedemptionId: batchId,
             redeemedAt: redeemedAt ?? DateTime.now(),
             actionRequired: 'NINGUNA',
           );
@@ -679,6 +719,7 @@ class ApiOwnerRepository
             passId: passId,
             remainingLunches: remaining,
             redemptionId: consumoId,
+            batchRedemptionId: batchId,
             redeemedAt: redeemedAt ?? DateTime.now(),
             actionRequired: 'VENDER_PLAN',
           );
@@ -1248,7 +1289,185 @@ class ApiOwnerRepository
   }
 
   @override
+  Future<bool> commitExtraGuests({
+    required String passId,
+    required int extraGuests,
+    String? batchRedemptionId,
+  }) async {
+    _lastError = null;
+    if (extraGuests <= 0) return true;
+    final batch = (batchRedemptionId != null
+            ? _batchesById[batchRedemptionId]
+            : null) ??
+        _batchesById[_lastBatchByPassId[passId]];
+    if (batch == null || batch.undone) return false;
+
+    // 1. Actualización optimista inmediata del registro consolidado en Caja.
+    batch.extraGuests = extraGuests;
+    final totalRedeemed = 1 + extraGuests;
+    final idx = _sessionValidatedTransactions
+        .indexWhere((tx) => tx.id == batch.transactionId);
+    if (idx >= 0) {
+      _sessionValidatedTransactions[idx] =
+          _sessionValidatedTransactions[idx].copyWith(
+        detail: totalRedeemed == 1
+            ? 'Canje de plan · 1 almuerzo (Prepagado)'
+            : 'Canje de plan · $totalRedeemed almuerzos (Prepagado)',
+      );
+    }
+
+    // 2. Despacho asíncrono con nuevo UUID como Idempotency-Key y canal MANUAL.
+    final future = _dispatchExtraGuests(batch, extraGuests);
+    batch.pendingDispatch = future;
+    try {
+      await future;
+      return true;
+    } on ApiException catch (e) {
+      _lastError = e.userMessage;
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _dispatchExtraGuests(
+    _ApiRedemptionBatch batch,
+    int extraGuests,
+  ) async {
+    final freshKey = uuidV4();
+    final res = await guard(
+      () => _api.send<Map<String, dynamic>>(
+            'POST',
+            '${ApiConfig.v1}/caja/validar',
+            body: {
+              if (batch.clientId != null && batch.clientId!.isNotEmpty)
+                'clienteId': batch.clientId,
+              'canal': 'MANUAL',
+              'extraGuests': extraGuests,
+              'batchRedemptionId': batch.batchId,
+              if (batch.primaryConsumoId != null &&
+                  batch.primaryConsumoId!.isNotEmpty)
+                'primaryConsumoId': batch.primaryConsumoId,
+            },
+            restaurant: true,
+            idempotencyKey: freshKey,
+          ).then((v) => v ?? <String, dynamic>{}),
+    );
+
+    final extraConsumos = <String>[];
+    final single = res['consumo'] is Map
+        ? (res['consumo'] as Map)['id']?.toString()
+        : null;
+    if (single != null && single.isNotEmpty) {
+      extraConsumos.add(single);
+    }
+    if (res['consumos'] is List) {
+      for (final c in res['consumos'] as List) {
+        if (c is Map && c['id'] != null) {
+          final id = c['id'].toString();
+          if (id.isNotEmpty) extraConsumos.add(id);
+        } else if (c is String && c.isNotEmpty) {
+          extraConsumos.add(c);
+        }
+      }
+    }
+    batch.extraConsumoIds.addAll(extraConsumos);
+    eventsService.track(
+      'dueno.qr_invitados_extras',
+      restaurantId: batch.restaurantId,
+      props: {'cantidad': extraGuests},
+    );
+
+    // Si el cajero ya presionó Deshacer mientras el despacho estaba en curso,
+    // revertir de inmediato los consumos recién creados.
+    if (batch.undone && extraConsumos.isNotEmpty) {
+      for (final cid in extraConsumos) {
+        try {
+          await guard(
+            () => _api.send<Map<String, dynamic>>(
+              'POST',
+              '${ApiConfig.v1}/caja/consumos/$cid/deshacer',
+              restaurant: true,
+            ),
+          );
+        } catch (_) {}
+      }
+    }
+  }
+
+  @override
+  Future<bool> undoBatchRedemption(
+    String batchRedemptionId, {
+    String? fallbackPassId,
+  }) async {
+    _lastError = null;
+    final batch = _batchesById[batchRedemptionId] ??
+        (fallbackPassId != null
+            ? _batchesById[_lastBatchByPassId[fallbackPassId]]
+            : null);
+    if (batch == null) {
+      return fallbackPassId != null ? _undoSingleConsumo(fallbackPassId) : false;
+    }
+    if (batch.undone) return false;
+    batch.undone = true;
+
+    _sessionValidatedTransactions
+        .removeWhere((tx) => tx.id == batch.transactionId);
+
+    if (batch.pendingDispatch != null) {
+      try {
+        await batch.pendingDispatch;
+      } catch (_) {}
+    }
+
+    final idsToUndo = <String>{
+      if (batch.primaryConsumoId != null && batch.primaryConsumoId!.isNotEmpty)
+        batch.primaryConsumoId!,
+      ...batch.extraConsumoIds,
+    };
+    if (idsToUndo.isEmpty && fallbackPassId != null) {
+      idsToUndo.add(_consumoIdByPassId[fallbackPassId] ?? fallbackPassId);
+    }
+
+    var anyReverted = false;
+    for (final cid in idsToUndo) {
+      try {
+        final res = await guard(
+          () => _api.send<Map<String, dynamic>>(
+                'POST',
+                '${ApiConfig.v1}/caja/consumos/$cid/deshacer',
+                restaurant: true,
+              ).then((v) => v ?? <String, dynamic>{}),
+        );
+        if (res['revertido'] != false) {
+          anyReverted = true;
+        }
+      } on ApiException catch (e) {
+        final detail = e.detail.trim();
+        _lastError =
+            ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+                ? detail
+                : e.userMessage;
+      }
+    }
+
+    _consumoIdByPassId.remove(batch.passId);
+    if (anyReverted) {
+      eventsService.track('dueno.consumo_deshecho');
+    }
+    return anyReverted;
+  }
+
+  @override
   Future<bool> undoRedeem(String passId) async {
+    final batchId = _lastBatchByPassId[passId];
+    if (batchId != null && !(_batchesById[batchId]?.undone ?? true)) {
+      return undoBatchRedemption(batchId, fallbackPassId: passId);
+    }
+    return _undoSingleConsumo(passId);
+  }
+
+  Future<bool> _undoSingleConsumo(String passId) async {
     _lastError = null;
     final consumoId = _consumoIdByPassId[passId] ?? passId;
     try {
@@ -1260,6 +1479,7 @@ class ApiOwnerRepository
             ).then((v) => v ?? <String, dynamic>{}),
       );
       _consumoIdByPassId.remove(passId);
+      _sessionValidatedTransactions.removeWhere((tx) => tx.id == passId);
       final reverted = res['revertido'] != false;
       if (reverted) {
         eventsService.track('dueno.consumo_deshecho');

@@ -418,13 +418,52 @@ class OwnerController extends Notifier<OwnerState> {
     }
   }
 
+  /// Registra invitados extras sobre un lote de canje sin bloquear la UI.
+  Future<bool> commitExtraGuests({
+    required String passId,
+    required int extraGuests,
+    String? batchRedemptionId,
+  }) async {
+    if (extraGuests <= 0) return true;
+    final ok = await ref.read(ownerCashRepositoryProvider).commitExtraGuests(
+          passId: passId,
+          extraGuests: extraGuests,
+          batchRedemptionId: batchRedemptionId,
+        );
+    ref.invalidate(dailySummaryProvider);
+    return ok;
+  }
+
+  /// Revierte el lote completo de canje (`1` titular + `invitadosExtras`).
+  Future<bool> undoBatchRedemption(
+    String batchRedemptionId, {
+    String? fallbackPassId,
+  }) async {
+    final ok = await ref.read(ownerCashRepositoryProvider).undoBatchRedemption(
+          batchRedemptionId,
+          fallbackPassId: fallbackPassId,
+        );
+    if (ok) {
+      if (state is OwnerSuccess) state = const OwnerIdle();
+      ref.invalidate(dailySummaryProvider);
+    }
+    return ok;
+  }
+
   /// Revierte el último descuento del pase mostrado.
   Future<bool> undoRedeem() async {
     final current = state;
-    final passId = current is OwnerSuccess ? current.result.passId : null;
+    final result = current is OwnerSuccess ? current.result : null;
+    final passId = result?.passId;
     if (passId == null) return false;
-    final ok = await ref.read(ownerCashRepositoryProvider).undoRedeem(passId);
-    if (ok) state = const OwnerIdle();
+    final batchId = result?.batchRedemptionId;
+    final ok = batchId != null && batchId.isNotEmpty
+        ? await undoBatchRedemption(batchId, fallbackPassId: passId)
+        : await ref.read(ownerCashRepositoryProvider).undoRedeem(passId);
+    if (ok) {
+      state = const OwnerIdle();
+      ref.invalidate(dailySummaryProvider);
+    }
     return ok;
   }
 }

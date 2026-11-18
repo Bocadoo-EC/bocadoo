@@ -11,6 +11,18 @@ import 'owner_widgets.dart';
 
 enum ScanDialogAction { done, scanAgain, sellPlan }
 
+class ScanDialogResult {
+  const ScanDialogResult(
+    this.action, {
+    this.extraGuests = 0,
+    this.undone = false,
+  });
+
+  final ScanDialogAction action;
+  final int extraGuests;
+  final bool undone;
+}
+
 /// Abre el escáner (O2) y, si vuelve con un resultado, muestra la tarjeta
 /// flotante sobre la pantalla actual. Lo usan Caja y el POS.
 Future<void> openScannerFlow(BuildContext context, WidgetRef ref) async {
@@ -43,11 +55,62 @@ Future<void> openScannerFlow(BuildContext context, WidgetRef ref) async {
       OwnerError(:final result) => result?.studentName,
       _ => null,
     };
-    final action = await showDialog<ScanDialogAction>(
+    final dialogResult = await showDialog<ScanDialogResult>(
       context: context,
       builder: (_) => const ScanResultDialog(),
     );
     if (!context.mounted) return;
+
+    final action = dialogResult?.action ?? ScanDialogAction.done;
+    final extraGuests = dialogResult?.extraGuests ?? 0;
+    final alreadyUndone = dialogResult?.undone ?? false;
+    final messenger = ScaffoldMessenger.of(context);
+
+    if (!alreadyUndone && state is OwnerSuccess && state.redeemed) {
+      final result = state.result;
+      final passId = result.passId;
+      final isPlanBatch = passId != null &&
+          !passId.startsWith('ORD:') &&
+          !passId.startsWith('MESA:') &&
+          result.remainingLunches != null;
+      if (isPlanBatch) {
+        final batchId = result.batchRedemptionId ?? passId;
+        if (extraGuests > 0) {
+          unawaited(
+            controller.commitExtraGuests(
+              passId: passId,
+              extraGuests: extraGuests,
+              batchRedemptionId: result.batchRedemptionId,
+            ),
+          );
+        }
+        final totalRedeemed = 1 + extraGuests;
+        final who = result.studentName ?? 'Comensal';
+        final undoLabel = totalRedeemed == 1
+            ? '1 almuerzo canjeado · $who'
+            : '$totalRedeemed almuerzos canjeados · $who';
+        showUndoSnackBar(
+          messenger,
+          label: undoLabel,
+          onUndo: () async {
+            final ok = await controller.undoBatchRedemption(
+              batchId,
+              fallbackPassId: passId,
+            );
+            ref.invalidate(dailySummaryProvider);
+            showInfoSnackBar(
+              messenger,
+              ok
+                  ? (totalRedeemed == 1
+                      ? 'Descuento revertido'
+                      : 'Canje de $totalRedeemed almuerzos revertido')
+                  : 'No se pudo deshacer el descuento',
+            );
+          },
+        );
+      }
+    }
+
     controller.reset();
     ref.invalidate(dailySummaryProvider);
     ref.invalidate(activeOrdersProvider);
@@ -88,10 +151,25 @@ class _ScanResultDialogState extends ConsumerState<ScanResultDialog> {
   Timer? _timer;
   int _undoSeconds = 0;
   bool _undoing = false;
+  int _extraGuests = 0;
 
   bool get _redeemed {
     final shown = _shown;
     return shown is OwnerSuccess && shown.redeemed;
+  }
+
+  bool get _supportsExtraGuests {
+    final shown = _shown;
+    if (shown is! OwnerSuccess || !shown.redeemed) return false;
+    final passId = shown.result.passId ?? '';
+    if (passId.startsWith('ORD:') || passId.startsWith('MESA:')) return false;
+    return shown.result.remainingLunches != null;
+  }
+
+  int get _postScanRemaining {
+    final shown = _shown;
+    if (shown is! OwnerSuccess) return 0;
+    return (shown.result.remainingLunches ?? 0).clamp(0, 9999);
   }
 
   @override
@@ -119,7 +197,7 @@ class _ScanResultDialogState extends ConsumerState<ScanResultDialog> {
     final navigator = Navigator.of(context);
     final ok = await ref.read(ownerControllerProvider.notifier).undoRedeem();
     if (!mounted) return;
-    navigator.pop(ScanDialogAction.done);
+    navigator.pop(const ScanDialogResult(ScanDialogAction.done, undone: true));
     showInfoSnackBar(messenger, ok ? 'Descuento revertido' : 'No se pudo deshacer el descuento');
   }
 
@@ -129,13 +207,19 @@ class _ScanResultDialogState extends ConsumerState<ScanResultDialog> {
     final shown = _shown;
     if (shown is OwnerSuccess) {
       final r = shown.result;
-      final left = r.remainingLunches ?? 0;
+      final postScan = r.remainingLunches ?? 0;
+      final left = _supportsExtraGuests
+          ? (postScan - _extraGuests).clamp(0, postScan)
+          : postScan;
       if (r.isWarning) {
         final detail = left > 0 ? '${_lunchesLeft(left)} · ${r.supportingLine}' : r.supportingLine;
         return _View(_Tone.warning, Icons.warning_amber_rounded, r.title, detail,
             action: ScanDialogAction.sellPlan, actionLabel: 'Ofrecer nuevo plan');
       }
-      return _View(_Tone.success, Icons.check_circle_outline_rounded, 'Almuerzo canjeado', _lunchesLeft(left));
+      final title = _supportsExtraGuests && _extraGuests > 0
+          ? '${1 + _extraGuests} almuerzos canjeados'
+          : 'Almuerzo canjeado';
+      return _View(_Tone.success, Icons.check_circle_outline_rounded, title, _lunchesLeft(left));
     }
     if (shown is OwnerError) {
       final r = shown.result;
@@ -224,28 +308,63 @@ class _ScanResultDialogState extends ConsumerState<ScanResultDialog> {
                 child: IconButton(
                   tooltip: 'Cerrar',
                   style: IconButton.styleFrom(backgroundColor: colors.surface.withValues(alpha: 0.7)),
-                  onPressed: () => pop(ScanDialogAction.done),
+                  onPressed: () => pop(
+                    ScanDialogResult(
+                      ScanDialogAction.done,
+                      extraGuests: _extraGuests,
+                    ),
+                  ),
                   icon: Icon(Icons.close_rounded, color: colors.onSurfaceVariant),
                 ),
               ),
             ]),
+            if (_supportsExtraGuests) ...[
+              const SizedBox(height: 12),
+              _ExtraGuestsSelector(
+                extraGuests: _extraGuests,
+                postScanRemaining: _postScanRemaining,
+                disabled: _undoing,
+                onChanged: (next) => setState(() => _extraGuests = next),
+              ),
+            ],
             const SizedBox(height: 16),
             if (view.action != null) ...[
               ElevatedButton(
                 style: ElevatedButton.styleFrom(minimumSize: buttonSize),
-                onPressed: _undoing ? null : () => pop(view.action),
+                onPressed: _undoing
+                    ? null
+                    : () => pop(
+                          ScanDialogResult(
+                            view.action!,
+                            extraGuests: _extraGuests,
+                          ),
+                        ),
                 child: Text(view.actionLabel!),
               ),
               const SizedBox(height: 8),
               FilledButton.tonal(
                 style: FilledButton.styleFrom(minimumSize: buttonSize),
-                onPressed: _undoing ? null : () => pop(ScanDialogAction.done),
+                onPressed: _undoing
+                    ? null
+                    : () => pop(
+                          ScanDialogResult(
+                            ScanDialogAction.done,
+                            extraGuests: _extraGuests,
+                          ),
+                        ),
                 child: const Text('Listo', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
               ),
             ] else
               ElevatedButton(
                 style: ElevatedButton.styleFrom(minimumSize: buttonSize),
-                onPressed: _undoing ? null : () => pop(ScanDialogAction.done),
+                onPressed: _undoing
+                    ? null
+                    : () => pop(
+                          ScanDialogResult(
+                            ScanDialogAction.done,
+                            extraGuests: _extraGuests,
+                          ),
+                        ),
                 child: const Text('Listo'),
               ),
             if (_undoSeconds > 0) ...[
@@ -266,8 +385,12 @@ class _ScanResultDialogState extends ConsumerState<ScanResultDialog> {
                   ),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: Text('Almuerzo descontado',
-                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: colors.onSurface)),
+                    child: Text(
+                      _extraGuests > 0
+                          ? '${1 + _extraGuests} almuerzos seleccionados'
+                          : 'Almuerzo descontado',
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: colors.onSurface),
+                    ),
                   ),
                   TextButton(
                     onPressed: _undoing ? null : _undo,
@@ -278,6 +401,129 @@ class _ScanResultDialogState extends ConsumerState<ScanResultDialog> {
             ],
           ]),
         ),
+      ),
+    );
+  }
+}
+
+class _ExtraGuestsSelector extends StatelessWidget {
+  const _ExtraGuestsSelector({
+    required this.extraGuests,
+    required this.postScanRemaining,
+    required this.disabled,
+    required this.onChanged,
+  });
+
+  final int extraGuests;
+  final int postScanRemaining;
+  final bool disabled;
+  final ValueChanged<int> onChanged;
+
+  static String _leftText(int n) =>
+      n == 1 ? 'Queda 1 almuerzo' : 'Quedan $n almuerzos';
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    final totalRedeemed = 1 + extraGuests;
+    final finalRemaining = (postScanRemaining - extraGuests).clamp(0, postScanRemaining);
+    final summaryLine = extraGuests == 0
+        ? '1 almuerzo canjeado · ${_leftText(postScanRemaining)}'
+        : '$totalRedeemed almuerzos canjeados · ${_leftText(finalRemaining)}';
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: colors.secondaryContainer.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: colors.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Invitados extras:',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    color: colors.onSurface,
+                  ),
+                ),
+              ),
+              IconButton.filledTonal(
+                tooltip: 'Quitar invitado',
+                visualDensity: VisualDensity.compact,
+                onPressed: !disabled && extraGuests > 0
+                    ? () => onChanged(extraGuests - 1)
+                    : null,
+                icon: const Icon(Icons.remove_rounded, size: 18),
+              ),
+              SizedBox(
+                width: 34,
+                child: Text(
+                  '$extraGuests',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                    color: colors.onSurface,
+                  ),
+                ),
+              ),
+              IconButton.filledTonal(
+                tooltip: 'Agregar invitado',
+                visualDensity: VisualDensity.compact,
+                onPressed: !disabled && extraGuests < postScanRemaining
+                    ? () => onChanged(extraGuests + 1)
+                    : null,
+                icon: const Icon(Icons.add_rounded, size: 18),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              for (final add in const [1, 2, 3]) ...[
+                Expanded(
+                  child: OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      minimumSize: const Size(0, 34),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+                      ),
+                    ),
+                    onPressed: !disabled && extraGuests + add <= postScanRemaining
+                        ? () => onChanged(extraGuests + add)
+                        : null,
+                    child: Text(
+                      '+$add',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ),
+                if (add != 3) const SizedBox(width: 6),
+              ],
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            summaryLine,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+              color: colors.primary,
+            ),
+          ),
+        ],
       ),
     );
   }
