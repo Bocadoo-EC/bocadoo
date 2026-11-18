@@ -108,12 +108,36 @@ class MockCustomerRepository implements ICustomerRepository {
 
   Restaurant _withLiveGeoAndOccupancy(Restaurant r, LatLng userPos) {
     final overrideOcc = _store.occupancyOverrides[r.id];
-    final menuPublished = _store.menuPublishedByRest[r.id] ?? r.hasMenu;
-    final visibleMenu = menuPublished ? r.todayMenu : const <MenuItem>[];
+    final avail = _store.menuAvailabilityByRest[r.id] ??
+        (_store.menuPublishedByRest[r.id] == false
+            ? MenuAvailabilityState.sinPublicar
+            : r.menuAvailabilityState);
+    final soldOutDishes = _store.soldOutDishesByRest[r.id];
+    final List<MenuItem> visibleMenu;
+    if (avail == MenuAvailabilityState.sinPublicar) {
+      visibleMenu = const <MenuItem>[];
+    } else if (soldOutDishes == null && avail == MenuAvailabilityState.disponible) {
+      visibleMenu = r.todayMenu;
+    } else {
+      visibleMenu = [
+        for (final m in r.todayMenu)
+          m.copyWith(
+            isSoldOut: avail == MenuAvailabilityState.agotadoTotal ||
+                (soldOutDishes?.contains(m.name) ?? m.isSoldOut),
+          ),
+      ];
+    }
+    final filteredOffers = avail == MenuAvailabilityState.agotadoTotal
+        ? [
+            for (final o in r.offers)
+              if (!o.appliesToday) o,
+          ]
+        : r.offers;
     if (!r.hasLocation) {
       return r.copyWith(
         occupancy: overrideOcc ?? r.occupancy,
         todayMenu: visibleMenu,
+        offers: filteredOffers,
       );
     }
     final meters = LocationService.meters(userPos, LatLng(r.latitude!, r.longitude!));
@@ -123,6 +147,7 @@ class MockCustomerRepository implements ICustomerRepository {
       distanceKm: km,
       occupancy: overrideOcc ?? r.occupancy,
       todayMenu: visibleMenu,
+      offers: filteredOffers,
     );
   }
 

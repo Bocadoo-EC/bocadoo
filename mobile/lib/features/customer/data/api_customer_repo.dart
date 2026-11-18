@@ -39,6 +39,7 @@ class ApiCustomerRepository implements ICustomerRepository {
 
   final Map<String, Restaurant> _restaurantCache = {};
   final Map<String, bool> _todayMenuPublishedByRest = {};
+  final Map<String, MenuAvailabilityState> _todayMenuAvailabilityByRest = {};
   final Map<String, String> _slugById = {};
   final Map<String, String> _restaurantByPassId = {};
   final Map<String, List<PlanTemplate>> _plansByRestaurantCache = {};
@@ -50,6 +51,10 @@ class ApiCustomerRepository implements ICustomerRepository {
   /// Último estado conocido de publicación del menú de hoy por `restaurantId`.
   bool? cachedTodayMenuPublished(String restaurantId) =>
       _todayMenuPublishedByRest[restaurantId];
+
+  /// Último estado de disponibilidad del menú de hoy (`sinPublicar` / `disponible` / `agotadoTotal`).
+  MenuAvailabilityState? cachedTodayMenuAvailability(String restaurantId) =>
+      _todayMenuAvailabilityByRest[restaurantId];
 
   List<Map<String, dynamic>>? _sellosCache;
   DateTime? _sellosCacheAt;
@@ -83,7 +88,17 @@ class ApiCustomerRepository implements ICustomerRepository {
         _slugById[restId] = slug;
       }
       if (restId.isNotEmpty && local['menuHoyPublicado'] is bool) {
-        _todayMenuPublishedByRest[restId] = local['menuHoyPublicado'] as bool;
+        final published = local['menuHoyPublicado'] as bool;
+        _todayMenuPublishedByRest[restId] = published;
+        if (!published) {
+          _todayMenuAvailabilityByRest[restId] =
+              MenuAvailabilityState.sinPublicar;
+        } else if (_todayMenuAvailabilityByRest[restId] ==
+                MenuAvailabilityState.sinPublicar ||
+            !_todayMenuAvailabilityByRest.containsKey(restId)) {
+          _todayMenuAvailabilityByRest[restId] =
+              MenuAvailabilityState.disponible;
+        }
       }
 
       final planes = _asListOfMaps(local['planes']);
@@ -1403,8 +1418,12 @@ class ApiCustomerRepository implements ICustomerRepository {
       longitude: base.longitude,
     );
 
+    final availability = (!published || menuItems.isEmpty)
+        ? MenuAvailabilityState.sinPublicar
+        : detailed.menuAvailabilityState;
+    _todayMenuAvailabilityByRest[base.id] = availability;
     _todayMenuPublishedByRest[base.id] =
-        published && menuItems.any((m) => !m.isSoldOut);
+        availability == MenuAvailabilityState.disponible;
     _restaurantCache[base.id] = detailed;
     return detailed;
   }

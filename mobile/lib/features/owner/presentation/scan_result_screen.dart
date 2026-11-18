@@ -9,7 +9,7 @@ import 'owner_controller.dart';
 import 'owner_format.dart';
 import 'owner_widgets.dart';
 
-enum ScanDialogAction { done, scanAgain, sellPlan }
+enum ScanDialogAction { done, scanAgain, sellPlan, retry, publishMenu }
 
 class ScanDialogResult {
   const ScanDialogResult(
@@ -31,7 +31,7 @@ Future<void> openScannerFlow(BuildContext context, WidgetRef ref) async {
   while (true) {
     await router.push('/owner/scanner');
     if (!context.mounted) return;
-    final state = ref.read(ownerControllerProvider);
+    var state = ref.read(ownerControllerProvider);
     if (state is OwnerRedirect) {
       // Mesa o preorden: se abre su pantalla de cobro (O5 / O12).
       controller.reset();
@@ -41,99 +41,140 @@ Future<void> openScannerFlow(BuildContext context, WidgetRef ref) async {
         ref.invalidate(activeOrdersProvider);
         ref.invalidate(pendingTablesProvider);
         ref.invalidate(ordersOnTheWayProvider);
+        unawaited(ref.read(cajaMovementsProvider.notifier).refresh());
       }
       return;
     }
     if (state is! OwnerSuccess && state is! OwnerError) return;
-    ref.invalidate(dailySummaryProvider);
-    ref.invalidate(activeOrdersProvider);
-    ref.invalidate(pendingTablesProvider);
-    ref.invalidate(ordersOnTheWayProvider);
 
-    final name = switch (state) {
-      OwnerSuccess(:final result) => result.studentName,
-      OwnerError(:final result) => result?.studentName,
-      _ => null,
-    };
-    final dialogResult = await showDialog<ScanDialogResult>(
-      context: context,
-      builder: (_) => const ScanResultDialog(),
-    );
-    if (!context.mounted) return;
+    while (true) {
+      if (!context.mounted) return;
+      state = ref.read(ownerControllerProvider);
+      if (state is! OwnerSuccess && state is! OwnerError) return;
 
-    final action = dialogResult?.action ?? ScanDialogAction.done;
-    final extraGuests = dialogResult?.extraGuests ?? 0;
-    final alreadyUndone = dialogResult?.undone ?? false;
-    final messenger = ScaffoldMessenger.of(context);
+      ref.invalidate(activeOrdersProvider);
+      ref.invalidate(pendingTablesProvider);
+      ref.invalidate(ordersOnTheWayProvider);
 
-    if (!alreadyUndone && state is OwnerSuccess && state.redeemed) {
-      final result = state.result;
-      final passId = result.passId;
-      final isPlanBatch = passId != null &&
-          !passId.startsWith('ORD:') &&
-          !passId.startsWith('MESA:') &&
-          result.remainingLunches != null;
-      if (isPlanBatch) {
-        final batchId = result.batchRedemptionId ?? passId;
-        if (extraGuests > 0) {
-          unawaited(
-            controller.commitExtraGuests(
-              passId: passId,
-              extraGuests: extraGuests,
-              batchRedemptionId: result.batchRedemptionId,
-            ),
+      final name = switch (state) {
+        OwnerSuccess(:final result) => result.studentName,
+        OwnerError(:final result) => result?.studentName,
+        _ => null,
+      };
+      final dialogResult = await showDialog<ScanDialogResult>(
+        context: context,
+        builder: (_) => const ScanResultDialog(),
+      );
+      if (!context.mounted) return;
+
+      final action = dialogResult?.action ?? ScanDialogAction.done;
+      final extraGuests = dialogResult?.extraGuests ?? 0;
+      final alreadyUndone = dialogResult?.undone ?? false;
+      final messenger = ScaffoldMessenger.of(context);
+
+      if (action == ScanDialogAction.retry) {
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => const Center(child: CircularProgressIndicator()),
+        );
+        await controller.retryLastCode();
+        if (context.mounted) {
+          Navigator.of(context, rootNavigator: true).pop();
+        }
+        continue;
+      }
+
+      if (!alreadyUndone && state is OwnerSuccess && state.redeemed) {
+        final result = state.result;
+        final passId = result.passId;
+        final isPlanBatch = passId != null &&
+            !passId.startsWith('ORD:') &&
+            !passId.startsWith('MESA:') &&
+            result.remainingLunches != null;
+        if (isPlanBatch) {
+          final batchId = result.batchRedemptionId ?? passId;
+          if (extraGuests > 0) {
+            unawaited(
+              controller.commitExtraGuests(
+                passId: passId,
+                extraGuests: extraGuests,
+                batchRedemptionId: result.batchRedemptionId,
+              ).then((_) {
+                if (context.mounted) {
+                  ref.read(cajaMovementsProvider.notifier).refresh();
+                }
+              }),
+            );
+          }
+          final totalRedeemed = 1 + extraGuests;
+          final who = result.studentName ?? 'Comensal';
+          final undoLabel = totalRedeemed == 1
+              ? '1 almuerzo canjeado · $who'
+              : '$totalRedeemed almuerzos canjeados · $who';
+          showUndoSnackBar(
+            messenger,
+            label: undoLabel,
+            onUndo: () async {
+              final ok = await controller.undoBatchRedemption(
+                batchId,
+                fallbackPassId: passId,
+              );
+              ref.invalidate(dailySummaryProvider);
+              if (context.mounted) {
+                unawaited(ref.read(cajaMovementsProvider.notifier).refresh());
+              }
+              showInfoSnackBar(
+                messenger,
+                ok
+                    ? (totalRedeemed == 1
+                        ? 'Descuento revertido'
+                        : 'Canje de $totalRedeemed almuerzos revertido')
+                    : 'No se pudo deshacer el descuento',
+              );
+            },
           );
         }
-        final totalRedeemed = 1 + extraGuests;
-        final who = result.studentName ?? 'Comensal';
-        final undoLabel = totalRedeemed == 1
-            ? '1 almuerzo canjeado · $who'
-            : '$totalRedeemed almuerzos canjeados · $who';
-        showUndoSnackBar(
-          messenger,
-          label: undoLabel,
-          onUndo: () async {
-            final ok = await controller.undoBatchRedemption(
-              batchId,
-              fallbackPassId: passId,
-            );
-            ref.invalidate(dailySummaryProvider);
-            showInfoSnackBar(
-              messenger,
-              ok
-                  ? (totalRedeemed == 1
-                      ? 'Descuento revertido'
-                      : 'Canje de $totalRedeemed almuerzos revertido')
-                  : 'No se pudo deshacer el descuento',
-            );
-          },
-        );
       }
-    }
 
-    controller.reset();
-    ref.invalidate(dailySummaryProvider);
-    ref.invalidate(activeOrdersProvider);
-    ref.invalidate(pendingTablesProvider);
-    ref.invalidate(ordersOnTheWayProvider);
+      controller.reset();
+      ref.invalidate(dailySummaryProvider);
+      ref.invalidate(activeOrdersProvider);
+      ref.invalidate(pendingTablesProvider);
+      ref.invalidate(ordersOnTheWayProvider);
+      unawaited(ref.read(cajaMovementsProvider.notifier).refresh());
 
-    if (action == ScanDialogAction.scanAgain) continue;
-    if (action == ScanDialogAction.sellPlan) {
-      await router.push('/owner/vender-plan', extra: name);
+      if (action == ScanDialogAction.scanAgain) break;
+      if (action == ScanDialogAction.publishMenu) {
+        router.go('/owner/menu');
+        return;
+      }
+      if (action == ScanDialogAction.sellPlan) {
+        await router.push('/owner/vender-plan', extra: name);
+      }
+      return;
     }
-    return;
   }
 }
 
 enum _Tone { success, warning, danger, neutral }
 
 class _View {
-  const _View(this.tone, this.icon, this.title, this.detail, {this.action, this.actionLabel});
+  const _View(
+    this.tone,
+    this.icon,
+    this.title,
+    this.detail, {
+    this.dishName,
+    this.action,
+    this.actionLabel,
+  });
 
   final _Tone tone;
   final IconData icon;
   final String title;
   final String detail;
+  final String? dishName;
   final ScanDialogAction? action;
   final String? actionLabel;
 }
@@ -213,13 +254,27 @@ class _ScanResultDialogState extends ConsumerState<ScanResultDialog> {
           : postScan;
       if (r.isWarning) {
         final detail = left > 0 ? '${_lunchesLeft(left)} · ${r.supportingLine}' : r.supportingLine;
-        return _View(_Tone.warning, Icons.warning_amber_rounded, r.title, detail,
-            action: ScanDialogAction.sellPlan, actionLabel: 'Ofrecer nuevo plan');
+        return _View(
+          _Tone.warning,
+          Icons.warning_amber_rounded,
+          r.title,
+          detail,
+          dishName: r.dishName,
+          action: ScanDialogAction.sellPlan,
+          actionLabel: 'Ofrecer nuevo plan',
+        );
       }
       final title = _supportsExtraGuests && _extraGuests > 0
           ? '${1 + _extraGuests} almuerzos canjeados'
-          : 'Almuerzo canjeado';
-      return _View(_Tone.success, Icons.check_circle_outline_rounded, title, _lunchesLeft(left));
+          : (r.title.isNotEmpty && r.title != 'Validado' ? r.title : 'Almuerzo canjeado');
+      final detail = r.remainingLunches != null ? _lunchesLeft(left) : r.supportingLine;
+      return _View(
+        _Tone.success,
+        Icons.check_circle_outline_rounded,
+        title,
+        detail,
+        dishName: r.dishName,
+      );
     }
     if (shown is OwnerError) {
       final r = shown.result;
@@ -234,10 +289,38 @@ class _ScanResultDialogState extends ConsumerState<ScanResultDialog> {
           actionLabel: 'Reintentar',
         );
       }
+      if (r.isWarning) {
+        return _View(
+          _Tone.warning,
+          Icons.info_outline_rounded,
+          r.title,
+          r.supportingLine,
+        );
+      }
       if (r.isAlreadyRedeemed) {
         final at = r.redeemedAt;
         return _View(_Tone.neutral, Icons.history_rounded, r.title,
             at != null ? 'Se descontó a las ${OwnerFormat.time(at)}' : r.supportingLine);
+      }
+      if (r.actionRequired == 'RETRY_NETWORK') {
+        return _View(
+          _Tone.danger,
+          Icons.wifi_off_rounded,
+          r.title,
+          r.supportingLine,
+          action: ScanDialogAction.retry,
+          actionLabel: 'Reintentar',
+        );
+      }
+      if (r.actionRequired == 'PUBLISH_MENU') {
+        return _View(
+          _Tone.danger,
+          Icons.restaurant_menu_rounded,
+          r.title,
+          r.supportingLine,
+          action: ScanDialogAction.publishMenu,
+          actionLabel: 'Ir a publicar menú',
+        );
       }
       if (r.actionRequired == 'VENDER_PLAN') {
         return _View(_Tone.danger, Icons.cancel_outlined, r.title, r.supportingLine,
@@ -265,7 +348,7 @@ class _ScanResultDialogState extends ConsumerState<ScanResultDialog> {
     };
     final (Color bg, Color fg) = switch (view.tone) {
       _Tone.success => (b.successContainer, b.success),
-      _Tone.warning => (colors.primaryContainer, colors.onPrimaryContainer),
+      _Tone.warning => (b.walletAccent, b.onWalletAccent),
       _Tone.danger => (b.dangerContainer, b.onDangerContainer),
       _Tone.neutral => (colors.surfaceContainerHighest, colors.onSurface),
     };
@@ -300,6 +383,27 @@ class _ScanResultDialogState extends ConsumerState<ScanResultDialog> {
                   Text(view.detail,
                       textAlign: TextAlign.center,
                       style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: fg)),
+                  if (view.dishName != null && view.dishName!.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: colors.surface.withValues(alpha: 0.72),
+                        borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+                      ),
+                      child: Text(
+                        view.dishName!,
+                        textAlign: TextAlign.center,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                          color: colors.onSurface,
+                        ),
+                      ),
+                    ),
+                  ],
                 ]),
               ),
               Positioned(

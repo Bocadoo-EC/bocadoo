@@ -1,5 +1,26 @@
 import 'package:flutter/foundation.dart';
 
+/// Disponibilidad agregada del menú publicado para hoy.
+enum MenuAvailabilityState { sinPublicar, disponible, agotadoTotal }
+
+/// Evalúa la disponibilidad de un menú según las reglas de negocio:
+/// 1. `sinPublicar`: sin menú publicado hoy.
+/// 2. `disponible`: publicado y al menos 1 plato fuerte disponible (o 1 ítem si no hay fuertes).
+/// 3. `agotadoTotal`: publicado, pero todos los platos fuertes (o 100 % del día) agotados.
+MenuAvailabilityState evaluateMenuAvailability({
+  required bool isPublished,
+  required Iterable<({bool isMain, bool isSoldOut})> items,
+}) {
+  if (!isPublished || items.isEmpty) {
+    return MenuAvailabilityState.sinPublicar;
+  }
+  final mains = items.where((i) => i.isMain).toList();
+  final targets = mains.isNotEmpty ? mains : items.toList();
+  return targets.any((i) => !i.isSoldOut)
+      ? MenuAvailabilityState.disponible
+      : MenuAvailabilityState.agotadoTotal;
+}
+
 /// Modelo inmutable de un Pase de Almuerzos para el Comensal
 @immutable
 class CustomerPass {
@@ -202,9 +223,20 @@ class Restaurant {
       todayMenu.where((m) => m.category == 'Plato Fuerte').toList();
   List<MenuItem> get breakfasts =>
       todayMenu.where((m) => m.category == 'Desayuno').toList();
-  bool get hasMenu => soups.isNotEmpty || mains.isNotEmpty;
+  bool get hasMenu => soups.isNotEmpty || mains.isNotEmpty || todayMenu.isNotEmpty;
   bool get hasOffer => offers.isNotEmpty;
   bool get hasBreakfastToday => breakfasts.any((b) => !b.isSoldOut);
+
+  MenuAvailabilityState get menuAvailabilityState => evaluateMenuAvailability(
+        isPublished: todayMenu.isNotEmpty,
+        items: [
+          for (final m in todayMenu)
+            (isMain: m.category == 'Plato Fuerte', isSoldOut: m.isSoldOut),
+        ],
+      );
+
+  bool get isMenuSoldOutToday =>
+      menuAvailabilityState == MenuAvailabilityState.agotadoTotal;
 
   Restaurant copyWith({
     String? id,
@@ -223,6 +255,7 @@ class Restaurant {
     bool? isOpen,
     List<String>? categories,
     List<MenuItem>? todayMenu,
+    List<RestaurantOffer>? offers,
     String? slug,
   }) {
     return Restaurant(
@@ -244,7 +277,7 @@ class Restaurant {
       todayMenu: todayMenu ?? this.todayMenu,
       featuredDish: featuredDish,
       hasPlan: hasPlan,
-      offers: offers,
+      offers: offers ?? this.offers,
       schedule: schedule,
       tags: tags,
       juice: juice,
@@ -725,6 +758,7 @@ class ScanResult {
   final String? redemptionId;
   final String? batchRedemptionId;
   final DateTime? redeemedAt;
+  final String? dishName;
   final String? actionRequired; // VENDER_PLAN, COBRAR_SUELTO, NINGUNA
 
   const ScanResult({
@@ -741,6 +775,7 @@ class ScanResult {
     this.redemptionId,
     this.batchRedemptionId,
     this.redeemedAt,
+    this.dishName,
     this.actionRequired,
   });
 
@@ -763,6 +798,7 @@ class ScanResult {
     String? redemptionId,
     String? batchRedemptionId,
     DateTime? redeemedAt,
+    String? dishName,
     String? actionRequired,
   }) {
     return ScanResult(
@@ -779,6 +815,7 @@ class ScanResult {
       redemptionId: redemptionId ?? this.redemptionId,
       batchRedemptionId: batchRedemptionId ?? this.batchRedemptionId,
       redeemedAt: redeemedAt ?? this.redeemedAt,
+      dishName: dishName ?? this.dishName,
       actionRequired: actionRequired ?? this.actionRequired,
     );
   }

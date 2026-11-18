@@ -130,6 +130,14 @@ class DemoStore extends ChangeNotifier {
     'r4': true,
     'r5': false,
   };
+  final Map<String, MenuAvailabilityState> menuAvailabilityByRest = {
+    'r1': MenuAvailabilityState.sinPublicar,
+    'r2': MenuAvailabilityState.disponible,
+    'r3': MenuAvailabilityState.disponible,
+    'r4': MenuAvailabilityState.disponible,
+    'r5': MenuAvailabilityState.sinPublicar,
+  };
+  final Map<String, Set<String>> soldOutDishesByRest = {};
 
   int _orderSeq = 43;
   int _tableSeq = 1235;

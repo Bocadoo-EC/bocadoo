@@ -252,17 +252,31 @@ class MockOwnerRepository
       );
     }
 
-    // 4. Regla de estado: no validar pase directo si el menú de hoy no está publicado.
-    final menuPublished = DemoStore.instance.menuPublishedByRest[restaurantId] ??
-        DemoStore.instance.menuPublishedByRest[DemoStore.ownerRestaurantId] ??
-        false;
-    if (!menuPublished) {
+    // 4. Regla de estado: no validar pase directo si el menú de hoy no está publicado o está agotado.
+    final avail = DemoStore.instance.menuAvailabilityByRest[restaurantId] ??
+        DemoStore.instance.menuAvailabilityByRest[DemoStore.ownerRestaurantId] ??
+        ((DemoStore.instance.menuPublishedByRest[restaurantId] ??
+                DemoStore.instance.menuPublishedByRest[DemoStore.ownerRestaurantId] ??
+                false)
+            ? MenuAvailabilityState.disponible
+            : MenuAvailabilityState.sinPublicar);
+    if (avail == MenuAvailabilityState.sinPublicar) {
       return const ScanResult(
         isValid: false,
         outcome: 'ROJO',
         title: 'Menú no publicado',
         supportingLine:
             'No se puede escanear QR sin haber publicado el menú de hoy',
+        actionRequired: 'NINGUNA',
+      );
+    }
+    if (avail == MenuAvailabilityState.agotadoTotal) {
+      return const ScanResult(
+        isValid: false,
+        outcome: 'ROJO',
+        title: 'Almuerzos agotados hoy',
+        supportingLine:
+            'Todos los platos del menú de hoy están agotados. Solo puedes canjear preórdenes ya reservadas.',
         actionRequired: 'NINGUNA',
       );
     }
@@ -496,6 +510,89 @@ class MockOwnerRepository
   ) async {
     await _simulateLatency();
     return List.unmodifiable(_todayTransactions(_clock()));
+  }
+
+  @override
+  Future<CajaMovementsPage> getCajaMovements(
+    String restaurantId, {
+    required String fecha,
+    String? cursor,
+    int limit = 20,
+  }) async {
+    await _simulateLatency();
+    final now = _clock();
+    final todayStr =
+        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    if (fecha != todayStr) {
+      return CajaMovementsPage(fecha: fecha, items: const []);
+    }
+
+    final list = _todayTransactions(now).reversed.toList();
+    final mapped = <CajaMovement>[];
+    for (final tx in list) {
+      final isPreorden = tx.customerName.startsWith('Pedido #');
+      final isPlan = tx.amount <= 0 &&
+          (tx.type == 'Canje de plan' ||
+              tx.type == 'Validado' ||
+              tx.paymentMethod == 'Plan');
+      if (isPreorden) {
+        mapped.add(
+          CajaMovement(
+            id: tx.id,
+            tipo: CajaMovementType.pedido,
+            timestamp: tx.timestamp,
+            title: tx.customerName,
+            subtitle: tx.detail ?? 'Preorden entregada',
+            valorPedidoCentavos: isPlan
+                ? (_singleLunchPrice * 100).round()
+                : (tx.amount * 100).round(),
+            pagoEstado: isPlan ? 'PLAN' : 'CONFIRMADO',
+            metodoPago: tx.paymentMethod,
+            platoNombre: tx.detail,
+            customerName: tx.customerName,
+          ),
+        );
+      } else if (isPlan) {
+        mapped.add(
+          CajaMovement(
+            id: tx.id,
+            tipo: CajaMovementType.canjeDirecto,
+            timestamp: tx.timestamp,
+            title: tx.customerName,
+            subtitle: tx.detail ?? 'Almuerzo del día (Prepagado)',
+            pagoEstado: 'CONFIRMADO',
+            metodoPago: 'Plan',
+            customerName: tx.customerName,
+          ),
+        );
+      } else {
+        mapped.add(
+          CajaMovement(
+            id: tx.id,
+            tipo: CajaMovementType.venta,
+            timestamp: tx.timestamp,
+            title: tx.customerName,
+            subtitle: '${tx.type} · ${tx.paymentMethod}',
+            montoCentavos: (tx.amount * 100).round(),
+            pagoEstado: 'CONFIRMADO',
+            metodoPago: tx.paymentMethod,
+            customerName: tx.customerName,
+          ),
+        );
+      }
+    }
+
+    final start = int.tryParse(cursor ?? '') ?? 0;
+    final end = (start + limit).clamp(0, mapped.length);
+    final pageItems = start >= mapped.length
+        ? const <CajaMovement>[]
+        : mapped.sublist(start, end);
+    final nextCursor = end < mapped.length ? '$end' : null;
+    return CajaMovementsPage(
+      fecha: fecha,
+      items: pageItems,
+      nextCursor: nextCursor,
+    );
   }
 
   // ---------------------------------------------------------------------------

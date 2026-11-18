@@ -7,6 +7,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../../core/contracts/models.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/utils/formatters.dart';
 import '../domain/models/cash_models.dart';
 import '../domain/models/extras_models.dart';
 import 'owner_controller.dart';
@@ -34,6 +35,7 @@ class _CajaScreenState extends ConsumerState<CajaScreen> {
       ref.invalidate(planRequestsProvider);
       ref.invalidate(ordersOnTheWayProvider);
       ref.invalidate(posMenuProvider);
+      unawaited(ref.read(cajaMovementsProvider.notifier).refresh());
       setState(() {});
     });
   }
@@ -58,6 +60,7 @@ class _CajaScreenState extends ConsumerState<CajaScreen> {
           const _OrdersStrip(),
           Expanded(
             child: summary.when(
+              skipLoadingOnReload: true,
               loading: () => const _CajaLoading(),
               error: (e, _) => _CajaError(onRetry: () => ref.invalidate(dailySummaryProvider)),
               data: (s) => _CajaBody(summary: s),
@@ -194,113 +197,298 @@ class _CajaBody extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colorScheme;
+    final b = context.bocadooColors;
     final offer = ref.watch(activeOfferProvider).value;
     final tables = ref.watch(pendingTablesProvider).value ?? const <PendingTable>[];
     final planRequests =
         ref.watch(planRequestsProvider).value ?? const <OwnerPlanRequest>[];
     final posMenuAsync = ref.watch(posMenuProvider);
-    final isMenuPublished = ref.watch(isTodayMenuPublishedProvider);
-    final scanLocked = posMenuAsync.hasValue && !isMenuPublished;
+    final menuAvailability = ref.watch(menuAvailabilityProvider);
+    final scanLocked =
+        posMenuAsync.hasValue && menuAvailability == MenuAvailabilityState.sinPublicar;
     final isOwner = ref.watch(ownerRoleProvider) == OwnerRole.owner;
-    final charges = summary.transactions.take(20).toList();
-    final total = summary.transactions.fold<double>(0, (sum, t) => sum + t.amount);
+    final movementsState = ref.watch(cajaMovementsProvider);
+    final movementsNotifier = ref.read(cajaMovementsProvider.notifier);
+    final todayStr = EcuadorTime.today();
+    final isViewingToday = movementsState.selectedDate == todayStr;
+    final totalCollected = Money.fromCents(movementsState.totalCollectedCents);
 
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-      children: [
-        if (planRequests.isNotEmpty) ...[
-          _PlanRequestsSection(requests: planRequests),
-          const SizedBox(height: 12),
-        ],
-        for (final t in tables) ...[
-          _TableBanner(
-            table: t,
-            onTap: () async {
-              await context.push('/owner/cobrar-mesa/${t.id}');
-              ref.invalidate(pendingTablesProvider);
-              ref.invalidate(dailySummaryProvider);
-            },
-          ),
-          const SizedBox(height: 10),
-        ],
-        if (scanLocked) ...[
-          _PublishMenuWarningBanner(
-            onPublishTap: () => context.go('/owner/menu'),
-          ),
-          const SizedBox(height: 12),
-        ],
-        _ScanCard(
-          enabled: !scanLocked,
-          onTap: scanLocked ? null : () => openScannerFlow(context, ref),
-        ),
-        if (offer != null) ...[
-          const SizedBox(height: 12),
-          _OfferBanner(
-            text: '${offer.slots} cupos a ${OwnerFormat.money(offer.price)}',
-            onTap: () => context.push('/owner/oferta-flash'),
-          ),
-        ],
-        const SizedBox(height: 12),
-        ElevatedButton.icon(
-          onPressed: () => context.push('/owner/registrar-consumo'),
-          icon: const Icon(Icons.receipt_long_rounded),
-          label: const Text(
-            'Cobro suelto (POS)',
-            maxLines: 1,
-            softWrap: false,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-        const SizedBox(height: 10),
-        Row(children: [
-          Expanded(
-            child: _QuickTile(
-              icon: Icons.group_outlined,
-              label: 'Vender plan',
-              onTap: () => context.push('/owner/vender-plan'),
+    Future<void> pickDate() async {
+      if (!isOwner) return;
+      final nowEc = EcuadorTime.now();
+      final parsed = DateTime.tryParse(movementsState.selectedDate) ?? nowEc;
+      final picked = await showDatePicker(
+        context: context,
+        initialDate: parsed.isAfter(nowEc) ? nowEc : parsed,
+        firstDate: DateTime(2024, 1, 1),
+        lastDate: nowEc,
+      );
+      if (picked != null) {
+        await movementsNotifier.selectDate(picked);
+      }
+    }
+
+    return RefreshIndicator(
+      onRefresh: () async {
+        ref.invalidate(dailySummaryProvider);
+        ref.invalidate(ordersOnTheWayProvider);
+        ref.invalidate(posMenuProvider);
+        await movementsNotifier.refresh();
+      },
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+        children: [
+          if (planRequests.isNotEmpty) ...[
+            _PlanRequestsSection(requests: planRequests),
+            const SizedBox(height: 12),
+          ],
+          for (final t in tables) ...[
+            _TableBanner(
+              table: t,
+              onTap: () async {
+                await context.push('/owner/cobrar-mesa/${t.id}');
+                ref.invalidate(pendingTablesProvider);
+                ref.invalidate(dailySummaryProvider);
+                unawaited(movementsNotifier.refresh());
+              },
             ),
+            const SizedBox(height: 10),
+          ],
+          if (scanLocked) ...[
+            _PublishMenuWarningBanner(
+              onPublishTap: () => context.go('/owner/menu'),
+            ),
+            const SizedBox(height: 12),
+          ],
+          _ScanCard(
+            enabled: !scanLocked,
+            onTap: scanLocked ? null : () => openScannerFlow(context, ref),
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _QuickTile(
-              icon: Icons.bolt_rounded,
-              label: 'Oferta flash',
-              highlighted: true,
+          if (offer != null) ...[
+            const SizedBox(height: 12),
+            _OfferBanner(
+              text: '${offer.slots} cupos a ${OwnerFormat.money(offer.price)}',
               onTap: () => context.push('/owner/oferta-flash'),
             ),
+          ],
+          const SizedBox(height: 12),
+          ElevatedButton.icon(
+            onPressed: () async {
+              await context.push('/owner/registrar-consumo');
+              unawaited(movementsNotifier.refresh());
+            },
+            icon: const Icon(Icons.receipt_long_rounded),
+            label: const Text(
+              'Cobro suelto (POS)',
+              maxLines: 1,
+              softWrap: false,
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
-          if (isOwner) ...[
+          const SizedBox(height: 10),
+          Row(children: [
+            Expanded(
+              child: _QuickTile(
+                icon: Icons.group_outlined,
+                label: 'Vender plan',
+                onTap: () async {
+                  await context.push('/owner/vender-plan');
+                  unawaited(movementsNotifier.refresh());
+                },
+              ),
+            ),
             const SizedBox(width: 8),
             Expanded(
               child: _QuickTile(
-                icon: Icons.receipt_outlined,
-                label: 'Cuadre caja',
-                onTap: () => context.push('/owner/cash-closing'),
+                icon: Icons.bolt_rounded,
+                label: 'Oferta flash',
+                highlighted: true,
+                onTap: () => context.push('/owner/oferta-flash'),
               ),
             ),
+            if (isOwner) ...[
+              const SizedBox(width: 8),
+              Expanded(
+                child: _QuickTile(
+                  icon: Icons.receipt_outlined,
+                  label: 'Cuadre caja',
+                  onTap: () => context.push('/owner/cash-closing'),
+                ),
+              ),
+            ],
+          ]),
+          if (isOwner) ...[
+            const SizedBox(height: 12),
+            _NumbersCard(onTap: () => context.go('/owner/metricas')),
           ],
-        ]),
-        if (isOwner) ...[
-          const SizedBox(height: 12),
-          _NumbersCard(onTap: () => context.go('/owner/metricas')),
-        ],
-        const SizedBox(height: 16),
-        Row(children: [
-          const Expanded(child: OwnerSectionLabel('Cobros de hoy')),
-          Text(OwnerFormat.money(total),
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: colors.onSurface)),
-        ]),
-        const SizedBox(height: 6),
-        if (charges.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 10),
-            child: Text('Aún sin cobros',
+          const SizedBox(height: 16),
+          Row(children: [
+            Expanded(
+              child: OwnerSectionLabel(
+                isViewingToday
+                    ? 'Cobros de hoy'
+                    : 'Movimientos · ${movementsState.selectedDate}',
+              ),
+            ),
+            if (isOwner) ...[
+              if (!isViewingToday) ...[
+                TextButton(
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                  ),
+                  onPressed: () => movementsNotifier.loadDate(todayStr),
+                  child: const Text('Hoy'),
+                ),
+              ],
+              InkWell(
+                borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+                onTap: pickDate,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: colors.secondaryContainer,
+                    borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(
+                      Icons.calendar_today_rounded,
+                      size: 13,
+                      color: colors.onSecondaryContainer,
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      isViewingToday ? 'Hoy' : movementsState.selectedDate,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                        color: colors.onSecondaryContainer,
+                      ),
+                    ),
+                  ]),
+                ),
+              ),
+            ] else
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: colors.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(
+                    Icons.lock_outline_rounded,
+                    size: 13,
+                    color: colors.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Solo hoy',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: colors.onSurfaceVariant,
+                    ),
+                  ),
+                ]),
+              ),
+            const SizedBox(width: 10),
+            Text(
+              OwnerFormat.money(totalCollected),
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w900,
+                color: colors.onSurface,
+              ),
+            ),
+          ]),
+          if (movementsState.warningMessage != null) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: b.walletAccent.withValues(alpha: 0.35),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: b.walletAccent),
+              ),
+              child: Row(children: [
+                Icon(Icons.info_outline_rounded, size: 18, color: b.onWalletAccent),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    movementsState.warningMessage!,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: b.onWalletAccent,
+                    ),
+                  ),
+                ),
+              ]),
+            ),
+          ],
+          const SizedBox(height: 8),
+          if (movementsState.isLoading && movementsState.items.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 16),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (movementsState.errorMessage != null &&
+              movementsState.items.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              child: Column(children: [
+                Text(
+                  movementsState.errorMessage!,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: b.onDangerContainer,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                TextButton(
+                  onPressed: movementsNotifier.refresh,
+                  child: const Text('Reintentar'),
+                ),
+              ]),
+            )
+          else if (movementsState.items.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              child: Text(
+                isViewingToday ? 'Aún sin movimientos' : 'Sin movimientos en esta fecha',
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant)),
-          )
-        else
-          for (final t in charges) _ChargeRow(item: t),
-      ],
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: colors.onSurfaceVariant,
+                ),
+              ),
+            )
+          else ...[
+            for (final m in movementsState.items) _MovementRow(item: m),
+            if (movementsState.hasMore) ...[
+              const SizedBox(height: 6),
+              OutlinedButton.icon(
+                onPressed:
+                    movementsState.isLoadingMore ? null : movementsNotifier.loadMore,
+                icon: movementsState.isLoadingMore
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.expand_more_rounded),
+                label: Text(
+                  movementsState.isLoadingMore ? 'Cargando…' : 'Cargar más',
+                ),
+              ),
+            ],
+          ],
+        ],
+      ),
     );
   }
 }
@@ -600,22 +788,136 @@ class _NumbersCard extends StatelessWidget {
   }
 }
 
-class _ChargeRow extends StatelessWidget {
-  const _ChargeRow({required this.item});
+class _MovementRow extends StatelessWidget {
+  const _MovementRow({required this.item});
 
-  final TransactionItem item;
+  final CajaMovement item;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
-    final isPlanRedemption = item.amount <= 0 &&
-        (item.type == 'Canje de plan' ||
-            item.type == 'Validado' ||
-            item.paymentMethod == 'Plan' ||
-            item.paymentMethod.contains('Canje'));
-    final planDetail = (item.detail != null && item.detail!.trim().isNotEmpty)
-        ? item.detail!.trim()
-        : 'Canje de plan · Almuerzo del día (Prepagado)';
+    final b = context.bocadooColors;
+
+    final Widget trailing;
+    final String? infoLine;
+
+    switch (item.tipo) {
+      case CajaMovementType.venta:
+        final countsAsCash = item.cashCollectedCents > 0 ||
+            (item.pagoEstado?.toUpperCase() == 'CONFIRMADO' && !item.revertido);
+        final amountText = OwnerFormat.money(Money.fromCents(item.montoCentavos ?? 0));
+        infoLine = [
+          if (item.subtitle != null && item.subtitle!.isNotEmpty) item.subtitle!,
+          if (item.metodoPago != null && item.metodoPago!.isNotEmpty && item.subtitle != item.metodoPago)
+            item.metodoPago!,
+          OwnerFormat.time(item.timestamp),
+        ].join(' · ');
+        trailing = Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text(
+              amountText,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w900,
+                decoration: item.revertido ? TextDecoration.lineThrough : null,
+                color: countsAsCash ? colors.onSurface : colors.onSurfaceVariant,
+              ),
+            ),
+            if (item.revertido)
+              Text(
+                'Revertida',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: b.onDangerContainer,
+                ),
+              )
+            else if (item.pagoEstado?.toUpperCase() != 'CONFIRMADO')
+              Text(
+                'Pendiente',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: colors.onSurfaceVariant,
+                ),
+              ),
+          ],
+        );
+      case CajaMovementType.pedido:
+        final refCents = item.valorPedidoCentavos ?? 0;
+        infoLine = [
+          if (item.subtitle != null && item.subtitle!.isNotEmpty) item.subtitle!,
+          OwnerFormat.time(item.timestamp),
+        ].join(' · ');
+        trailing = Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: colors.primaryContainer.withValues(alpha: 0.7),
+                borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+              ),
+              child: Text(
+                'Pedido',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w900,
+                  color: colors.onPrimaryContainer,
+                ),
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              'Ref. ${OwnerFormat.money(Money.fromCents(refCents))}',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: colors.onSurfaceVariant,
+              ),
+            ),
+          ],
+        );
+      case CajaMovementType.canjeDirecto:
+        final dish = (item.platoNombre != null && item.platoNombre!.isNotEmpty)
+            ? item.platoNombre!
+            : 'Almuerzo del día (Prepagado)';
+        infoLine = [
+          dish,
+          if (item.planNombre != null && item.planNombre!.isNotEmpty) item.planNombre!,
+          OwnerFormat.time(item.timestamp),
+        ].join(' · ');
+        trailing = Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: colors.secondaryContainer,
+                borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+              ),
+              child: Text(
+                'Prepagado',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w900,
+                  color: colors.onSecondaryContainer,
+                ),
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              '\$0,00',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: colors.onSurfaceVariant,
+              ),
+            ),
+          ],
+        );
+    }
 
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
@@ -628,84 +930,35 @@ class _ChargeRow extends StatelessWidget {
       child: Row(
         children: [
           Expanded(
-            child: isPlanRedemption
-                ? Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        item.customerName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w800,
-                          color: colors.onSurface,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        planDetail,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: colors.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                  )
-                : Text(
-                    '${item.customerName} · ${item.paymentMethod}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: colors.onSurface,
-                    ),
-                  ),
-          ),
-          const SizedBox(width: 8),
-          if (isPlanRedemption)
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: colors.secondaryContainer,
-                    borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-                  ),
-                  child: Text(
-                    'Prepagado',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w900,
-                      color: colors.onSecondaryContainer,
-                    ),
+                Text(
+                  item.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: colors.onSurface,
                   ),
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  '\$0,00 (Plan)',
+                  infoLine,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
                     color: colors.onSurfaceVariant,
                   ),
                 ),
               ],
-            )
-          else
-            Text(
-              OwnerFormat.money(item.amount),
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w900,
-                color: colors.onSurface,
-              ),
             ),
+          ),
+          const SizedBox(width: 8),
+          trailing,
         ],
       ),
     );
@@ -820,6 +1073,7 @@ class _PlanRequestsSectionState extends ConsumerState<_PlanRequestsSection> {
       ref.invalidate(planRequestsProvider);
       ref.invalidate(dailySummaryProvider);
       ref.invalidate(ownerClientsProvider);
+      unawaited(ref.read(cajaMovementsProvider.notifier).refresh());
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Plan ${req.planName} activado para ${req.clientName}.')),
       );

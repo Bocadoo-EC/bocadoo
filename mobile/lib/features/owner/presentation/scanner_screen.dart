@@ -460,7 +460,12 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
       setState(() => _error = 'Escribe el código o # de pedido.');
       return;
     }
-    if (raw.startsWith('#') || RegExp(r'^\d+$').hasMatch(raw) || raw.contains('.')) {
+    if (raw.startsWith('#') ||
+        RegExp(r'^\d+$').hasMatch(raw) ||
+        raw.contains('.') ||
+        raw.contains('-') ||
+        raw.contains(':') ||
+        raw.length > 6) {
       Navigator.pop(context, raw);
       return;
     }
@@ -469,7 +474,7 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
       setState(() => _error = 'Escribe el código de 6 caracteres o #pedido.');
       return;
     }
-    Navigator.pop(context, cleaned);
+    Navigator.pop(context, raw.toUpperCase());
   }
 
   @override

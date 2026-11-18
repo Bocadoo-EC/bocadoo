@@ -27,6 +27,20 @@ extension DishKindX on DishKind {
       this == DishKind.sopa || this == DishKind.segundo || this == DishKind.bebida || this == DishKind.postre;
 }
 
+/// Subcategoría para clasificar inventario de Desayunos (combos vs componentes).
+enum BreakfastCategory { combo, bebida, proteina, pan }
+
+extension BreakfastCategoryX on BreakfastCategory {
+  String get label => switch (this) {
+        BreakfastCategory.combo => 'Combo predefinido',
+        BreakfastCategory.bebida => 'Bebida caliente / Jugo',
+        BreakfastCategory.proteina => 'Proteína / Huevos',
+        BreakfastCategory.pan => 'Pan / Bolón / Tigrillo',
+      };
+
+  bool get isComponent => this != BreakfastCategory.combo;
+}
+
 @immutable
 class CatalogDish {
   const CatalogDish({
@@ -38,6 +52,7 @@ class CatalogDish {
     this.archived = false,
     this.topPick = false,
     this.veggie = false,
+    this.breakfastCategory,
   });
 
   final String id;
@@ -48,6 +63,7 @@ class CatalogDish {
   final bool archived;
   final bool topPick;
   final bool veggie;
+  final BreakfastCategory? breakfastCategory;
 
   CatalogDish copyWith({bool? archived}) => CatalogDish(
         id: id,
@@ -58,5 +74,6 @@ class CatalogDish {
         archived: archived ?? this.archived,
         topPick: topPick,
         veggie: veggie,
+        breakfastCategory: breakfastCategory,
       );
 }

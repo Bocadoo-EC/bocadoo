@@ -851,12 +851,27 @@ class _ActiveWalletCard extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
             child: Builder(
               builder: (context) {
-                final planLockedByMenu = mode == QrMode.plan &&
-                    pass != null &&
-                    !state.hasPublishedTodayMenu(pass.restaurantId);
-                if (planLockedByMenu) {
+                final menuAvail = mode == QrMode.plan && pass != null
+                    ? state.menuAvailabilityFor(pass.restaurantId)
+                    : MenuAvailabilityState.disponible;
+                if (menuAvail == MenuAvailabilityState.sinPublicar &&
+                    pass != null) {
                   return _MenuNotPublishedQrBlock(
                     restaurantId: pass.restaurantId,
+                    onRefresh: () => controller.loadDashboard(silent: true),
+                  );
+                }
+                if (menuAvail == MenuAvailabilityState.agotadoTotal &&
+                    pass != null) {
+                  final hasReservedOrderHere = order != null &&
+                      !order.isDelivered &&
+                      order.restaurantId == pass.restaurantId;
+                  return _MenuSoldOutQrBlock(
+                    restaurantId: pass.restaurantId,
+                    hasReservedOrder: hasReservedOrderHere,
+                    onOpenOrderQr: hasReservedOrderHere
+                        ? () => controller.selectQrMode(QrMode.preorden)
+                        : null,
                     onRefresh: () => controller.loadDashboard(silent: true),
                   );
                 }
@@ -1038,6 +1053,111 @@ class _MenuNotPublishedQrBlock extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: onRefresh,
+                  icon: const Icon(Icons.refresh_rounded, size: 18),
+                  label: const Text(
+                    'Actualizar',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: TextButton.icon(
+                  onPressed: () =>
+                      context.push('/customer/restaurants/$restaurantId'),
+                  icon: const Icon(Icons.storefront_outlined, size: 18),
+                  label: const Text(
+                    'Ver local',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MenuSoldOutQrBlock extends StatelessWidget {
+  final String restaurantId;
+  final bool hasReservedOrder;
+  final VoidCallback? onOpenOrderQr;
+  final VoidCallback onRefresh;
+
+  const _MenuSoldOutQrBlock({
+    required this.restaurantId,
+    required this.hasReservedOrder,
+    this.onOpenOrderQr,
+    required this.onRefresh,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    final b = context.bocadooColors;
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: b.dangerContainer.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: b.danger.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        children: [
+          Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              color: b.dangerContainer,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              Icons.no_meals_rounded,
+              size: 28,
+              color: b.onDangerContainer,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'Almuerzos del día agotados en este local',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w900,
+              color: colors.onSurface,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            hasReservedOrder
+                ? 'Ya no quedan almuerzos disponibles hoy, pero tu preorden reservada sigue lista para canjear en caja.'
+                : 'Todos los platos de hoy se agotaron en cocina. Tu saldo sigue intacto para tu próxima visita.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              height: 1.35,
+              color: colors.onSurfaceVariant,
+            ),
+          ),
+          if (hasReservedOrder && onOpenOrderQr != null) ...[
+            const SizedBox(height: 14),
+            FilledButton.icon(
+              onPressed: onOpenOrderQr,
+              icon: const Icon(Icons.qr_code_2_rounded, size: 18),
+              label: const Text('Ver QR de mi preorden'),
+            ),
+          ],
+          const SizedBox(height: 12),
           Row(
             children: [
               Expanded(

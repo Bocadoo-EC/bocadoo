@@ -82,9 +82,16 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
   }
 
   void _applyDefaults(Restaurant r) {
-    _soupId ??= r.soups.where((m) => !m.isSoldOut).firstOrNull?.id;
-    _mainId ??= r.mains.where((m) => !m.isSoldOut).firstOrNull?.id;
-    _breakfastId ??= r.breakfasts.where((m) => !m.isSoldOut).firstOrNull?.id;
+    if (_soupId == null || r.soups.any((m) => m.id == _soupId && m.isSoldOut)) {
+      _soupId = r.soups.where((m) => !m.isSoldOut).firstOrNull?.id;
+    }
+    if (_mainId == null || r.mains.any((m) => m.id == _mainId && m.isSoldOut)) {
+      _mainId = r.mains.where((m) => !m.isSoldOut).firstOrNull?.id;
+    }
+    if (_breakfastId == null ||
+        r.breakfasts.any((m) => m.id == _breakfastId && m.isSoldOut)) {
+      _breakfastId = r.breakfasts.where((m) => !m.isSoldOut).firstOrNull?.id;
+    }
     final options = _availableArrivalOptions();
     if (_selectedArrival != _customArrival && !options.contains(_selectedArrival)) {
       _selectedArrival = 'En 15 min';
@@ -175,10 +182,14 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
     final chosenBreakfast = r.breakfasts
         .where((b) => b.id == _breakfastId && !b.isSoldOut)
         .firstOrNull;
+    final menuSoldOutAll = breakfastMode
+        ? r.breakfasts.every((b) => b.isSoldOut)
+        : r.isMenuSoldOutToday;
     final canOrder =
         !hasActiveOrder &&
         !_sending &&
         r.hasMenu &&
+        !menuSoldOutAll &&
         (!breakfastMode || chosenBreakfast != null);
 
     return Column(
@@ -377,13 +388,15 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
                           onPressed:
                               canOrder ? () => _order(controller, r) : null,
                           child: Text(
-                            breakfastMode
-                                ? (hasPlanHere
-                                    ? 'Preordenar desayuno con Plan (\$0,00)'
-                                    : 'Preordenar desayuno · ${formatCents(totalCents)}')
-                                : (hasPlanHere
-                                    ? 'Preordenar almuerzo con Plan (\$0,00)'
-                                    : 'Preordenar almuerzo · ${formatCents(totalCents)}'),
+                            menuSoldOutAll
+                                ? 'Menú agotado por hoy'
+                                : breakfastMode
+                                    ? (hasPlanHere
+                                        ? 'Preordenar desayuno con Plan (\$0,00)'
+                                        : 'Preordenar desayuno · ${formatCents(totalCents)}')
+                                    : (hasPlanHere
+                                        ? 'Preordenar almuerzo con Plan (\$0,00)'
+                                        : 'Preordenar almuerzo · ${formatCents(totalCents)}'),
                           ),
                         ),
                       ],
@@ -724,7 +737,7 @@ class _OptionTile extends StatelessWidget {
                       ),
                     ),
                     child: Text(
-                      'Se acabó',
+                      'Agotado',
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w900,

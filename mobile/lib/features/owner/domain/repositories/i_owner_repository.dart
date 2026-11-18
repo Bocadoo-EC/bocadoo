@@ -40,6 +40,8 @@ abstract class IOwnerCatalogRepository {
     required DishKind kind,
     double? price,
     String? description,
+    bool veggie = false,
+    BreakfastCategory? breakfastCategory,
   });
 
   Future<void> setDishArchived(String restaurantId, String dishId, {required bool archived});
@@ -148,6 +150,14 @@ abstract class IOwnerCashRepository {
   });
 
   Future<bool> undoPhysicalCard(String cardId);
+
+  /// Consulta los movimientos de caja de una fecha (`YYYY-MM-DD`) con paginación por cursor.
+  Future<CajaMovementsPage> getCajaMovements(
+    String restaurantId, {
+    required String fecha,
+    String? cursor,
+    int limit = 20,
+  });
 }
 
 /// O12 · Preórdenes por cobrar (solo efectivo) y entregar.

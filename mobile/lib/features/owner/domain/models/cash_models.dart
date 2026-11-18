@@ -196,3 +196,70 @@ class FlashOffer {
   final int? fromMinutes;
   final int? toMinutes;
 }
+
+/// Tipo de movimiento devuelto por `GET /v1/caja/movimientos`.
+enum CajaMovementType { venta, pedido, canjeDirecto }
+
+/// Movimiento unificado de Caja (`VENTA`, `PEDIDO`, `CANJE_DIRECTO`).
+@immutable
+class CajaMovement {
+  const CajaMovement({
+    required this.id,
+    required this.tipo,
+    required this.timestamp,
+    required this.title,
+    this.subtitle,
+    this.montoCentavos,
+    this.valorPedidoCentavos,
+    this.pagoEstado,
+    this.metodoPago,
+    this.revertido = false,
+    this.platoNombre,
+    this.customerName,
+    this.planNombre,
+  });
+
+  final String id;
+  final CajaMovementType tipo;
+  final DateTime timestamp;
+  final String title;
+  final String? subtitle;
+
+  /// Importe real cobrado en caja (`VENTA`).
+  final int? montoCentavos;
+
+  /// Valor referencial del pedido (`PEDIDO`); nunca suma al total recaudado.
+  final int? valorPedidoCentavos;
+
+  final String? pagoEstado;
+  final String? metodoPago;
+  final bool revertido;
+  final String? platoNombre;
+  final String? customerName;
+  final String? planNombre;
+
+  /// Regla financiera estricta: solo `VENTA` con `pagoEstado == CONFIRMADO` y `!revertido`
+  /// representa dinero recaudado en caja.
+  int get cashCollectedCents =>
+      (tipo == CajaMovementType.venta &&
+              pagoEstado?.toUpperCase() == 'CONFIRMADO' &&
+              !revertido)
+          ? (montoCentavos ?? 0)
+          : 0;
+}
+
+/// Página cursorizada de `GET /v1/caja/movimientos?fecha=YYYY-MM-DD`.
+@immutable
+class CajaMovementsPage {
+  const CajaMovementsPage({
+    required this.fecha,
+    required this.items,
+    this.nextCursor,
+  });
+
+  final String fecha;
+  final List<CajaMovement> items;
+  final String? nextCursor;
+
+  bool get hasMore => nextCursor != null && nextCursor!.isNotEmpty;
+}

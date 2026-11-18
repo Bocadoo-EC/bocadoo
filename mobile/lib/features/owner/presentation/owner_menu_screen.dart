@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/contracts/models.dart';
 import '../../../core/network/api_exception.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/api_owner_repo.dart';
@@ -50,10 +51,16 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
   };
   final List<String> _breakfastIds = ['b-1'];
   final Set<String> _soldOut = {};
-  final Set<DishKind> _activeSections = {DishKind.sopa, DishKind.segundo, DishKind.bebida};
+  final Set<String> _expandedSections = {'sopa', 'segundo'};
   bool _published = false;
   bool _menuLoaded = false;
   bool _publishing = false;
+
+  void _toggleAccordion(String key) {
+    setState(() {
+      if (!_expandedSections.remove(key)) _expandedSections.add(key);
+    });
+  }
 
   String get _rid => ref.read(ownerRestaurantIdProvider);
 
@@ -114,6 +121,16 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
       return;
     }
     ref.invalidate(posMenuProvider);
+    ref.invalidate(activeOfferProvider);
+    final dishes = ref.read(catalogDishesProvider).value ?? const <CatalogDish>[];
+    if (_published &&
+        dishes.isNotEmpty &&
+        _buildMenu(dishes).availabilityState == MenuAvailabilityState.agotadoTotal) {
+      showInfoSnackBar(
+        messenger,
+        'Todo el menú quedó agotado hoy. Las ofertas flash activas se pausaron.',
+      );
+    }
   }
 
   DailyMenu _buildMenu(List<CatalogDish> dishes) {
@@ -174,10 +191,15 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
       return;
     }
     container.invalidate(posMenuProvider);
-    showUndoSnackBar(messenger, label: 'Menú publicado con éxito', onUndo: () async {
+    container.invalidate(activeOfferProvider);
+    final publishMsg = menu.availabilityState == MenuAvailabilityState.agotadoTotal
+        ? 'Menú marcado como Agotado hoy (ofertas flash pausadas)'
+        : 'Menú publicado con éxito';
+    showUndoSnackBar(messenger, label: publishMsg, onUndo: () async {
       final undone = await repo.unpublishMenu(rid);
       if (undone) {
         container.invalidate(posMenuProvider);
+        container.invalidate(activeOfferProvider);
         if (mounted) setState(() => _published = false);
       } else {
         final err = repo is ApiOwnerRepository
@@ -188,15 +210,55 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
     });
   }
 
-  Future<void> _openOptions(DishKind kind) {
+  Future<void> _openOptions(
+    DishKind kind,
+    List<CatalogDish> dishes, {
+    bool veggieOnly = false,
+  }) {
+    final current = List.of(_today[kind] ?? const <String>[]);
+    if (kind != DishKind.segundo) {
+      return showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        showDragHandle: true,
+        builder: (_) => _OptionsSheet(
+          kind: kind,
+          veggieOnly: false,
+          initial: current,
+          onChanged: (names) => setState(() => _today[kind] = names),
+        ),
+      );
+    }
+
+    final veggieNames = {for (final d in dishes) if (d.veggie) d.name};
+    final initialSlice = [
+      for (final name in current)
+        if (veggieOnly ? veggieNames.contains(name) : !veggieNames.contains(name))
+          name,
+    ];
     return showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
       builder: (_) => _OptionsSheet(
         kind: kind,
-        initial: List.of(_today[kind] ?? const <String>[]),
-        onChanged: (names) => setState(() => _today[kind] = names),
+        veggieOnly: veggieOnly,
+        initial: initialSlice,
+        onChanged: (names) {
+          setState(() {
+            final allCurrent = List.of(_today[DishKind.segundo] ?? const <String>[]);
+            final otherSlice = [
+              for (final name in allCurrent)
+                if (veggieOnly
+                    ? !veggieNames.contains(name)
+                    : veggieNames.contains(name))
+                  name,
+            ];
+            _today[DishKind.segundo] = veggieOnly
+                ? [...otherSlice, ...names]
+                : [...names, ...otherSlice];
+          });
+        },
       ),
     );
   }
@@ -215,14 +277,24 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
     );
   }
 
-  Future<void> _openNewDish(DishKind kind) {
+  Future<void> _openNewBreakfast() {
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => const _NewBreakfastSheet(),
+    );
+  }
+
+  Future<void> _openNewDish(DishKind kind, {bool initialVeggie = false}) {
     return showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
       builder: (_) => _NewDishSheet(
         initialKind: kind,
-        sections: [for (final k in _lunchKinds) if (_activeSections.contains(k) || k == kind) k],
+        initialVeggie: initialVeggie,
+        sections: _lunchKinds,
       ),
     );
   }
@@ -258,7 +330,7 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
       body: SafeArea(
         bottom: false,
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          _header(catalog.value?.length ?? 0),
+          _header(catalog.value ?? const <CatalogDish>[]),
           Expanded(
             child: !_menuLoaded
                 ? const OwnerLoadingView('Cargando platos')
@@ -277,10 +349,14 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
     );
   }
 
-  Widget _header(int dishCount) {
+  Widget _header(List<CatalogDish> dishes) {
     final colors = context.colorScheme;
     final b = context.bocadooColors;
     final now = DateTime.now();
+    final dishCount = dishes.length;
+    final avail = !_published
+        ? MenuAvailabilityState.sinPublicar
+        : _buildMenu(dishes).availabilityState;
 
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
@@ -315,13 +391,23 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
           ]),
         const SizedBox(height: 10),
         Row(children: [
-          _published
-              ? OwnerBadge(label: 'Publicado', background: b.successContainer, foreground: b.success)
-              : OwnerBadge(
-                  label: 'Borrador',
-                  background: Theme.of(context).scaffoldBackgroundColor,
-                  foreground: colors.onSurfaceVariant,
-                ),
+          switch (avail) {
+            MenuAvailabilityState.disponible => OwnerBadge(
+                label: 'Publicado',
+                background: b.successContainer,
+                foreground: b.success,
+              ),
+            MenuAvailabilityState.agotadoTotal => OwnerBadge(
+                label: 'Agotado hoy',
+                background: b.dangerContainer,
+                foreground: b.onDangerContainer,
+              ),
+            MenuAvailabilityState.sinPublicar => OwnerBadge(
+                label: 'Borrador',
+                background: Theme.of(context).scaffoldBackgroundColor,
+                foreground: colors.onSurfaceVariant,
+              ),
+          },
           const SizedBox(width: 12),
           Expanded(
             child: OwnerSegmented(
@@ -341,11 +427,39 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
     final colors = context.colorScheme;
     final veggieNames = {for (final d in dishes) if (d.veggie) d.name};
     final mains = _today[DishKind.segundo] ?? const <String>[];
-    final cards = [
-      (title: 'Sopa', icon: Icons.soup_kitchen_outlined, kind: DishKind.sopa, items: _today[DishKind.sopa] ?? const <String>[]),
-      (title: 'Segundo', icon: Icons.restaurant_rounded, kind: DishKind.segundo, items: [for (final m in mains) if (!veggieNames.contains(m)) m]),
-      (title: 'Opción veggie', icon: Icons.eco_outlined, kind: DishKind.segundo, items: [for (final m in mains) if (veggieNames.contains(m)) m]),
-      (title: 'Bebida', icon: Icons.local_drink_outlined, kind: DishKind.bebida, items: _today[DishKind.bebida] ?? const <String>[]),
+    final sections = [
+      (
+        key: 'sopa',
+        title: 'Sopa',
+        icon: Icons.soup_kitchen_outlined,
+        kind: DishKind.sopa,
+        veggieOnly: false,
+        items: _today[DishKind.sopa] ?? const <String>[],
+      ),
+      (
+        key: 'segundo',
+        title: 'Segundo',
+        icon: Icons.restaurant_rounded,
+        kind: DishKind.segundo,
+        veggieOnly: false,
+        items: [for (final m in mains) if (!veggieNames.contains(m)) m],
+      ),
+      (
+        key: 'bebida',
+        title: 'Bebida',
+        icon: Icons.local_drink_outlined,
+        kind: DishKind.bebida,
+        veggieOnly: false,
+        items: _today[DishKind.bebida] ?? const <String>[],
+      ),
+      (
+        key: 'veggie',
+        title: 'Opción veggie',
+        icon: Icons.eco_outlined,
+        kind: DishKind.segundo,
+        veggieOnly: true,
+        items: [for (final m in mains) if (veggieNames.contains(m)) m],
+      ),
     ];
     final breakfasts = [
       for (final id in _breakfastIds) ?dishes.where((d) => d.id == id).firstOrNull,
@@ -365,34 +479,32 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              '¿Se acabó un plato? Tócalo y solo ese deja de ofrecerse. Los demás siguen.',
+              '¿Se acabó un plato? Tócalo y alterna entre Hay y Agotado en tiempo real.',
               style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant),
             ),
           ),
         ]),
       ),
       const SizedBox(height: 12),
-      LayoutBuilder(builder: (context, c) {
-        final w = (c.maxWidth - 12) / 2;
-        return Wrap(spacing: 12, runSpacing: 12, children: [
-          for (final card in cards)
-            SizedBox(
-              width: w,
-              child: _SectionCard(
-                title: card.title,
-                icon: card.icon,
-                items: card.items,
-                soldOut: _soldOut,
-                onToggle: _toggleSoldOut,
-                onOptions: () => _openOptions(card.kind),
-              ),
-            ),
-        ]);
-      }),
-      const SizedBox(height: 12),
+      for (final sec in sections) ...[
+        _AccordionSectionCard(
+          title: sec.title,
+          icon: sec.icon,
+          items: sec.items,
+          soldOut: _soldOut,
+          expanded: _expandedSections.contains(sec.key),
+          onToggleExpand: () => _toggleAccordion(sec.key),
+          onToggleDish: _toggleSoldOut,
+          onChooseDishes: () =>
+              _openOptions(sec.kind, dishes, veggieOnly: sec.veggieOnly),
+        ),
+        const SizedBox(height: 10),
+      ],
       _BreakfastToday(
         items: breakfasts,
         soldOut: _soldOut,
+        expanded: _expandedSections.contains('desayunos'),
+        onToggleExpand: () => _toggleAccordion('desayunos'),
         onToggle: _toggleSoldOut,
         onAdd: _openBreakfasts,
       ),
@@ -403,7 +515,7 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
             ? SizedBox(
                 width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2.5, color: colors.onPrimary))
             : const Icon(Icons.visibility_outlined),
-        label: Text(_published ? 'Actualizar menú' : 'Publicar menú'),
+        label: Text(_published ? 'Actualizar menú de hoy' : 'Publicar menú de hoy'),
       ),
     ]);
   }
@@ -428,11 +540,47 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
 
   List<Widget> _lunchCatalog(List<CatalogDish> dishes) {
     final colors = context.colorScheme;
-    const sections = [
-      (kind: DishKind.bebida, label: 'Jugo'),
-      (kind: DishKind.sopa, label: 'Sopa'),
-      (kind: DishKind.segundo, label: 'Plato fuerte'),
-      (kind: DishKind.postre, label: 'Postre'),
+    final lunchDishes = [
+      for (final d in dishes)
+        if (d.kind.isLunchSection) d,
+    ];
+    final sections = [
+      (
+        kind: DishKind.sopa,
+        label: 'Sopa',
+        veggie: false,
+        items: [for (final d in lunchDishes) if (d.kind == DishKind.sopa) d],
+      ),
+      (
+        kind: DishKind.segundo,
+        label: 'Segundo',
+        veggie: false,
+        items: [
+          for (final d in lunchDishes)
+            if (d.kind == DishKind.segundo && !d.veggie) d,
+        ],
+      ),
+      (
+        kind: DishKind.segundo,
+        label: 'Opción veggie',
+        veggie: true,
+        items: [
+          for (final d in lunchDishes)
+            if (d.kind == DishKind.segundo && d.veggie) d,
+        ],
+      ),
+      (
+        kind: DishKind.bebida,
+        label: 'Jugo / Bebida',
+        veggie: false,
+        items: [for (final d in lunchDishes) if (d.kind == DishKind.bebida) d],
+      ),
+      (
+        kind: DishKind.postre,
+        label: 'Postre',
+        veggie: false,
+        items: [for (final d in lunchDishes) if (d.kind == DishKind.postre) d],
+      ),
     ];
     return [
       Container(
@@ -447,43 +595,15 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
           const SizedBox(width: 12),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Tus platos nunca se pierden',
+              Text('Inventario de almuerzos',
                   style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: colors.onPrimaryContainer)),
               const SizedBox(height: 2),
               Text(
-                'Conserva siempre el historial de ventas y favoritos. Si dejas de preparar un plato '
-                'temporalmente, usa Archivar para ocultarlo del selector sin borrar sus datos.',
+                'Las secciones visibles para el comensal se activan automáticamente según los platos activos que publiques en Hoy. Usa Archivar para ocultar un plato sin borrar su historial.',
                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: colors.onPrimaryContainer),
               ),
             ]),
           ),
-        ]),
-      ),
-      const SizedBox(height: 14),
-      Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: Theme.of(context).scaffoldBackgroundColor,
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: colors.outlineVariant),
-        ),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Row(children: [
-            const Expanded(child: OwnerSectionLabel('Secciones activas')),
-            Text('${_activeSections.length} activas',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: colors.primary)),
-          ]),
-          const SizedBox(height: 8),
-          Wrap(spacing: 6, runSpacing: 6, children: [
-            for (final k in _lunchKinds)
-              OwnerChoice(
-                label: k.label,
-                selected: _activeSections.contains(k),
-                onTap: () => setState(() {
-                  if (!_activeSections.remove(k)) _activeSections.add(k);
-                }),
-              ),
-          ]),
         ]),
       ),
       for (final s in sections) ...[
@@ -492,13 +612,19 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
           Expanded(
             child: Text(s.label, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: colors.onSurface)),
           ),
-          OwnerSmallButton(label: 'Agregar', icon: Icons.add_rounded, onPressed: () => _openNewDish(s.kind)),
+          OwnerSmallButton(
+            label: 'Agregar',
+            icon: Icons.add_rounded,
+            onPressed: () => _openNewDish(s.kind, initialVeggie: s.veggie),
+          ),
         ]),
         const SizedBox(height: 8),
         ..._dishRows(
-          [for (final d in dishes) if (d.kind == s.kind) d],
+          s.items,
           empty: 'Aún no hay platos en ${s.label.toLowerCase()}.',
-          activeText: 'Activo en opciones de almuerzo',
+          activeText: s.veggie
+              ? 'Opción vegetariana · Almuerzo'
+              : 'Activo en opciones de almuerzo',
           archivedText: 'Archivado · Oculto de hoy',
         ),
       ],
@@ -506,7 +632,7 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
       ElevatedButton.icon(
         onPressed: () => _backToToday('Platos de la casa guardados'),
         icon: const Icon(Icons.check_rounded),
-        label: const Text('Guardar platos de la casa'),
+        label: const Text('Volver a Hoy'),
       ),
     ];
   }
@@ -515,49 +641,90 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
     final colors = context.colorScheme;
     final b = context.bocadooColors;
     final items = [for (final d in dishes) if (d.kind == DishKind.desayuno) d];
+    final combos = [
+      for (final d in items)
+        if (d.breakfastCategory == null ||
+            d.breakfastCategory == BreakfastCategory.combo)
+          d,
+    ];
+    final components = [
+      for (final d in items)
+        if (d.breakfastCategory != null &&
+            d.breakfastCategory != BreakfastCategory.combo)
+          d,
+    ];
+
+    Widget breakfastRow(CatalogDish d) {
+      final subLabel = d.breakfastCategory?.label;
+      return _CatalogRow(
+        dish: d,
+        badge: subLabel != null
+            ? OwnerBadge(
+                label: subLabel,
+                background: colors.primaryContainer,
+                foreground: colors.onPrimaryContainer,
+              )
+            : null,
+        subtitle: Text(
+          OwnerFormat.money(d.price ?? 0),
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: b.success),
+        ),
+        actions: [
+          if (!d.archived)
+            OwnerChoice(
+              label: _breakfastIds.contains(d.id) ? 'En hoy' : 'Ofrecer hoy',
+              selected: _breakfastIds.contains(d.id),
+              onTap: () => setState(() {
+                if (!_breakfastIds.remove(d.id)) _breakfastIds.add(d.id);
+              }),
+            ),
+          OwnerSmallButton(
+            label: d.archived ? 'Activar' : 'Archivar',
+            tonal: false,
+            onPressed: () => _setArchived(d, !d.archived),
+          ),
+        ],
+      );
+    }
+
     return [
       Row(children: [
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('Desayunos de la casa',
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: colors.onSurface)),
-            Text('Marca cuáles ofreces hoy y publícalos con el menú.',
+            Text('Combos predefinidos y componentes propios de desayuno.',
                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: colors.onSurfaceVariant)),
           ]),
         ),
         const SizedBox(width: 8),
-        OwnerSmallButton(label: 'Nuevo desayuno', icon: Icons.add_rounded, onPressed: _openBreakfasts),
+        OwnerSmallButton(
+          label: 'Nuevo plato',
+          icon: Icons.add_rounded,
+          onPressed: _openNewBreakfast,
+        ),
       ]),
-      const SizedBox(height: 12),
-      if (items.isEmpty)
-        _EmptyLine('Aún no hay desayunos. Agrega el primero.')
+      const SizedBox(height: 16),
+      Text('Combos predefinidos',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: colors.onSurface)),
+      const SizedBox(height: 8),
+      if (combos.isEmpty)
+        const _EmptyLine('Aún no hay combos de desayuno (ej. Continental, Americano, Completo).')
       else
-        for (final d in items)
-          _CatalogRow(
-            dish: d,
-            subtitle: Text(OwnerFormat.money(d.price ?? 0),
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: b.success)),
-            actions: [
-              if (!d.archived)
-                OwnerChoice(
-                  label: _breakfastIds.contains(d.id) ? 'En hoy' : 'Ofrecer hoy',
-                  selected: _breakfastIds.contains(d.id),
-                  onTap: () => setState(() {
-                    if (!_breakfastIds.remove(d.id)) _breakfastIds.add(d.id);
-                  }),
-                ),
-              OwnerSmallButton(
-                label: d.archived ? 'Activar' : 'Archivar',
-                tonal: false,
-                onPressed: () => _setArchived(d, !d.archived),
-              ),
-            ],
-          ),
+        for (final d in combos) breakfastRow(d),
+      const SizedBox(height: 16),
+      Text('Componentes de desayuno',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: colors.onSurface)),
+      const SizedBox(height: 8),
+      if (components.isEmpty)
+        const _EmptyLine('Agrega bebidas calientes, huevos o pan/bolón/tigrillo.')
+      else
+        for (final d in components) breakfastRow(d),
       const SizedBox(height: 20),
       ElevatedButton.icon(
         onPressed: () => _backToToday('Desayunos guardados'),
         icon: const Icon(Icons.check_rounded),
-        label: const Text('Guardar desayunos'),
+        label: const Text('Volver a Hoy'),
       ),
     ];
   }
@@ -570,9 +737,9 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
       Row(children: [
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Especialidades de la casa',
+            Text('Platos a la carta',
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: colors.onSurface)),
-            Text('Platos individuales que se venden a precio libre fuera del combo de almuerzo.',
+            Text('Platos fuertes y segundos de venta individual, sin combos de almuerzo.',
                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: colors.onSurfaceVariant)),
           ]),
         ),
@@ -581,7 +748,7 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
       ]),
       const SizedBox(height: 12),
       if (items.isEmpty)
-        _EmptyLine('Aún no hay platos a la carta. Agrega el primero.')
+        const _EmptyLine('Aún no hay platos a la carta. Agrega el primero.')
       else
         for (final d in items)
           _CatalogRow(
@@ -591,8 +758,14 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
               background: b.successContainer,
               foreground: b.success,
             ),
-            subtitle: Text(d.description,
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: colors.onSurfaceVariant)),
+            subtitle: Text(
+              d.archived
+                  ? 'No disponible · Archivado'
+                  : (d.description.isNotEmpty
+                      ? d.description
+                      : 'Disponible individualmente'),
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: colors.onSurfaceVariant),
+            ),
             actions: [
               OwnerSmallButton(
                 label: d.archived ? 'Activar' : 'Archivar',
@@ -671,83 +844,158 @@ class _OrdersStrip extends ConsumerWidget {
   }
 }
 
-class _SectionCard extends StatelessWidget {
-  const _SectionCard({
+String _sectionSummaryCount(List<String> names, Set<String> soldOut) {
+  if (names.isEmpty) return 'Sin platos elegidos';
+  final sold = names.where(soldOut.contains).length;
+  final totalLabel = names.length == 1 ? '1 plato' : '${names.length} platos';
+  if (sold == 0) return totalLabel;
+  final soldLabel = sold == 1 ? '1 agotado' : '$sold agotados';
+  return '$totalLabel · $soldLabel';
+}
+
+class _AccordionSectionCard extends StatelessWidget {
+  const _AccordionSectionCard({
     required this.title,
     required this.icon,
     required this.items,
     required this.soldOut,
-    required this.onToggle,
-    required this.onOptions,
+    required this.expanded,
+    required this.onToggleExpand,
+    required this.onToggleDish,
+    required this.onChooseDishes,
   });
 
   final String title;
   final IconData icon;
   final List<String> items;
   final Set<String> soldOut;
-  final ValueChanged<String> onToggle;
-  final VoidCallback onOptions;
+  final bool expanded;
+  final VoidCallback onToggleExpand;
+  final ValueChanged<String> onToggleDish;
+  final VoidCallback onChooseDishes;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     return Container(
+      width: double.infinity,
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: colors.surface,
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(22),
         border: Border.all(color: colors.outlineVariant),
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Container(
-          height: 72,
-          color: colors.primaryContainer,
-          padding: const EdgeInsets.all(8),
-          child: Stack(children: [
-            Align(alignment: Alignment.center, child: Icon(icon, size: 30, color: colors.primary)),
-            Align(
-              alignment: Alignment.topRight,
-              child: Material(
-                color: colors.surface,
-                shape: const StadiumBorder(),
-                child: InkWell(
-                  customBorder: const StadiumBorder(),
-                  onTap: onOptions,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      Icon(Icons.tune_rounded, size: 14, color: colors.primary),
-                      const SizedBox(width: 4),
-                      Text('Opciones (${items.length})',
-                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: colors.primary)),
-                    ]),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          InkWell(
+            onTap: onToggleExpand,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+              child: Row(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: colors.primaryContainer,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(icon, size: 22, color: colors.primary),
                   ),
-                ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w900,
+                            color: colors.onSurface,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _sectionSummaryCount(items, soldOut),
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: colors.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  AnimatedRotation(
+                    turns: expanded ? 0.5 : 0.0,
+                    duration: const Duration(milliseconds: 200),
+                    child: Icon(
+                      Icons.keyboard_arrow_down_rounded,
+                      size: 26,
+                      color: colors.onSurfaceVariant,
+                    ),
+                  ),
+                ],
               ),
             ),
-          ]),
-        ),
-        Padding(
-          padding: const EdgeInsets.all(10),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            Text('$title (${items.length})',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: colors.primary)),
-            const SizedBox(height: 6),
-            if (items.isEmpty)
-              Text('Sin opciones hoy', style: TextStyle(fontSize: 13, color: colors.onSurfaceVariant))
-            else
-              for (final name in items) ...[
-                _DishToggle(name: name, soldOut: soldOut.contains(name), onTap: () => onToggle(name)),
-                const SizedBox(height: 6),
-              ],
-          ]),
-        ),
-      ]),
+          ),
+          AnimatedCrossFade(
+            firstChild: const SizedBox.shrink(),
+            secondChild: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+              decoration: BoxDecoration(
+                border: Border(
+                  top: BorderSide(color: colors.outlineVariant.withValues(alpha: 0.6)),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const SizedBox(height: 10),
+                  if (items.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Text(
+                        'Sin platos seleccionados hoy.',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: colors.onSurfaceVariant,
+                        ),
+                      ),
+                    )
+                  else
+                    for (final name in items) ...[
+                      _DishToggle(
+                        name: name,
+                        soldOut: soldOut.contains(name),
+                        onTap: () => onToggleDish(name),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                  const SizedBox(height: 4),
+                  OutlinedButton.icon(
+                    onPressed: onChooseDishes,
+                    icon: const Icon(Icons.add_rounded, size: 18),
+                    label: const Text('+ Elegir de Mis platos'),
+                  ),
+                ],
+              ),
+            ),
+            crossFadeState:
+                expanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+            duration: const Duration(milliseconds: 200),
+          ),
+        ],
+      ),
     );
   }
 }
 
-/// Interruptor de un plato: "Hay" o "Se acabó". Solo afecta a ese plato.
+/// Interruptor de un plato: "✓ Hay" o "✕ Agotado". Solo afecta a ese plato.
 class _DishToggle extends StatelessWidget {
   const _DishToggle({required this.name, required this.soldOut, required this.onTap, this.price});
 
@@ -763,10 +1011,12 @@ class _DishToggle extends StatelessWidget {
     return Semantics(
       button: true,
       toggled: soldOut,
-      label: soldOut ? '$name: se acabó. Toca si volvió a haber' : '$name: hay. Toca si se acabó',
+      label: soldOut ? '$name: agotado. Toca si volvió a haber' : '$name: hay. Toca si se agotó',
       excludeSemantics: true,
       child: Material(
-        color: soldOut ? b.dangerContainer : Theme.of(context).scaffoldBackgroundColor,
+        color: soldOut
+            ? b.dangerContainer.withValues(alpha: 0.55)
+            : Theme.of(context).scaffoldBackgroundColor,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(14),
           side: BorderSide(color: soldOut ? b.danger : colors.outlineVariant),
@@ -775,40 +1025,57 @@ class _DishToggle extends StatelessWidget {
           borderRadius: BorderRadius.circular(14),
           onTap: onTap,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            child: Row(children: [
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(
-                    name,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        name,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800,
+                          height: 1.2,
+                          color: soldOut ? colors.onSurfaceVariant : colors.onSurface,
+                          decoration: soldOut ? TextDecoration.lineThrough : null,
+                        ),
+                      ),
+                      if (price != null) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          OwnerFormat.money(price!),
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                            color: colors.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: soldOut ? b.dangerContainer : b.successContainer,
+                    borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+                  ),
+                  child: Text(
+                    soldOut ? '✕ Agotado' : '✓ Hay',
                     style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w800,
-                      height: 1.2,
-                      color: soldOut ? colors.onSurfaceVariant : colors.onSurface,
-                      decoration: soldOut ? TextDecoration.lineThrough : null,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                      color: soldOut ? b.onDangerContainer : b.success,
                     ),
                   ),
-                  const SizedBox(height: 2),
-                  Row(children: [
-                    Icon(soldOut ? Icons.close_rounded : Icons.check_rounded,
-                        size: 14, color: soldOut ? b.onDangerContainer : b.success),
-                    const SizedBox(width: 3),
-                    Text(soldOut ? 'Se acabó' : 'Hay',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w900,
-                          color: soldOut ? b.onDangerContainer : b.success,
-                        )),
-                  ]),
-                ]),
-              ),
-              if (price != null)
-                Text(OwnerFormat.money(price!),
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: colors.onSurface)),
-            ]),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -820,44 +1087,128 @@ class _BreakfastToday extends StatelessWidget {
   const _BreakfastToday({
     required this.items,
     required this.soldOut,
+    required this.expanded,
+    required this.onToggleExpand,
     required this.onToggle,
     required this.onAdd,
   });
 
   final List<CatalogDish> items;
   final Set<String> soldOut;
+  final bool expanded;
+  final VoidCallback onToggleExpand;
   final ValueChanged<String> onToggle;
   final VoidCallback onAdd;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
+    final names = [for (final d in items) d.name];
     return Container(
-      padding: const EdgeInsets.all(14),
+      width: double.infinity,
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: colors.surface,
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(22),
         border: Border.all(color: colors.outlineVariant),
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Row(children: [
-          Icon(Icons.wb_sunny_outlined, size: 18, color: colors.primary),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text('Desayunos (${items.length})',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: colors.primary)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          InkWell(
+            onTap: onToggleExpand,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+              child: Row(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: colors.primaryContainer,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(Icons.wb_sunny_outlined, size: 22, color: colors.primary),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Desayunos',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w900,
+                            color: colors.onSurface,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _sectionSummaryCount(names, soldOut),
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: colors.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  AnimatedRotation(
+                    turns: expanded ? 0.5 : 0.0,
+                    duration: const Duration(milliseconds: 200),
+                    child: Icon(
+                      Icons.keyboard_arrow_down_rounded,
+                      size: 26,
+                      color: colors.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
-          OwnerSmallButton(label: 'Agregar', icon: Icons.add_rounded, onPressed: onAdd),
-        ]),
-        const SizedBox(height: 8),
-        if (items.isEmpty)
-          _EmptyLine('Hoy no ofreces desayunos. Toca Agregar para sumarlos al menú.')
-        else
-          for (final d in items) ...[
-            _DishToggle(name: d.name, price: d.price, soldOut: soldOut.contains(d.name), onTap: () => onToggle(d.name)),
-            const SizedBox(height: 6),
-          ],
-      ]),
+          AnimatedCrossFade(
+            firstChild: const SizedBox.shrink(),
+            secondChild: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+              decoration: BoxDecoration(
+                border: Border(
+                  top: BorderSide(color: colors.outlineVariant.withValues(alpha: 0.6)),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const SizedBox(height: 10),
+                  if (items.isEmpty)
+                    const _EmptyLine('Hoy no ofreces desayunos. Elige de Mis platos para sumarlos.')
+                  else
+                    for (final d in items) ...[
+                      _DishToggle(
+                        name: d.name,
+                        price: d.price,
+                        soldOut: soldOut.contains(d.name),
+                        onTap: () => onToggle(d.name),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                  const SizedBox(height: 4),
+                  OutlinedButton.icon(
+                    onPressed: onAdd,
+                    icon: const Icon(Icons.add_rounded, size: 18),
+                    label: const Text('+ Elegir de Mis platos'),
+                  ),
+                ],
+              ),
+            ),
+            crossFadeState:
+                expanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+            duration: const Duration(milliseconds: 200),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -940,11 +1291,17 @@ class _EmptyLine extends StatelessWidget {
 
 // ── Hojas ───────────────────────────────────────────────────────────────────
 
-/// Selector de opciones del día por sección. Siempre queda al menos una.
+/// Selector de opciones del día por sección. Filtrado estrictamente por categoría.
 class _OptionsSheet extends ConsumerStatefulWidget {
-  const _OptionsSheet({required this.kind, required this.initial, required this.onChanged});
+  const _OptionsSheet({
+    required this.kind,
+    required this.initial,
+    required this.onChanged,
+    this.veggieOnly = false,
+  });
 
   final DishKind kind;
+  final bool veggieOnly;
   final List<String> initial;
   final ValueChanged<List<String>> onChanged;
 
@@ -970,7 +1327,7 @@ class _OptionsSheetState extends ConsumerState<_OptionsSheet> {
   void _toggle(String name) {
     setState(() {
       if (_selected.contains(name)) {
-        if (_selected.length > 1) _selected.remove(name);
+        _selected.remove(name);
       } else {
         _selected.add(name);
       }
@@ -996,6 +1353,7 @@ class _OptionsSheetState extends ConsumerState<_OptionsSheet> {
             name: name,
             kind: widget.kind,
             price: price,
+            veggie: widget.veggieOnly,
           );
       if (!mounted) return;
       ref.invalidate(catalogDishesProvider);
@@ -1014,14 +1372,24 @@ class _OptionsSheetState extends ConsumerState<_OptionsSheet> {
     final colors = context.colorScheme;
     final dishes = [
       for (final d in ref.watch(catalogDishesProvider).value ?? const <CatalogDish>[])
-        if (d.kind == widget.kind && !d.archived) d,
+        if (d.kind == widget.kind &&
+            !d.archived &&
+            (widget.kind != DishKind.segundo || d.veggie == widget.veggieOnly))
+          d,
     ];
-    final singular = widget.kind.label.toLowerCase();
-    final hint = switch (widget.kind) {
-      DishKind.sopa => 'Ej. Caldo de bola',
-      DishKind.bebida => 'Ej. Jugo de maracuyá',
-      _ => 'Ej. Chivo al hueco',
-    };
+    final heading = widget.veggieOnly
+        ? 'Elegir opciones veggie'
+        : 'Elegir ${_plural(widget.kind)}';
+    final singular = widget.veggieOnly
+        ? 'opción veggie'
+        : widget.kind.label.toLowerCase();
+    final hint = widget.veggieOnly
+        ? 'Ej. Bowl de quinua'
+        : switch (widget.kind) {
+            DishKind.sopa => 'Ej. Caldo de bola',
+            DishKind.bebida => 'Ej. Jugo de maracuyá',
+            _ => 'Ej. Chivo al hueco',
+          };
 
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
@@ -1029,21 +1397,24 @@ class _OptionsSheetState extends ConsumerState<_OptionsSheet> {
         padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           OwnerSectionLabel('Almuerzo de hoy', color: colors.primary),
-          Text('Elegir ${_plural(widget.kind)}',
+          Text(heading,
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: colors.onSurface)),
           const SizedBox(height: 6),
           Text('Selecciona las opciones que ofreces hoy (puedes marcar varias):',
               style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: colors.onSurfaceVariant)),
           const SizedBox(height: 10),
-          for (final d in dishes) ...[
-            _OptionTile(
-              name: d.name,
-              topPick: d.topPick,
-              included: _selected.contains(d.name),
-              onTap: () => _toggle(d.name),
-            ),
-            const SizedBox(height: 8),
-          ],
+          if (dishes.isEmpty)
+            const _EmptyLine('Aún no tienes platos guardados en esta categoría.')
+          else
+            for (final d in dishes) ...[
+              _OptionTile(
+                name: d.name,
+                topPick: d.topPick,
+                included: _selected.contains(d.name),
+                onTap: () => _toggle(d.name),
+              ),
+              const SizedBox(height: 8),
+            ],
           Divider(height: 20, color: colors.outlineVariant),
           Text('¿Preparaste una nueva $singular?',
               style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: colors.onSurfaceVariant)),
@@ -1256,11 +1627,149 @@ class _BreakfastSheetState extends ConsumerState<_BreakfastSheet> {
   }
 }
 
+class _NewBreakfastSheet extends ConsumerStatefulWidget {
+  const _NewBreakfastSheet();
+
+  @override
+  ConsumerState<_NewBreakfastSheet> createState() => _NewBreakfastSheetState();
+}
+
+class _NewBreakfastSheetState extends ConsumerState<_NewBreakfastSheet> {
+  final _name = TextEditingController();
+  final _price = TextEditingController();
+  BreakfastCategory _category = BreakfastCategory.combo;
+  String? _error;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _price.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final name = _name.text.trim();
+    if (name.isEmpty) {
+      setState(() => _error = 'Escribe el nombre del desayuno.');
+      return;
+    }
+    final price = double.tryParse(_price.text.trim().replaceAll(',', '.'));
+    if (price == null || price <= 0) {
+      setState(() => _error = 'Ingresa un precio válido, ej. 2.50.');
+      return;
+    }
+    final navigator = Navigator.of(context);
+    try {
+      await ref.read(ownerCatalogRepositoryProvider).addDish(
+            ref.read(ownerRestaurantIdProvider),
+            name: name,
+            kind: DishKind.desayuno,
+            price: price,
+            breakfastCategory: _category,
+          );
+      if (!mounted) return;
+      ref.invalidate(catalogDishesProvider);
+      navigator.pop();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _error = e.userMessage);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _error = 'No se pudo guardar el desayuno.');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    final hint = switch (_category) {
+      BreakfastCategory.combo => 'Ej. Continental / Americano / Completo',
+      BreakfastCategory.bebida => 'Ej. Café pasado / Jugo de naranja',
+      BreakfastCategory.proteina => 'Ej. Huevos revueltos con queso',
+      BreakfastCategory.pan => 'Ej. Bolón mixto / Tigrillo',
+    };
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            OwnerSectionLabel('DESAYUNO', color: colors.primary),
+            Text(
+              'Nuevo plato de desayuno',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w900,
+                color: colors.onSurface,
+              ),
+            ),
+            const SizedBox(height: 14),
+            const OwnerSectionLabel('Categoría de desayuno'),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final c in BreakfastCategory.values)
+                  OwnerChoice(
+                    label: c.label,
+                    selected: _category == c,
+                    onTap: () => setState(() => _category = c),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _name,
+              autofocus: true,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: InputDecoration(
+                labelText: 'Nombre',
+                hintText: hint,
+                errorText: _error,
+              ),
+              onChanged: (_) {
+                if (_error != null) setState(() => _error = null);
+              },
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _price,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+              ],
+              decoration: const InputDecoration(
+                labelText: 'Precio (\$)',
+                hintText: 'Ej. 2.50',
+              ),
+              onChanged: (_) {
+                if (_error != null) setState(() => _error = null);
+              },
+            ),
+            const SizedBox(height: 18),
+            ElevatedButton(
+              onPressed: _save,
+              child: const Text('Guardar desayuno'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _NewDishSheet extends ConsumerStatefulWidget {
-  const _NewDishSheet({required this.initialKind, required this.sections});
+  const _NewDishSheet({
+    required this.initialKind,
+    required this.sections,
+    this.initialVeggie = false,
+  });
 
   final DishKind initialKind;
   final List<DishKind> sections;
+  final bool initialVeggie;
 
   @override
   ConsumerState<_NewDishSheet> createState() => _NewDishSheetState();
@@ -1270,6 +1779,7 @@ class _NewDishSheetState extends ConsumerState<_NewDishSheet> {
   final _name = TextEditingController();
   final _price = TextEditingController();
   late DishKind _kind = widget.initialKind;
+  late bool _veggie = widget.initialVeggie;
   String? _error;
 
   bool get _needsPrice => _kind == DishKind.sopa || _kind == DishKind.segundo;
@@ -1302,6 +1812,7 @@ class _NewDishSheetState extends ConsumerState<_NewDishSheet> {
             name: name,
             kind: _kind,
             price: price,
+            veggie: _kind == DishKind.segundo && _veggie,
           );
       if (!mounted) return;
       ref.invalidate(catalogDishesProvider);
@@ -1323,6 +1834,7 @@ class _NewDishSheetState extends ConsumerState<_NewDishSheet> {
       child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          OwnerSectionLabel('ALMUERZO', color: colors.primary),
           Text('Nuevo plato', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: colors.onSurface)),
           const SizedBox(height: 14),
           TextField(
@@ -1331,7 +1843,7 @@ class _NewDishSheetState extends ConsumerState<_NewDishSheet> {
             textCapitalization: TextCapitalization.sentences,
             decoration: InputDecoration(
               labelText: 'Nombre del plato',
-              hintText: 'Ej. Seco de carne con arroz',
+              hintText: _veggie ? 'Ej. Bowl de quinua' : 'Ej. Seco de carne con arroz',
               errorText: _error,
             ),
             onChanged: (_) {
@@ -1339,18 +1851,37 @@ class _NewDishSheetState extends ConsumerState<_NewDishSheet> {
             },
           ),
           const SizedBox(height: 14),
-          const OwnerSectionLabel('Sección'),
+          const OwnerSectionLabel('Sección de almuerzo'),
           const SizedBox(height: 8),
           Row(children: [
             for (final k in widget.sections) ...[
               if (k != widget.sections.first) const SizedBox(width: 6),
               Expanded(
-                child: OwnerChoice(label: k.label, selected: _kind == k, onTap: () => setState(() => _kind = k)),
+                child: OwnerChoice(
+                  label: k.label,
+                  selected: _kind == k,
+                  onTap: () => setState(() {
+                    _kind = k;
+                    if (_kind != DishKind.segundo) _veggie = false;
+                  }),
+                ),
               ),
             ],
           ]),
+          if (_kind == DishKind.segundo) ...[
+            const SizedBox(height: 10),
+            SwitchListTile.adaptive(
+              contentPadding: EdgeInsets.zero,
+              title: const Text(
+                'Marcar como opción vegetariana (veggie)',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+              ),
+              value: _veggie,
+              onChanged: (v) => setState(() => _veggie = v),
+            ),
+          ],
           if (_needsPrice) ...[
-            const SizedBox(height: 14),
+            const SizedBox(height: 10),
             TextField(
               controller: _price,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
@@ -1382,6 +1913,7 @@ class _NewCartaSheetState extends ConsumerState<_NewCartaSheet> {
   final _name = TextEditingController();
   final _price = TextEditingController();
   final _desc = TextEditingController();
+  bool _available = true;
   String? _error;
 
   @override
@@ -1398,17 +1930,28 @@ class _NewCartaSheetState extends ConsumerState<_NewCartaSheet> {
       setState(() => _error = 'Escribe el nombre del plato.');
       return;
     }
-    final price = double.tryParse(_price.text.trim().replaceAll(',', '.')) ?? 5.0;
+    final price = double.tryParse(_price.text.trim().replaceAll(',', '.'));
+    if (price == null || price <= 0) {
+      setState(() => _error = 'Ingresa un precio individual válido, ej. 6.50.');
+      return;
+    }
     final desc = _desc.text.trim();
     final navigator = Navigator.of(context);
     try {
-      await ref.read(ownerCatalogRepositoryProvider).addDish(
-            ref.read(ownerRestaurantIdProvider),
-            name: name,
-            kind: DishKind.carta,
-            price: price,
-            description: desc.isEmpty ? 'Especialidad de la casa preparada al momento' : desc,
-          );
+      final rid = ref.read(ownerRestaurantIdProvider);
+      final repo = ref.read(ownerCatalogRepositoryProvider);
+      final created = await repo.addDish(
+        rid,
+        name: name,
+        kind: DishKind.carta,
+        price: price,
+        description: desc.isEmpty
+            ? 'Especialidad de la casa preparada al momento'
+            : desc,
+      );
+      if (!_available && created.id.isNotEmpty) {
+        await repo.setDishArchived(rid, created.id, archived: true);
+      }
       if (!mounted) return;
       ref.invalidate(catalogDishesProvider);
       navigator.pop();
@@ -1429,6 +1972,7 @@ class _NewCartaSheetState extends ConsumerState<_NewCartaSheet> {
       child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          OwnerSectionLabel('A LA CARTA', color: colors.primary),
           Text('Plato a la carta',
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: colors.onSurface)),
           const SizedBox(height: 14),
@@ -1441,22 +1985,38 @@ class _NewCartaSheetState extends ConsumerState<_NewCartaSheet> {
               hintText: 'Ej. Parrillada mixta',
               errorText: _error,
             ),
+            onChanged: (_) {
+              if (_error != null) setState(() => _error = null);
+            },
           ),
           const SizedBox(height: 12),
           TextField(
             controller: _price,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]'))],
-            decoration: const InputDecoration(labelText: 'Precio en dólares', hintText: 'Ej. 6.50'),
+            decoration: const InputDecoration(labelText: 'Precio individual (\$)', hintText: 'Ej. 6.50'),
+            onChanged: (_) {
+              if (_error != null) setState(() => _error = null);
+            },
           ),
           const SizedBox(height: 12),
           TextField(
             controller: _desc,
             textCapitalization: TextCapitalization.sentences,
-            decoration: const InputDecoration(labelText: 'Descripción', hintText: 'Ej. Con patacones y ensalada'),
+            decoration: const InputDecoration(labelText: 'Descripción (opcional)', hintText: 'Ej. Con patacones y ensalada'),
           ),
-          const SizedBox(height: 18),
-          ElevatedButton(onPressed: _save, child: const Text('Guardar especialidad')),
+          const SizedBox(height: 8),
+          SwitchListTile.adaptive(
+            contentPadding: EdgeInsets.zero,
+            title: const Text(
+              'Disponible para venta',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+            ),
+            value: _available,
+            onChanged: (v) => setState(() => _available = v),
+          ),
+          const SizedBox(height: 14),
+          ElevatedButton(onPressed: _save, child: const Text('Guardar plato a la carta')),
         ]),
       ),
     );

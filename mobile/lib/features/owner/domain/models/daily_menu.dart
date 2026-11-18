@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 
+import '../../../../core/contracts/models.dart';
+
 @immutable
 class DailyMenuCourse {
   const DailyMenuCourse({
@@ -54,6 +56,17 @@ class DailyMenu {
   final List<DailyMenuCourse> courses;
   final bool isPublished;
   final bool isOpen;
+
+  MenuAvailabilityState get availabilityState => evaluateMenuAvailability(
+        isPublished: isPublished,
+        items: [
+          for (final c in courses)
+            (
+              isMain: c.category.trim().toLowerCase() == 'fuerte',
+              isSoldOut: c.isSoldOut,
+            ),
+        ],
+      );
 
   DailyMenu copyWith({
     String? restaurantId,

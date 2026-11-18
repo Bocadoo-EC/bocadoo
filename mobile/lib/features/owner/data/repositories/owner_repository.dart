@@ -1,6 +1,7 @@
 import '../../../../core/contracts/models.dart';
 import '../../../../core/contracts/repositories.dart';
 import '../../../../core/demo/demo_store.dart';
+import '../../domain/models/cash_models.dart';
 import '../../domain/models/daily_menu.dart';
 import '../../domain/models/menu_models.dart';
 import '../../domain/repositories/i_owner_repository.dart';
@@ -33,8 +34,41 @@ class OwnerRepository implements IOwnerRepository, IOwnerMenuRepository, IOwnerC
     const CatalogDish(id: 'c-d2', name: 'Dulce de zapallo', kind: DishKind.postre),
     const CatalogDish(id: 'c-b1', name: 'Jugo de naranjilla', kind: DishKind.bebida),
     const CatalogDish(id: 'c-b2', name: 'Jugo de mora', kind: DishKind.bebida),
-    const CatalogDish(id: 'b-1', name: 'Desayuno criollo', kind: DishKind.desayuno, price: 2.50),
-    const CatalogDish(id: 'b-2', name: 'Desayuno continental', kind: DishKind.desayuno, price: 2.50),
+    const CatalogDish(
+      id: 'b-1',
+      name: 'Desayuno criollo',
+      kind: DishKind.desayuno,
+      price: 2.50,
+      breakfastCategory: BreakfastCategory.combo,
+    ),
+    const CatalogDish(
+      id: 'b-2',
+      name: 'Desayuno continental',
+      kind: DishKind.desayuno,
+      price: 2.50,
+      breakfastCategory: BreakfastCategory.combo,
+    ),
+    const CatalogDish(
+      id: 'b-3',
+      name: 'Café pasado o chocolate caliente',
+      kind: DishKind.desayuno,
+      price: 0.75,
+      breakfastCategory: BreakfastCategory.bebida,
+    ),
+    const CatalogDish(
+      id: 'b-4',
+      name: 'Huevos revueltos con queso',
+      kind: DishKind.desayuno,
+      price: 1.25,
+      breakfastCategory: BreakfastCategory.proteina,
+    ),
+    const CatalogDish(
+      id: 'b-5',
+      name: 'Bolón mixto de verde',
+      kind: DishKind.desayuno,
+      price: 1.75,
+      breakfastCategory: BreakfastCategory.pan,
+    ),
     const CatalogDish(
         id: 'alc-1',
         name: 'Fritada tradicional con mote',
@@ -95,17 +129,34 @@ class OwnerRepository implements IOwnerRepository, IOwnerMenuRepository, IOwnerC
 
   // ── IOwnerMenuRepository ───────────────────────────────────────────────────
 
-  void _syncDemoMenuPublished(DailyMenu? menu, {String? restaurantId}) {
-    final published = menu != null &&
-        menu.isPublished &&
-        menu.courses.any((c) => !c.isSoldOut);
-    DemoStore.instance.menuPublishedByRest[DemoStore.ownerRestaurantId] =
-        published;
+  Future<void> _syncDemoMenuState(DailyMenu? menu, {String? restaurantId}) async {
+    final avail = menu?.availabilityState ?? MenuAvailabilityState.sinPublicar;
+    final availableForOrders = avail == MenuAvailabilityState.disponible;
+    final soldOutSet = {
+      for (final c in menu?.courses ?? const <DailyMenuCourse>[])
+        if (c.isSoldOut) c.name,
+    };
+    final store = DemoStore.instance;
+    store.menuAvailabilityByRest[DemoStore.ownerRestaurantId] = avail;
+    store.menuPublishedByRest[DemoStore.ownerRestaurantId] = availableForOrders;
+    store.soldOutDishesByRest[DemoStore.ownerRestaurantId] = soldOutSet;
+
     final rid = menu?.restaurantId ?? restaurantId ?? '';
     if (rid.isNotEmpty) {
-      DemoStore.instance.menuPublishedByRest[rid] = published;
+      store.menuAvailabilityByRest[rid] = avail;
+      store.menuPublishedByRest[rid] = availableForOrders;
+      store.soldOutDishesByRest[rid] = soldOutSet;
     }
-    DemoStore.instance.changed();
+
+    // Pausa/cancelación automática de Ofertas Flash si el menú entra en AGOTADO_TOTAL.
+    if (avail == MenuAvailabilityState.agotadoTotal) {
+      final activeOffer =
+          await _delegate.getActiveOffer(rid.isNotEmpty ? rid : 'rest-001');
+      if (activeOffer != null && activeOffer.kind == OfferKind.flash) {
+        await _delegate.cancelOffer(rid.isNotEmpty ? rid : 'rest-001');
+      }
+    }
+    store.changed();
   }
 
   @override
@@ -124,7 +175,7 @@ class OwnerRepository implements IOwnerRepository, IOwnerMenuRepository, IOwnerC
   Future<bool> publishMenu(DailyMenu menu) async {
     await Future<void>.delayed(const Duration(milliseconds: 200));
     _todayMenu = menu.copyWith(isPublished: true);
-    _syncDemoMenuPublished(_todayMenu);
+    await _syncDemoMenuState(_todayMenu);
     return true;
   }
 
@@ -134,7 +185,7 @@ class OwnerRepository implements IOwnerRepository, IOwnerMenuRepository, IOwnerC
     final menu = _todayMenu;
     if (menu == null) return false;
     _todayMenu = menu.copyWith(isPublished: false);
-    _syncDemoMenuPublished(_todayMenu, restaurantId: restaurantId);
+    await _syncDemoMenuState(_todayMenu, restaurantId: restaurantId);
     return true;
   }
 
@@ -146,7 +197,7 @@ class OwnerRepository implements IOwnerRepository, IOwnerMenuRepository, IOwnerC
     _todayMenu = menu.copyWith(courses: [
       for (final c in menu.courses) c.name == courseName ? c.copyWith(isSoldOut: soldOut) : c,
     ]);
-    _syncDemoMenuPublished(_todayMenu, restaurantId: restaurantId);
+    await _syncDemoMenuState(_todayMenu, restaurantId: restaurantId);
     return true;
   }
 
@@ -165,6 +216,8 @@ class OwnerRepository implements IOwnerRepository, IOwnerMenuRepository, IOwnerC
     required DishKind kind,
     double? price,
     String? description,
+    bool veggie = false,
+    BreakfastCategory? breakfastCategory,
   }) async {
     await Future<void>.delayed(const Duration(milliseconds: 120));
     final dish = CatalogDish(
@@ -173,6 +226,10 @@ class OwnerRepository implements IOwnerRepository, IOwnerMenuRepository, IOwnerC
       kind: kind,
       price: price,
       description: description ?? '',
+      veggie: veggie,
+      breakfastCategory: kind == DishKind.desayuno
+          ? (breakfastCategory ?? BreakfastCategory.combo)
+          : null,
     );
     _dishes.add(dish);
     return dish;

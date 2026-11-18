@@ -11,6 +11,7 @@ import '../../../core/contracts/repositories.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/network/api_exception.dart';
 import '../../../core/session/session_notifier.dart';
+import '../../../core/utils/formatters.dart';
 import '../data/api_owner_repo.dart';
 import '../data/mock_owner_repo.dart';
 import '../data/repositories/owner_repository.dart';
@@ -219,6 +220,183 @@ final planRequestsProvider = FutureProvider.autoDispose<List<OwnerPlanRequest>>(
   return ref.read(apiOwnerRepositoryProvider).getPlanRequests();
 });
 
+/// Estado paginado por cursor para `GET /v1/caja/movimientos?fecha=YYYY-MM-DD`.
+@immutable
+class CajaMovementsState {
+  const CajaMovementsState({
+    required this.selectedDate,
+    this.items = const [],
+    this.nextCursor,
+    this.isLoading = false,
+    this.isLoadingMore = false,
+    this.errorMessage,
+    this.warningMessage,
+  });
+
+  final String selectedDate;
+  final List<CajaMovement> items;
+  final String? nextCursor;
+  final bool isLoading;
+  final bool isLoadingMore;
+  final String? errorMessage;
+  final String? warningMessage;
+
+  bool get hasMore => nextCursor != null && nextCursor!.isNotEmpty;
+
+  /// Total recaudado en caja: suma únicamente movimientos `VENTA`
+  /// con `pagoEstado == CONFIRMADO` y `!revertido`.
+  int get totalCollectedCents =>
+      items.fold<int>(0, (sum, m) => sum + m.cashCollectedCents);
+
+  CajaMovementsState copyWith({
+    String? selectedDate,
+    List<CajaMovement>? items,
+    String? nextCursor,
+    bool clearNextCursor = false,
+    bool? isLoading,
+    bool? isLoadingMore,
+    String? errorMessage,
+    bool clearError = false,
+    String? warningMessage,
+    bool clearWarning = false,
+  }) {
+    return CajaMovementsState(
+      selectedDate: selectedDate ?? this.selectedDate,
+      items: items ?? this.items,
+      nextCursor: clearNextCursor ? null : (nextCursor ?? this.nextCursor),
+      isLoading: isLoading ?? this.isLoading,
+      isLoadingMore: isLoadingMore ?? this.isLoadingMore,
+      errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
+      warningMessage:
+          clearWarning ? null : (warningMessage ?? this.warningMessage),
+    );
+  }
+}
+
+final cajaMovementsProvider =
+    NotifierProvider.autoDispose<CajaMovementsNotifier, CajaMovementsState>(
+  CajaMovementsNotifier.new,
+);
+
+class CajaMovementsNotifier extends Notifier<CajaMovementsState> {
+  static const int _pageSize = 20;
+
+  @override
+  CajaMovementsState build() {
+    ref.watch(ownerRestaurantIdProvider);
+    ref.watch(ownerRoleProvider);
+    final today = EcuadorTime.today();
+    Future.microtask(() => loadDate(today));
+    return CajaMovementsState(selectedDate: today, isLoading: true);
+  }
+
+  Future<void> loadDate(String fecha, {bool silent = false}) async {
+    final today = EcuadorTime.today();
+    final isOwner = ref.read(ownerRoleProvider) == OwnerRole.owner;
+    var targetDate = fecha;
+    String? roleWarning;
+    if (!isOwner && targetDate != today) {
+      targetDate = today;
+      roleWarning = 'Solo el dueño puede consultar movimientos de otras fechas.';
+    }
+
+    if (!silent) {
+      state = state.copyWith(
+        selectedDate: targetDate,
+        isLoading: state.items.isEmpty,
+        isLoadingMore: false,
+        clearError: true,
+        warningMessage: roleWarning,
+        clearWarning: roleWarning == null,
+      );
+    }
+
+    final rid = ref.read(ownerRestaurantIdProvider);
+    try {
+      final page = await ref.read(ownerCashRepositoryProvider).getCajaMovements(
+            rid,
+            fecha: targetDate,
+            limit: _pageSize,
+          );
+      state = CajaMovementsState(
+        selectedDate: targetDate,
+        items: page.items,
+        nextCursor: page.nextCursor,
+        isLoading: false,
+        warningMessage: roleWarning,
+      );
+    } on ApiException catch (e) {
+      if (e.code == 'CAJERO_SOLO_HOY' || e.status == 403) {
+        final msg = e.userMessage;
+        state = state.copyWith(
+          selectedDate: today,
+          isLoading: false,
+          clearError: true,
+          warningMessage: msg,
+        );
+        if (targetDate != today) {
+          await loadDate(today, silent: true);
+        }
+        return;
+      }
+      state = state.copyWith(
+        isLoading: false,
+        errorMessage: e.userMessage,
+      );
+    } catch (_) {
+      state = state.copyWith(
+        isLoading: false,
+        errorMessage: 'No se pudieron cargar los movimientos.',
+      );
+    }
+  }
+
+  Future<void> refresh() => loadDate(state.selectedDate, silent: true);
+
+  Future<void> selectDate(DateTime date) {
+    final ymd =
+        '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+    return loadDate(ymd);
+  }
+
+  Future<void> loadMore() async {
+    final cursor = state.nextCursor;
+    if (cursor == null || cursor.isEmpty || state.isLoadingMore) return;
+    state = state.copyWith(isLoadingMore: true, clearError: true);
+    final rid = ref.read(ownerRestaurantIdProvider);
+    try {
+      final page = await ref.read(ownerCashRepositoryProvider).getCajaMovements(
+            rid,
+            fecha: state.selectedDate,
+            cursor: cursor,
+            limit: _pageSize,
+          );
+      final seen = {for (final m in state.items) '${m.tipo.name}:${m.id}'};
+      final merged = [
+        ...state.items,
+        for (final m in page.items)
+          if (seen.add('${m.tipo.name}:${m.id}')) m,
+      ];
+      state = state.copyWith(
+        items: merged,
+        nextCursor: page.nextCursor,
+        clearNextCursor: page.nextCursor == null,
+        isLoadingMore: false,
+      );
+    } on ApiException catch (e) {
+      state = state.copyWith(
+        isLoadingMore: false,
+        errorMessage: e.userMessage,
+      );
+    } catch (_) {
+      state = state.copyWith(
+        isLoadingMore: false,
+        errorMessage: 'No se pudieron cargar más movimientos.',
+      );
+    }
+  }
+}
+
 /// Resumen del turno. Se recarga con `ref.invalidate`.
 final dailySummaryProvider =
     FutureProvider.autoDispose<TransactionSummary>((ref) {
@@ -247,12 +425,18 @@ final posMenuProvider = FutureProvider.autoDispose<DailyMenu?>((ref) {
   return ref.read(ownerMenuRepositoryProvider).getTodayMenu(ref.read(ownerRestaurantIdProvider));
 });
 
+/// Disponibilidad reactiva del menú publicado de hoy (`SIN_PUBLICAR`, `DISPONIBLE`, `AGOTADO_TOTAL`).
+final menuAvailabilityProvider =
+    Provider.autoDispose<MenuAvailabilityState>((ref) {
+  final menu = ref.watch(posMenuProvider).value;
+  if (menu == null) return MenuAvailabilityState.sinPublicar;
+  return menu.availabilityState;
+});
+
 /// `true` cuando el menú de hoy está publicado y tiene al menos un plato disponible.
 final isTodayMenuPublishedProvider = Provider.autoDispose<bool>((ref) {
-  final menu = ref.watch(posMenuProvider).value;
-  return menu != null &&
-      menu.isPublished &&
-      menu.courses.any((c) => !c.isSoldOut);
+  return ref.watch(menuAvailabilityProvider) ==
+      MenuAvailabilityState.disponible;
 });
 
 final activeOfferProvider = FutureProvider.autoDispose<FlashOffer?>((ref) {
@@ -356,6 +540,7 @@ class OwnerError extends OwnerState {
 class OwnerController extends Notifier<OwnerState> {
   /// Evita procesar las múltiples detecciones que emite la cámara por QR.
   bool _busy = false;
+  String? _lastNetworkRetryCode;
 
   IOwnerRepository get _repo => ref.read(ownerRepositoryProvider);
 
@@ -376,6 +561,14 @@ class OwnerController extends Notifier<OwnerState> {
   static const tablePrefix = 'BCD-MESA-';
   static const orderPrefix = 'BCD-ORD-';
 
+  /// Reintenta el último escaneo fallido por red reutilizando el mismo `Idempotency-Key`.
+  Future<void> retryLastCode() async {
+    final code = _lastNetworkRetryCode;
+    if (code == null || code.isEmpty || _busy) return;
+    state = const OwnerIdle();
+    await onCodeDetected(code);
+  }
+
   /// Valida un QR leído por la cámara o ingresado a mano. Reconoce todos los
   /// formatos: código corto de 6 caracteres, pase de plan (`BCD1.`), mesa
   /// (`BCD-MESA-`), preorden (`BCD-ORD-`, UUID o `#N`).
@@ -385,11 +578,15 @@ class OwnerController extends Notifier<OwnerState> {
     if (code.isEmpty) return;
 
     _busy = true;
+    _lastNetworkRetryCode = null;
     state = const OwnerScanning(isProcessing: true);
     try {
       final result = await _repo.validateQrCode(code);
       final passId = result.passId;
       if (!result.isValid || passId == null) {
+        if (result.title == 'Menú no publicado') {
+          ref.invalidate(posMenuProvider);
+        }
         state = OwnerError(result.supportingLine, result: result);
         return;
       }
@@ -399,15 +596,26 @@ class OwnerController extends Notifier<OwnerState> {
           : OwnerError('No se pudo registrar el almuerzo.', result: result);
     } on ApiException catch (e) {
       if (e.code == 'MENU_NO_PUBLICADO') {
+        ref.invalidate(posMenuProvider);
         const result = ScanResult(
           isValid: false,
           outcome: 'ROJO',
           title: 'Menú no publicado',
           supportingLine:
               'No se puede escanear QR sin haber publicado el menú de hoy',
-          actionRequired: 'NINGUNA',
+          actionRequired: 'PUBLISH_MENU',
         );
         state = OwnerError(result.supportingLine, result: result);
+      } else if (e.isNetwork || e.status == 504) {
+        _lastNetworkRetryCode = code;
+        final result = ScanResult(
+          isValid: false,
+          outcome: 'ROJO',
+          title: 'Sin conexión',
+          supportingLine: e.userMessage,
+          actionRequired: 'RETRY_NETWORK',
+        );
+        state = OwnerError(e.userMessage, result: result);
       } else {
         state = OwnerError(e.userMessage);
       }

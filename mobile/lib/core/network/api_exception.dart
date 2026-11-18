@@ -91,6 +91,9 @@ class ErrorMessages {
     'RESTAURANTE_NO_ENCONTRADO': 'No encontramos ese restaurante.',
     'RESTAURANTE_NO_DISPONIBLE': 'Este restaurante no está disponible ahora.',
     // Pase y almuerzos
+    'CAJERO_SOLO_HOY': 'Solo el dueño puede consultar movimientos de otras fechas.',
+    'QR_EXPIRADO': 'El código venció. Pide al comensal que genere y muestre su código actual.',
+    'QR_INVALIDO': 'Este código no pertenece a Bocadoo o no corresponde a este local.',
     'CONSUMO_NO_ENCONTRADO': 'No encontramos ese almuerzo.',
     'CONSUMO_REVERTIDO': 'Ese almuerzo ya se devolvió a tu plan.',
     'RECLAMO_VENCIDO': 'Ya pasó el plazo para reclamar este almuerzo.',
