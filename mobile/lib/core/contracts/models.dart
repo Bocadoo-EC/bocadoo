@@ -128,6 +128,7 @@ class CustomerPass {
   final DateTime expiresAt;
   final String status; // ACTIVO, POR_VENCER, AGOTADO, VENCIDO
   final String qrToken;
+  final DateTime? qrExpiresAt;
   final String restaurantId;
   final String restaurantName;
   final String? avatarUrl;
@@ -143,6 +144,7 @@ class CustomerPass {
     required this.expiresAt,
     this.status = 'ACTIVO',
     required this.qrToken,
+    this.qrExpiresAt,
     required this.restaurantId,
     required this.restaurantName,
     this.avatarUrl,
@@ -169,6 +171,8 @@ class CustomerPass {
     DateTime? expiresAt,
     String? status,
     String? qrToken,
+    DateTime? qrExpiresAt,
+    bool clearQrExpiresAt = false,
     String? restaurantId,
     String? restaurantName,
     String? avatarUrl,
@@ -184,6 +188,7 @@ class CustomerPass {
       expiresAt: expiresAt ?? this.expiresAt,
       status: status ?? this.status,
       qrToken: qrToken ?? this.qrToken,
+      qrExpiresAt: clearQrExpiresAt ? null : (qrExpiresAt ?? this.qrExpiresAt),
       restaurantId: restaurantId ?? this.restaurantId,
       restaurantName: restaurantName ?? this.restaurantName,
       avatarUrl: avatarUrl ?? this.avatarUrl,
@@ -202,6 +207,7 @@ class CustomerPass {
       'expiresAt': expiresAt.toIso8601String(),
       'status': status,
       'qrToken': qrToken,
+      if (qrExpiresAt != null) 'qrExpiresAt': qrExpiresAt!.toIso8601String(),
       'restaurantId': restaurantId,
       'restaurantName': restaurantName,
       'avatarUrl': avatarUrl,
@@ -209,6 +215,7 @@ class CustomerPass {
   }
 
   factory CustomerPass.fromMap(Map<String, dynamic> map) {
+    final qrExpRaw = map['qrExpiresAt'] as String?;
     return CustomerPass(
       id: map['id'] as String? ?? '',
       userId: map['userId'] as String? ?? '',
@@ -221,6 +228,7 @@ class CustomerPass {
           DateTime.now().add(const Duration(days: 30)),
       status: map['status'] as String? ?? 'ACTIVO',
       qrToken: map['qrToken'] as String? ?? '',
+      qrExpiresAt: qrExpRaw != null ? DateTime.tryParse(qrExpRaw) : null,
       restaurantId: map['restaurantId'] as String? ?? '',
       restaurantName: map['restaurantName'] as String? ?? '',
       avatarUrl: map['avatarUrl'] as String?,

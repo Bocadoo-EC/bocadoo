@@ -27,7 +27,6 @@ class _PaseScreenState extends ConsumerState<PaseScreen>
     with WidgetsBindingObserver {
   Timer? _qrTimer;
   late final CustomerController _controller;
-  int _qrCountdown = 30;
   bool _isForeground = true;
   bool _isRefreshingQr = false;
   int _lastCelebrationTick = 0;
@@ -41,28 +40,35 @@ class _PaseScreenState extends ConsumerState<PaseScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         _controller.onPaseVisibilityChanged(true);
+        _checkQrExpiryAndRefresh();
       }
     });
-    // Cuenta regresiva local (30 s): refresca solo con Pase visible y poco antes de vencer.
+    // Refresca el QR 3–4 s antes de `expiraEn` (solo en primer plano y con menú disponible).
     _qrTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted || !_isForeground) return;
-      if (_qrCountdown > 0) {
-        _qrCountdown--;
-      }
-      if (_qrCountdown <= 3 && !_isRefreshingQr) {
-        unawaited(_triggerQrRefresh());
-      }
+      _checkQrExpiryAndRefresh();
     });
+  }
+
+  void _checkQrExpiryAndRefresh() {
+    if (!mounted || !_isForeground || _isRefreshingQr) return;
+    final s = _controller.state;
+    final pass = s.currentPass;
+    if (pass == null || s.qrMode != QrMode.plan) return;
+    if (!s.hasPublishedTodayMenu(pass.restaurantId)) return;
+    if (AppMode.useMock) return;
+
+    final exp = pass.qrExpiresAt;
+    final secondsLeft = exp?.difference(DateTime.now()).inSeconds ?? 0;
+    if (pass.qrToken.isEmpty || exp == null || secondsLeft <= 4) {
+      unawaited(_triggerQrRefresh());
+    }
   }
 
   Future<void> _triggerQrRefresh() async {
     if (_isRefreshingQr || !mounted || !_isForeground) return;
     _isRefreshingQr = true;
     try {
-      final refreshed = await _controller.refreshQr();
-      if (refreshed && mounted) {
-        _qrCountdown = 30;
-      }
+      await _controller.refreshQr();
     } finally {
       _isRefreshingQr = false;
     }
@@ -74,9 +80,7 @@ class _PaseScreenState extends ConsumerState<PaseScreen>
     if (resumed) {
       _isForeground = true;
       _controller.onPaseVisibilityChanged(true, resumedFromBackground: true);
-      if (_qrCountdown <= 5) {
-        unawaited(_triggerQrRefresh());
-      }
+      _checkQrExpiryAndRefresh();
     } else if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.hidden ||
@@ -265,7 +269,8 @@ void _showZoomedQr(
 }) {
   final colors = context.colorScheme;
   final shortCode = BocadooQrParser.toShortCode(value, restaurantId: restaurantId);
-  final qrData = AppMode.useMock ? shortCode : (value.isNotEmpty ? value : shortCode);
+  final qrData = AppMode.useMock ? shortCode : value;
+  if (!AppMode.useMock && qrData.isEmpty) return;
   final displayCode = badgeOverride ?? shortCode;
   showGeneralDialog<void>(
     context: context,
@@ -1006,9 +1011,8 @@ class _ActiveWalletCard extends StatelessWidget {
                   );
                 }
 
-                final qrData = AppMode.useMock
-                    ? shortCode
-                    : (state.qrValue.isNotEmpty ? state.qrValue : shortCode);
+                final qrData = AppMode.useMock ? shortCode : state.qrValue;
+                final waitingFreshQr = !AppMode.useMock && qrData.isEmpty;
                 final displayCode = (!AppMode.useMock &&
                         mode == QrMode.preorden &&
                         order != null)
@@ -1017,13 +1021,15 @@ class _ActiveWalletCard extends StatelessWidget {
                 return Column(
                   children: [
                     GestureDetector(
-                      onTap: () => _showZoomedQr(
-                        context,
-                        state.qrValue,
-                        title,
-                        restaurantId: shortRestaurantId,
-                        badgeOverride: displayCode,
-                      ),
+                      onTap: waitingFreshQr
+                          ? null
+                          : () => _showZoomedQr(
+                                context,
+                                qrData,
+                                title,
+                                restaurantId: shortRestaurantId,
+                                badgeOverride: displayCode,
+                              ),
                       child: Container(
                         width: 212,
                         height: 212,
@@ -1034,28 +1040,34 @@ class _ActiveWalletCard extends StatelessWidget {
                           borderRadius: BorderRadius.circular(24),
                           border: Border.all(color: colors.outlineVariant),
                         ),
-                        child: Stack(
-                          clipBehavior: Clip.none,
-                          children: [
-                            _Qr(value: qrData, size: 176),
-                            Positioned(
-                              right: -14,
-                              bottom: -14,
-                              child: Container(
-                                padding: const EdgeInsets.all(5),
-                                decoration: BoxDecoration(
-                                  color: colors.primary,
-                                  shape: BoxShape.circle,
-                                ),
-                                child: Icon(
-                                  Icons.open_in_full_rounded,
-                                  size: 14,
-                                  color: colors.onPrimary,
-                                ),
+                        child: waitingFreshQr
+                            ? const SizedBox(
+                                width: 32,
+                                height: 32,
+                                child: CircularProgressIndicator(),
+                              )
+                            : Stack(
+                                clipBehavior: Clip.none,
+                                children: [
+                                  _Qr(value: qrData, size: 176),
+                                  Positioned(
+                                    right: -14,
+                                    bottom: -14,
+                                    child: Container(
+                                      padding: const EdgeInsets.all(5),
+                                      decoration: BoxDecoration(
+                                        color: colors.primary,
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: Icon(
+                                        Icons.open_in_full_rounded,
+                                        size: 14,
+                                        color: colors.onPrimary,
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
-                            ),
-                          ],
-                        ),
                       ),
                     ),
                     const SizedBox(height: 12),

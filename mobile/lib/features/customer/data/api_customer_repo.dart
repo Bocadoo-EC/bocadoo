@@ -5,7 +5,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/analytics/events_service.dart';
 import '../../../core/config/support_config.dart';
 import '../../../core/contracts/models.dart';
-import '../../../core/contracts/qr_parser.dart';
 import '../../../core/contracts/repositories.dart';
 import '../../../core/location/location_service.dart';
 import '../../../core/network/api_client.dart';
@@ -79,6 +78,7 @@ class ApiCustomerRepository implements ICustomerRepository {
     final studentName =
         (usuario['nombre'] ?? _session?.userName ?? 'Comensal').toString();
     final qrToken = (codigo['codigo'] ?? '').toString();
+    final qrExpiresAt = _parseQrExpiry(codigo);
 
     final passes = <CustomerPass>[];
     for (final local in locales) {
@@ -89,8 +89,10 @@ class ApiCustomerRepository implements ICustomerRepository {
       if (restId.isNotEmpty && slug.isNotEmpty) {
         _slugById[restId] = slug;
       }
+      var menuReadyForLocal = true;
       if (restId.isNotEmpty && local['menuHoyPublicado'] is bool) {
         final published = local['menuHoyPublicado'] as bool;
+        menuReadyForLocal = published;
         _todayMenuPublishedByRest[restId] = published;
         if (!published) {
           _todayMenuAvailabilityByRest[restId] =
@@ -102,6 +104,9 @@ class ApiCustomerRepository implements ICustomerRepository {
               MenuAvailabilityState.disponible;
         }
       }
+      final cachedAvail = _todayMenuAvailabilityByRest[restId];
+      final allowQrForLocal =
+          menuReadyForLocal && cachedAvail != MenuAvailabilityState.agotadoTotal;
 
       final planes = _asListOfMaps(local['planes']);
       if (planes.isEmpty) continue;
@@ -139,10 +144,8 @@ class ApiCustomerRepository implements ICustomerRepository {
             remainingLunches: remaining,
             expiresAt: expiresAt,
             status: status,
-            qrToken: BocadooQrParser.generatePlanCode(
-              qrToken.isNotEmpty ? qrToken : passId,
-              restaurantId: restId,
-            ),
+            qrToken: allowQrForLocal ? qrToken : '',
+            qrExpiresAt: allowQrForLocal ? qrExpiresAt : null,
             restaurantId: restId,
             restaurantName: restName,
             avatarUrl: rest['logoUrl']?.toString(),
@@ -180,10 +183,8 @@ class ApiCustomerRepository implements ICustomerRepository {
           remainingLunches: remaining,
           expiresAt: expiresAt,
           status: status,
-          qrToken: BocadooQrParser.generatePlanCode(
-            qrToken.isNotEmpty ? qrToken : passId,
-            restaurantId: restId,
-          ),
+          qrToken: allowQrForLocal ? qrToken : '',
+          qrExpiresAt: allowQrForLocal ? qrExpiresAt : null,
           restaurantId: restId,
           restaurantName: restName,
           avatarUrl: rest['logoUrl']?.toString(),
@@ -191,10 +192,25 @@ class ApiCustomerRepository implements ICustomerRepository {
       }
     }
 
-    if (passes.isNotEmpty) {
+    if (passes.isNotEmpty && passes.first.qrToken.isNotEmpty) {
       await saveCachedPass(passes.first);
+    } else {
+      await _passCache.clear();
     }
     return passes;
+  }
+
+  DateTime? _parseQrExpiry(Map<dynamic, dynamic> map) {
+    final rawExp = map['expiraEn']?.toString();
+    if (rawExp != null && rawExp.trim().isNotEmpty) {
+      final dt = DateTime.tryParse(rawExp.trim())?.toLocal();
+      if (dt != null) return dt;
+    }
+    final secs = _asInt(map['validoSegundos']);
+    if (secs != null && secs > 0) {
+      return DateTime.now().add(Duration(seconds: secs));
+    }
+    return null;
   }
 
   @override
@@ -206,8 +222,10 @@ class ApiCustomerRepository implements ICustomerRepository {
     throw ApiException(status: 404, code: 'PASE_NO_ENCONTRADO');
   }
 
-  @override
-  Future<String> refreshQrToken(String passId) async {
+  /// Pide un token QR firmado fresco a `GET /v1/pase/codigo` junto a su `expiraEn`.
+  Future<({String token, DateTime expiresAt})> fetchQrTokenWithExpiry(
+    String passId,
+  ) async {
     final restId = _restaurantByPassId[passId];
     final data = await guard(
       () => _api.getMap(
@@ -219,17 +237,32 @@ class ApiCustomerRepository implements ICustomerRepository {
     );
     eventsService.track('comensal.qr_generado', restaurantId: restId);
     final raw = (data['codigo'] ?? '').toString();
-    return BocadooQrParser.generatePlanCode(
-      raw.isNotEmpty ? raw : passId,
-      restaurantId: restId,
-    );
+    if (raw.isEmpty) {
+      throw ApiException(status: 500, code: 'ERROR_INTERNO');
+    }
+    final expiresAt =
+        _parseQrExpiry(data) ?? DateTime.now().add(const Duration(seconds: 30));
+    return (token: raw, expiresAt: expiresAt);
   }
+
+  @override
+  Future<String> refreshQrToken(String passId) async {
+    final res = await fetchQrTokenWithExpiry(passId);
+    return res.token;
+  }
+
+  Future<void> clearCachedPass() => _passCache.clear();
 
   @override
   Future<CustomerPass?> getCachedPass() async {
     final pass = await _passCache.getPass();
     if (pass != null && pass.id.isNotEmpty && pass.restaurantId.isNotEmpty) {
       _restaurantByPassId[pass.id] = pass.restaurantId;
+    }
+    if (pass != null &&
+        pass.qrExpiresAt != null &&
+        !pass.qrExpiresAt!.isAfter(DateTime.now())) {
+      return pass.copyWith(qrToken: '', clearQrExpiresAt: true);
     }
     return pass;
   }

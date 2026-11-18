@@ -476,11 +476,15 @@ class CustomerController extends ChangeNotifier {
       }
       final menuStates =
           await _resolveMenuStatesForPasses(passes, restaurants);
+      final cleanedPasses = _sanitizePassQrsForAvailability(
+        passes,
+        menuStates.availability,
+      );
 
       _emit(CustomerUiState(
         status: CustomerStatus.success,
-        passes: passes,
-        passIndex: _state.passIndex.clamp(0, passes.isEmpty ? 0 : passes.length - 1),
+        passes: cleanedPasses,
+        passIndex: _state.passIndex.clamp(0, cleanedPasses.isEmpty ? 0 : cleanedPasses.length - 1),
         selectedQrMode: _state.selectedQrMode,
         stampCards: stamps,
         activeTable: table,
@@ -499,6 +503,7 @@ class CustomerController extends ChangeNotifier {
         todayMenuPublishedByRest: menuStates.published,
         todayMenuAvailabilityByRest: menuStates.availability,
       ));
+      unawaited(_ensureFreshQrIfNeeded());
       if (restaurants.isNotEmpty) {
         final targetId = _state.plansRestaurantId != null &&
                 restaurants.any((r) => r.id == _state.plansRestaurantId)
@@ -509,7 +514,7 @@ class CustomerController extends ChangeNotifier {
       _syncOrderPolling(
         order,
         table: table,
-        passes: passes,
+        passes: cleanedPasses,
         menuPublishedByRest: menuStates.published,
       );
       unawaited(_hydrateRestaurants(restaurants, force: silent));
@@ -554,10 +559,21 @@ class CustomerController extends ChangeNotifier {
       }
 
       final activePasses = updatedPasses ?? _state.passes;
+      final prevPass = _state.currentPass;
+      final wasAvailable = prevPass != null &&
+          _state.hasPublishedTodayMenu(prevPass.restaurantId);
       final nextMenuStates = await _resolveMenuStatesForPasses(
         activePasses,
         _state.restaurants,
       );
+      final sanitizedPasses = _sanitizePassQrsForAvailability(
+        activePasses,
+        nextMenuStates.availability,
+      );
+      final becameAvailable = prevPass != null &&
+          !wasAvailable &&
+          nextMenuStates.availability[prevPass.restaurantId] ==
+              MenuAvailabilityState.disponible;
 
       String? notice;
       if (orderJustFinished && previousOrder != null) {
@@ -567,7 +583,7 @@ class CustomerController extends ChangeNotifier {
       }
 
       _emit(_state.copyWith(
-        passes: updatedPasses,
+        passes: sanitizedPasses,
         recentActivity: updatedActivity,
         activeOrder: order,
         clearActiveOrder: order == null,
@@ -577,10 +593,15 @@ class CustomerController extends ChangeNotifier {
         todayMenuPublishedByRest: nextMenuStates.published,
         todayMenuAvailabilityByRest: nextMenuStates.availability,
       ));
+      if (becameAvailable) {
+        unawaited(refreshQr(force: true));
+      } else {
+        unawaited(_ensureFreshQrIfNeeded());
+      }
       _syncOrderPolling(
         order,
         table: table,
-        passes: activePasses,
+        passes: sanitizedPasses,
         menuPublishedByRest: nextMenuStates.published,
       );
     } catch (_) {
@@ -602,19 +623,86 @@ class CustomerController extends ChangeNotifier {
     await _repository.acknowledgeOrder(order.orderNumber);
   }
 
-  /// Regenera el QR rotativo del plan en pantalla (anti-captura).
-  /// Bloqueado cuando el restaurante aún no ha publicado el menú de hoy.
-  Future<bool> refreshQr() async {
+  List<CustomerPass> _sanitizePassQrsForAvailability(
+    List<CustomerPass> passes,
+    Map<String, MenuAvailabilityState> availMap,
+  ) {
+    if (AppMode.useMock) return passes;
+    var cleared = false;
+    final result = <CustomerPass>[
+      for (final p in passes)
+        if (availMap[p.restaurantId] != null &&
+            availMap[p.restaurantId] != MenuAvailabilityState.disponible &&
+            (p.qrToken.isNotEmpty || p.qrExpiresAt != null))
+          () {
+            cleared = true;
+            return p.copyWith(qrToken: '', clearQrExpiresAt: true);
+          }()
+        else
+          p,
+    ];
+    if (cleared && _repository is ApiCustomerRepository) {
+      unawaited(_repository.clearCachedPass());
+    }
+    return result;
+  }
+
+  Future<void> _ensureFreshQrIfNeeded() async {
+    if (_disposed || AppMode.useMock) return;
     final pass = _state.currentPass;
-    if (pass == null || !_state.hasPublishedTodayMenu(pass.restaurantId)) {
+    if (pass == null || !_state.hasPublishedTodayMenu(pass.restaurantId)) return;
+    final exp = pass.qrExpiresAt;
+    final needsFresh = pass.qrToken.isEmpty ||
+        exp == null ||
+        !exp.isAfter(DateTime.now().add(const Duration(seconds: 4)));
+    if (needsFresh) {
+      await refreshQr(force: true);
+    }
+  }
+
+  /// Regenera el QR rotativo del plan en pantalla (anti-captura).
+  /// Bloqueado cuando el restaurante aún no ha publicado el menú de hoy o está agotado.
+  Future<bool> refreshQr({bool force = false}) async {
+    final pass = _state.currentPass;
+    if (pass == null) return false;
+    if (!_state.hasPublishedTodayMenu(pass.restaurantId)) {
+      if (!AppMode.useMock && pass.qrToken.isNotEmpty) {
+        final cleared = [
+          for (final p in _state.passes)
+            p.id == pass.id
+                ? p.copyWith(qrToken: '', clearQrExpiresAt: true)
+                : p,
+        ];
+        _emit(_state.copyWith(passes: cleared));
+        if (_repository is ApiCustomerRepository) {
+          unawaited(_repository.clearCachedPass());
+        }
+      }
       return false;
     }
     try {
-      final token = await _repository.refreshQrToken(pass.id);
+      final String token;
+      final DateTime? expiresAt;
+      if (_repository is ApiCustomerRepository) {
+        if (force) {
+          await _repository.clearCachedPass();
+        }
+        final res = await _repository.fetchQrTokenWithExpiry(pass.id);
+        token = res.token;
+        expiresAt = res.expiresAt;
+      } else {
+        token = await _repository.refreshQrToken(pass.id);
+        expiresAt = DateTime.now().add(const Duration(seconds: 30));
+      }
+      if (_disposed) return false;
       final updated = [
-        for (final p in _state.passes) p.id == pass.id ? p.copyWith(qrToken: token) : p,
+        for (final p in _state.passes)
+          p.id == pass.id
+              ? p.copyWith(qrToken: token, qrExpiresAt: expiresAt)
+              : p,
       ];
-      await _repository.saveCachedPass(updated[_state.passIndex]);
+      final idx = _state.passIndex.clamp(0, updated.length - 1);
+      await _repository.saveCachedPass(updated[idx]);
       _emit(_state.copyWith(passes: updated));
       return true;
     } on ApiException catch (e) {
@@ -627,7 +715,17 @@ class CustomerController extends ChangeNotifier {
         if (updatedAvail[pass.restaurantId] != MenuAvailabilityState.agotadoTotal) {
           updatedAvail[pass.restaurantId] = MenuAvailabilityState.sinPublicar;
         }
+        final cleared = [
+          for (final p in _state.passes)
+            p.restaurantId == pass.restaurantId
+                ? p.copyWith(qrToken: '', clearQrExpiresAt: true)
+                : p,
+        ];
+        if (_repository is ApiCustomerRepository) {
+          unawaited(_repository.clearCachedPass());
+        }
         _emit(_state.copyWith(
+          passes: cleared,
           todayMenuPublishedByRest: updatedMap,
           todayMenuAvailabilityByRest: updatedAvail,
         ));
@@ -665,15 +763,31 @@ class CustomerController extends ChangeNotifier {
     try {
       final passes = await _repository.getActivePasses();
       if (_disposed || !_paseVisible) return;
+      final prevPass = _state.currentPass;
+      final wasAvailable = prevPass != null &&
+          _state.hasPublishedTodayMenu(prevPass.restaurantId);
       final nextMenuStates = await _resolveMenuStatesForPasses(
         passes,
         _state.restaurants,
       );
+      final sanitizedPasses = _sanitizePassQrsForAvailability(
+        passes,
+        nextMenuStates.availability,
+      );
+      final becameAvailable = prevPass != null &&
+          !wasAvailable &&
+          nextMenuStates.availability[prevPass.restaurantId] ==
+              MenuAvailabilityState.disponible;
       _emit(_state.copyWith(
-        passes: passes,
+        passes: sanitizedPasses,
         todayMenuPublishedByRest: nextMenuStates.published,
         todayMenuAvailabilityByRest: nextMenuStates.availability,
       ));
+      if (becameAvailable) {
+        unawaited(refreshQr(force: true));
+      } else {
+        unawaited(_ensureFreshQrIfNeeded());
+      }
     } catch (_) {}
   }
 
@@ -874,33 +988,46 @@ class CustomerController extends ChangeNotifier {
     if (_state.passes.isEmpty) return;
     final idx = index.clamp(0, _state.passes.length - 1);
     _emit(_state.copyWith(passIndex: idx, selectedQrMode: QrMode.plan));
+    unawaited(_ensureFreshQrIfNeeded());
   }
 
   void clearConsumptionNotice() =>
       _emit(_state.copyWith(clearConsumptionNotice: true));
 
   void syncRestaurantSummary(Restaurant detail) {
+    final wasAvailable = _state.hasPublishedTodayMenu(detail.id);
     final avail = detail.menuAvailabilityState;
     final nextMenuMap = Map<String, bool>.from(_state.todayMenuPublishedByRest)
       ..[detail.id] = avail == MenuAvailabilityState.disponible;
     final nextAvailMap = Map<String, MenuAvailabilityState>.from(
       _state.todayMenuAvailabilityByRest,
     )..[detail.id] = avail;
+    final sanitizedPasses = _sanitizePassQrsForAvailability(
+      _state.passes,
+      nextAvailMap,
+    );
     final idx = _state.restaurants.indexWhere((r) => r.id == detail.id);
     if (idx < 0) {
       _emit(_state.copyWith(
+        passes: sanitizedPasses,
         todayMenuPublishedByRest: nextMenuMap,
         todayMenuAvailabilityByRest: nextAvailMap,
       ));
-      return;
+    } else {
+      final next = List<Restaurant>.from(_state.restaurants);
+      next[idx] = detail;
+      _emit(_state.copyWith(
+        passes: sanitizedPasses,
+        restaurants: next,
+        todayMenuPublishedByRest: nextMenuMap,
+        todayMenuAvailabilityByRest: nextAvailMap,
+      ));
     }
-    final next = List<Restaurant>.from(_state.restaurants);
-    next[idx] = detail;
-    _emit(_state.copyWith(
-      restaurants: next,
-      todayMenuPublishedByRest: nextMenuMap,
-      todayMenuAvailabilityByRest: nextAvailMap,
-    ));
+    if (!wasAvailable &&
+        avail == MenuAvailabilityState.disponible &&
+        _state.currentPass?.restaurantId == detail.id) {
+      unawaited(refreshQr(force: true));
+    }
   }
 
   void nextPass() {

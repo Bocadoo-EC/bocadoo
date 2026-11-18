@@ -713,14 +713,13 @@ class OwnerController extends Notifier<OwnerState> {
   /// (`BCD-MESA-`), preorden (`BCD-ORD-`, UUID o `#N`).
   Future<void> onCodeDetected(String rawPayload) async {
     if (_busy || state is OwnerSuccess || state is OwnerError || state is OwnerRedirect) return;
-    final code = rawPayload.trim();
-    if (code.isEmpty) return;
+    if (rawPayload.trim().isEmpty) return;
 
     _busy = true;
     _lastNetworkRetryCode = null;
     state = const OwnerScanning(isProcessing: true);
     try {
-      final result = await _repo.validateQrCode(code);
+      final result = await _repo.validateQrCode(rawPayload);
       final passId = result.passId;
       if (!result.isValid || passId == null) {
         if (result.title == 'Menú no publicado') {
@@ -746,7 +745,7 @@ class OwnerController extends Notifier<OwnerState> {
         );
         state = OwnerError(result.supportingLine, result: result);
       } else if (e.isNetwork || e.status == 504) {
-        _lastNetworkRetryCode = code;
+        _lastNetworkRetryCode = rawPayload;
         final result = ScanResult(
           isValid: false,
           outcome: 'ROJO',

@@ -451,149 +451,123 @@ class ApiOwnerRepository
   Future<ScanResult> validateQrCode(String rawPayload) async {
     _lastError = null;
     final restaurantId = _session.activeRestaurantId ?? '';
-    final backendCode = BocadooQrParser.extractPlanBackendToken(rawPayload);
-    final cleaned = BocadooQrParser.sanitizeManualInput(rawPayload);
-    final codeKey = cleaned.length == BocadooQrParser.shortCodeLength
-        ? cleaned
-        : backendCode.trim().toUpperCase();
+    final isSignedPlanQr = rawPayload.startsWith('BCD1.');
 
-    // Regla 5.1: Validación de pertenencia al local.
-    final codeRestId = BocadooQrParser.restaurantForCode(rawPayload);
-    if (codeRestId != null &&
-        codeRestId.isNotEmpty &&
-        restaurantId.isNotEmpty &&
-        codeRestId != restaurantId) {
-      return const ScanResult(
-        isValid: false,
-        outcome: 'ROJO',
-        title: 'Es de otro local',
-        supportingLine: 'Este código pertenece a otro restaurante',
-        actionRequired: 'NINGUNA',
-      );
-    }
+    if (!isSignedPlanQr) {
+      final backendCode = BocadooQrParser.extractPlanBackendToken(rawPayload);
+      final cleaned = BocadooQrParser.sanitizeManualInput(rawPayload);
+      final codeKey = cleaned.length == BocadooQrParser.shortCodeLength
+          ? cleaned
+          : backendCode.trim().toUpperCase();
 
-    // Preorden activa (ORD-XXXXXX, BCD-ORD-, 6 caracteres, #N o UUID).
-    final upperRaw = rawPayload.trim().toUpperCase();
-    final isExplicitOrder =
-        upperRaw.startsWith(BocadooQrParser.orderPrefix) ||
-        upperRaw.startsWith('BCD-ORD-');
-    if (!upperRaw.startsWith(BocadooQrParser.planPrefix)) {
-      final order = await _findOrderByAnyCode(rawPayload, restaurantId);
-      if (order != null) {
-        final result = await confirmAndRedeemOrder(
-          order.number,
-          restaurantId,
-          rawCodeKey: codeKey,
+      // Regla 5.1: Validación de pertenencia al local para códigos cortos locales.
+      final codeRestId = BocadooQrParser.restaurantForCode(rawPayload);
+      if (codeRestId != null &&
+          codeRestId.isNotEmpty &&
+          restaurantId.isNotEmpty &&
+          codeRestId != restaurantId) {
+        return const ScanResult(
+          isValid: false,
+          outcome: 'ROJO',
+          title: 'Es de otro local',
+          supportingLine: 'Este código pertenece a otro restaurante',
+          actionRequired: 'NINGUNA',
         );
-        if (!result.isValid && result.supportingLine.isNotEmpty) {
-          _lastError = result.supportingLine;
+      }
+
+      // Preorden activa (ORD-XXXXXX, BCD-ORD-, #N o UUID).
+      final upperRaw = rawPayload.trim().toUpperCase();
+      final isExplicitOrder =
+          upperRaw.startsWith(BocadooQrParser.orderPrefix) ||
+          upperRaw.startsWith('BCD-ORD-');
+      if (!upperRaw.startsWith(BocadooQrParser.planPrefix)) {
+        final order = await _findOrderByAnyCode(rawPayload, restaurantId);
+        if (order != null) {
+          final result = await confirmAndRedeemOrder(
+            order.number,
+            restaurantId,
+            rawCodeKey: codeKey,
+          );
+          if (!result.isValid && result.supportingLine.isNotEmpty) {
+            _lastError = result.supportingLine;
+          }
+          return result;
         }
-        return result;
+        if (isExplicitOrder) {
+          return const ScanResult(
+            isValid: false,
+            outcome: 'ROJO',
+            title: 'Preorden no encontrada',
+            supportingLine: 'No encontramos esa preorden activa.',
+            actionRequired: 'NINGUNA',
+          );
+        }
       }
-      if (isExplicitOrder) {
-        return const ScanResult(
-          isValid: false,
-          outcome: 'ROJO',
-          title: 'Preorden no encontrada',
-          supportingLine: 'No encontramos esa preorden activa.',
-          actionRequired: 'NINGUNA',
-        );
-      }
-    }
 
-    // Mesa activa (6 caracteres o BCD-MESA-).
-    final tableId = await _findTableIdByAnyCode(rawPayload, restaurantId);
-    if (tableId != null) {
-      final tableKey = 'MESA:$tableId';
-      if (_redeemedCodes.contains(tableKey)) {
-        return const ScanResult(
-          isValid: false,
-          outcome: 'ROJO',
-          title: 'Ya canjeado',
-          supportingLine: 'Este código ya fue canjeado anteriormente',
-          actionRequired: 'NINGUNA',
+      // Mesa activa (BCD-MESA- o código de mesa).
+      final tableId = await _findTableIdByAnyCode(rawPayload, restaurantId);
+      if (tableId != null) {
+        final tableKey = 'MESA:$tableId';
+        if (_redeemedCodes.contains(tableKey)) {
+          return const ScanResult(
+            isValid: false,
+            outcome: 'ROJO',
+            title: 'Ya canjeado',
+            supportingLine: 'Este código ya fue canjeado anteriormente',
+            actionRequired: 'NINGUNA',
+          );
+        }
+        final preview = await previewTable(restaurantId, tableId);
+        final chargeId = await chargeTable(restaurantId, tableId);
+        if (chargeId == null) {
+          return ScanResult(
+            isValid: false,
+            outcome: 'ROJO',
+            title: 'No se pudo cobrar la mesa',
+            supportingLine: _lastError ?? 'Verifica el estado de la mesa.',
+            actionRequired: 'NINGUNA',
+          );
+        }
+        final cashCollected = preview.lines.fold<double>(
+          0,
+          (sum, l) => sum + (l.via == TableChargeVia.cash ? l.amount : 0),
         );
-      }
-      final preview = await previewTable(restaurantId, tableId);
-      final chargeId = await chargeTable(restaurantId, tableId);
-      if (chargeId == null) {
+        final lunchesFromPlan = preview.lines
+            .where((l) => l.via == TableChargeVia.plan || l.via == TableChargeVia.hostPlan)
+            .length;
+        _redeemedCodes.add(tableKey);
+        _redeemedCodes.add(codeKey);
+        _sessionValidatedTransactions.insert(
+          0,
+          TransactionItem(
+            id: chargeId,
+            customerName: 'Mesa $tableId',
+            type: cashCollected > 0 ? 'Venta Suelta' : 'Validado',
+            amount: cashCollected,
+            paymentMethod: cashCollected > 0 ? 'Efectivo' : 'Plan',
+            timestamp: DateTime.now(),
+          ),
+        );
         return ScanResult(
-          isValid: false,
-          outcome: 'ROJO',
-          title: 'No se pudo cobrar la mesa',
-          supportingLine: _lastError ?? 'Verifica el estado de la mesa.',
+          isValid: true,
+          outcome: 'VERDE',
+          title: 'Mesa $tableId registrada',
+          supportingLine: '$lunchesFromPlan con plan · cobro registrado',
+          passId: tableKey,
           actionRequired: 'NINGUNA',
         );
       }
-      final cashCollected = preview.lines.fold<double>(
-        0,
-        (sum, l) => sum + (l.via == TableChargeVia.cash ? l.amount : 0),
-      );
-      final lunchesFromPlan = preview.lines
-          .where((l) => l.via == TableChargeVia.plan || l.via == TableChargeVia.hostPlan)
-          .length;
-      _redeemedCodes.add(tableKey);
-      _redeemedCodes.add(codeKey);
-      _sessionValidatedTransactions.insert(
-        0,
-        TransactionItem(
-          id: chargeId,
-          customerName: 'Mesa $tableId',
-          type: cashCollected > 0 ? 'Venta Suelta' : 'Validado',
-          amount: cashCollected,
-          paymentMethod: cashCollected > 0 ? 'Efectivo' : 'Plan',
-          timestamp: DateTime.now(),
-        ),
-      );
-      return ScanResult(
-        isValid: true,
-        outcome: 'VERDE',
-        title: 'Mesa $tableId registrada',
-        supportingLine: '$lunchesFromPlan con plan · cobro registrado',
-        passId: tableKey,
-        actionRequired: 'NINGUNA',
-      );
     }
 
-    // Precondición: no validar canje directo por QR si el menú de hoy no está publicado o está agotado.
-    try {
-      final todayMenu = await getTodayMenu(restaurantId);
-      final availability =
-          todayMenu?.availabilityState ?? MenuAvailabilityState.sinPublicar;
-      if (availability == MenuAvailabilityState.sinPublicar) {
-        return const ScanResult(
-          isValid: false,
-          outcome: 'ROJO',
-          title: 'Menú no publicado',
-          supportingLine:
-              'No se puede escanear QR sin haber publicado el menú de hoy',
-          actionRequired: 'NINGUNA',
-        );
-      }
-      if (availability == MenuAvailabilityState.agotadoTotal) {
-        return const ScanResult(
-          isValid: false,
-          outcome: 'ROJO',
-          title: 'Almuerzos agotados hoy',
-          supportingLine:
-              'Todos los platos del menú de hoy están agotados. Solo puedes canjear preórdenes ya reservadas.',
-          actionRequired: 'NINGUNA',
-        );
-      }
-    } catch (_) {
-      // Si la lectura previa del menú falla por red, el servidor valida autoritativamente.
-    }
-
-    // Envío exacto del string leído por cámara o código manual sin modificarlo.
-    final exactCodigoQr = rawPayload.trim();
-    final intent = 'validar:$restaurantId:$exactCodigoQr';
+    // Envío exacto de `rawPayload` sin modificarlo, recortarlo ni transformarlo.
+    final intent = 'validar:$restaurantId:$rawPayload';
     final ik = _idempotency.keyFor(intent);
     try {
       final data = await guard(
         () => _api.send<Map<String, dynamic>>(
               'POST',
               '${ApiConfig.v1}/caja/validar',
-              body: {'codigoQr': exactCodigoQr},
+              body: {'codigoQr': rawPayload},
               restaurant: true,
               idempotencyKey: ik,
             ).then((v) => v ?? <String, dynamic>{}),

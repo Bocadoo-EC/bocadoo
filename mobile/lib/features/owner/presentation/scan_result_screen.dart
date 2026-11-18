@@ -366,6 +366,7 @@ class _ScanResultDialogState extends ConsumerState<ScanResultDialog> {
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             Stack(children: [
               Container(
+                width: double.infinity,
                 padding: const EdgeInsets.fromLTRB(16, 28, 16, 24),
                 decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(24)),
                 child: Column(children: [
@@ -376,9 +377,14 @@ class _ScanResultDialogState extends ConsumerState<ScanResultDialog> {
                         textAlign: TextAlign.center,
                         style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900, height: 1.1, color: fg)),
                   const SizedBox(height: 4),
-                  Text(view.title,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: fg)),
+                  Text(
+                    view.title,
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    softWrap: false,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: fg),
+                  ),
                   const SizedBox(height: 4),
                   Text(view.detail,
                       textAlign: TextAlign.center,
