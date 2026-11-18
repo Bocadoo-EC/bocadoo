@@ -665,13 +665,14 @@ class CustomerController extends ChangeNotifier {
     try {
       final passes = await _repository.getActivePasses();
       if (_disposed || !_paseVisible) return;
-      final nextMenuMap = await _resolveMenuPublishedForPasses(
+      final nextMenuStates = await _resolveMenuStatesForPasses(
         passes,
         _state.restaurants,
       );
       _emit(_state.copyWith(
         passes: passes,
-        todayMenuPublishedByRest: nextMenuMap,
+        todayMenuPublishedByRest: nextMenuStates.published,
+        todayMenuAvailabilityByRest: nextMenuStates.availability,
       ));
     } catch (_) {}
   }

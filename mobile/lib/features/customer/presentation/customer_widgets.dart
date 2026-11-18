@@ -181,7 +181,7 @@ class OccupancyDetail extends StatelessWidget {
           b.onWalletAccent,
         ),
       RestaurantEffectiveStatus.lleno => (
-          mins > 0 ? 'Lleno · Espera ~${mins} min' : 'Lleno · Sin mesas ahora',
+          mins > 0 ? 'Lleno · Espera ~$mins min' : 'Lleno · Sin mesas ahora',
           b.dangerForeground,
           b.danger,
           b.dangerForeground,
