@@ -1,8 +1,12 @@
+import 'package:latlong2/latlong.dart';
+
 import '../../../core/config/support_config.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/contracts/qr_parser.dart';
 import '../../../core/contracts/repositories.dart';
 import '../../../core/demo/demo_store.dart';
+import '../../../core/location/location_service.dart';
+import '../../../core/utils/formatters.dart';
 import 'local_customer_cache.dart';
 
 /// Implementación Mock de [ICustomerRepository] basada en los datos semilla del
@@ -61,7 +65,7 @@ class MockCustomerRepository implements ICustomerRepository {
         studentCareer: 'Ing. de Sistemas · PUCE',
         planName: 'Plan mensual ejecutivo',
         totalLunches: 20,
-        remainingLunches: 14,
+        remainingLunches: _store.remainingLunchesByRest['r1'] ?? 14,
         expiresAt: now.add(const Duration(days: 27)),
         qrToken: BocadooQrParser.generateQrPayload(targetUserId, now, 'r1'),
         restaurantId: 'r1',
@@ -73,7 +77,7 @@ class MockCustomerRepository implements ICustomerRepository {
         studentName: 'Carlos Mejía',
         planName: 'Mensual Saludable',
         totalLunches: 20,
-        remainingLunches: 6,
+        remainingLunches: _store.remainingLunchesByRest['r2'] ?? 6,
         expiresAt: now.add(const Duration(days: 12)),
         qrToken: BocadooQrParser.generateQrPayload('${targetUserId}_r2', now, 'r2'),
         restaurantId: 'r2',
@@ -102,6 +106,20 @@ class MockCustomerRepository implements ICustomerRepository {
     return newToken;
   }
 
+  Restaurant _withLiveGeoAndOccupancy(Restaurant r, LatLng userPos) {
+    final overrideOcc = _store.occupancyOverrides[r.id];
+    if (!r.hasLocation) {
+      return overrideOcc == null ? r : r.copyWith(occupancy: overrideOcc);
+    }
+    final meters = LocationService.meters(userPos, LatLng(r.latitude!, r.longitude!));
+    final km = (meters / 100.0).round() / 10.0;
+    return r.copyWith(
+      distanceMeters: meters,
+      distanceKm: km,
+      occupancy: overrideOcc ?? r.occupancy,
+    );
+  }
+
   @override
   Future<List<Restaurant>> getRestaurants({
     String? query,
@@ -109,15 +127,20 @@ class MockCustomerRepository implements ICustomerRepository {
   }) async {
     // TODO: Conectar con provider de backend
     await _simulateNetwork();
-    return _allRestaurants;
+    final (_, userPos) = await LocationService.resolveWithFallback();
+    final mapped = [
+      for (final r in _allRestaurants) _withLiveGeoAndOccupancy(r, userPos),
+    ]..sort((a, b) => a.resolvedMeters.compareTo(b.resolvedMeters));
+    return mapped;
   }
 
   @override
   Future<Restaurant?> getRestaurantById(String id) async {
     // TODO: Conectar con provider de backend
     await _simulateNetwork();
+    final (_, userPos) = await LocationService.resolveWithFallback();
     for (final r in _allRestaurants) {
-      if (r.id == id) return r;
+      if (r.id == id) return _withLiveGeoAndOccupancy(r, userPos);
     }
     return null;
   }
@@ -362,12 +385,13 @@ class MockCustomerRepository implements ICustomerRepository {
 
   static ActiveOrder _toActiveOrder(DemoPreorder o) => ActiveOrder(
         orderNumber: o.number,
+        restaurantId: o.restaurantId,
         restaurantName: o.restaurantName,
         qrPayload: BocadooQrParser.generateOrderCode(
-        o.number,
-        orderId: o.number,
-        restaurantId: o.restaurantId,
-      ),
+          o.number,
+          orderId: o.number,
+          restaurantId: o.restaurantId,
+        ),
         status: o.status == PreorderStatus.delivered ? 'ENTREGADO' : 'PREPARANDO',
         detail: o.detail,
         soup: o.soup,
@@ -375,9 +399,15 @@ class MockCustomerRepository implements ICustomerRepository {
         takeaway: o.takeaway,
         takeawaySurcharge: o.takeawaySurcharge,
         singleLunchPrice: o.singleLunchPrice,
+        basePriceCents: o.effectiveBaseCents,
+        takeawaySurchargeCents: o.effectiveSurchargeCents,
+        totalCents: o.effectiveTotalCents,
+        estimatedArrivalLabel: o.estimatedArrivalLabel,
         hasPlan: o.hasPlan,
         expiresAt: o.expiresAt,
-        paidAmount: o.status == PreorderStatus.delivered ? o.amount : null,
+        paidAmount: o.status == PreorderStatus.delivered
+            ? Money.fromCents(o.effectiveTotalCents)
+            : null,
       );
 
   @override
@@ -420,6 +450,7 @@ class MockCustomerRepository implements ICustomerRepository {
     String? breakfastId,
     String? offerId,
     required bool takeaway,
+    String? estimatedArrival,
   }) async {
     // TODO: Conectar con provider de backend
     await _simulateNetwork();
@@ -449,8 +480,12 @@ class MockCustomerRepository implements ICustomerRepository {
     final main = nameOf(mainId);
     final price = offerItem?.price ?? restaurant?.singleLunchPrice ?? 3.00;
     final surcharge = restaurant?.takeawaySurcharge ?? 0.25;
+    final baseCents = Money.toCents(price);
+    final surchargeCents = Money.toCents(surcharge);
+    final hasPlan = (restaurantId == 'r1' || restaurantId == 'r2') &&
+        (_store.remainingLunchesByRest[restaurantId] ?? 0) > 0;
+    final totalCents = hasPlan ? 0 : baseCents + (takeaway ? surchargeCents : 0);
     final now = DateTime.now();
-    final hasPlan = restaurantId == 'r1' || restaurantId == 'r2';
     final record = DemoPreorder(
       number: number,
       restaurantId: restaurantId,
@@ -462,10 +497,14 @@ class MockCustomerRepository implements ICustomerRepository {
       main: main.isNotEmpty ? main : (breakfast.isNotEmpty ? breakfast : (offer.isEmpty ? null : offer)),
       takeaway: takeaway,
       takeawaySurcharge: surcharge,
-      singleLunchPrice: restaurant?.singleLunchPrice ?? 3.00,
+      singleLunchPrice: price,
+      basePriceCents: baseCents,
+      takeawaySurchargeCents: surchargeCents,
+      totalCents: totalCents,
+      estimatedArrivalLabel: estimatedArrival ?? 'En 15 min',
       hasPlan: hasPlan,
       // Con plan prepagado no se cobra nada en caja.
-      amount: hasPlan ? 0 : price + (takeaway ? surcharge : 0),
+      amount: Money.fromCents(totalCents),
       createdAt: now,
       expiresAt: now.add(const Duration(minutes: 30)),
     );

@@ -52,6 +52,7 @@ abstract class ICustomerRepository {
     String? breakfastId,
     String? offerId,
     required bool takeaway,
+    String? estimatedArrival,
   });
 
   /// Cancela una preorden recién creada (deshacer)

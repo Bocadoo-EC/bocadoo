@@ -53,6 +53,7 @@ class CustomerUiState {
   final List<PlanTemplate> planTemplates;
   final bool isLoadingPlans;
   final UndoNotice? undo;
+  final String? consumptionNotice;
   final String? errorMessage;
   final bool isOffline;
 
@@ -76,6 +77,7 @@ class CustomerUiState {
     this.planTemplates = const [],
     this.isLoadingPlans = false,
     this.undo,
+    this.consumptionNotice,
     this.errorMessage,
     this.isOffline = false,
   });
@@ -181,6 +183,8 @@ class CustomerUiState {
     bool? isLoadingPlans,
     UndoNotice? undo,
     bool clearUndo = false,
+    String? consumptionNotice,
+    bool clearConsumptionNotice = false,
     String? errorMessage,
     bool? isOffline,
   }) {
@@ -206,6 +210,9 @@ class CustomerUiState {
       planTemplates: planTemplates ?? this.planTemplates,
       isLoadingPlans: isLoadingPlans ?? this.isLoadingPlans,
       undo: clearUndo ? null : undo ?? this.undo,
+      consumptionNotice: clearConsumptionNotice
+          ? null
+          : consumptionNotice ?? this.consumptionNotice,
       errorMessage: errorMessage,
       isOffline: isOffline ?? this.isOffline,
     );
@@ -327,6 +334,13 @@ class CustomerController extends ChangeNotifier {
         } catch (_) {}
       }
 
+      String? notice;
+      if (orderJustFinished && previousOrder != null) {
+        notice = previousOrder.hasPlan
+            ? 'Almuerzo confirmado en ${previousOrder.restaurantName} (-1 de tu plan).'
+            : 'Pedido #${previousOrder.orderNumber} confirmado en ${previousOrder.restaurantName}.';
+      }
+
       _emit(_state.copyWith(
         passes: updatedPasses,
         recentActivity: updatedActivity,
@@ -334,6 +348,7 @@ class CustomerController extends ChangeNotifier {
         clearActiveOrder: order == null,
         activeTable: table,
         clearActiveTable: table == null,
+        consumptionNotice: notice,
       ));
       _syncOrderPolling(order, table: table);
     } catch (_) {
@@ -367,6 +382,27 @@ class CustomerController extends ChangeNotifier {
   }
 
   void selectQrMode(QrMode mode) => _emit(_state.copyWith(selectedQrMode: mode));
+
+  void selectPass(int index) {
+    if (_state.passes.isEmpty) return;
+    final idx = index.clamp(0, _state.passes.length - 1);
+    _emit(_state.copyWith(passIndex: idx, selectedQrMode: QrMode.plan));
+  }
+
+  void clearConsumptionNotice() =>
+      _emit(_state.copyWith(clearConsumptionNotice: true));
+
+  void syncRestaurantSummary(Restaurant detail) {
+    final idx = _state.restaurants.indexWhere((r) => r.id == detail.id);
+    if (idx < 0) return;
+    if (_state.restaurants[idx].occupancy == detail.occupancy &&
+        _state.restaurants[idx].hasMenu == detail.hasMenu) {
+      return;
+    }
+    final next = List<Restaurant>.from(_state.restaurants);
+    next[idx] = detail;
+    _emit(_state.copyWith(restaurants: next));
+  }
 
   void nextPass() {
     if (_state.passes.length < 2) return;
@@ -432,6 +468,7 @@ class CustomerController extends ChangeNotifier {
     String? breakfastId,
     String? offerId,
     bool takeaway = false,
+    String? estimatedArrival,
   }) async {
     lastActionError = null;
     if (_state.activeOrder != null && !_state.activeOrder!.isDelivered) {
@@ -451,8 +488,15 @@ class CustomerController extends ChangeNotifier {
         breakfastId: breakfastId,
         offerId: offerId,
         takeaway: takeaway,
+        estimatedArrival: estimatedArrival,
       );
-      _emit(_state.copyWith(activeOrder: order, selectedQrMode: QrMode.preorden));
+      final matchingPassIdx =
+          _state.passes.indexWhere((p) => p.restaurantId == restaurant.id);
+      _emit(_state.copyWith(
+        activeOrder: order,
+        selectedQrMode: QrMode.preorden,
+        passIndex: matchingPassIdx >= 0 ? matchingPassIdx : _state.passIndex,
+      ));
       _syncOrderPolling(order);
       _startUndo('Pedido enviado · Deshacer', () async {
         try {
@@ -471,13 +515,6 @@ class CustomerController extends ChangeNotifier {
       lastActionError = 'No pudimos enviar tu pedido. Inténtalo de nuevo.';
       return false;
     }
-  }
-
-  /// "Pedir" en la tarjeta de Dónde comer: primera sopa y segundo disponibles.
-  Future<bool> quickOrder(Restaurant restaurant) {
-    final soup = restaurant.soups.where((m) => !m.isSoldOut).firstOrNull;
-    final main = restaurant.mains.where((m) => !m.isSoldOut).firstOrNull;
-    return preorder(restaurant: restaurant, soupId: soup?.id, mainId: main?.id);
   }
 
   Future<bool> reserveOffer(RestaurantOffer offer) async {
@@ -651,8 +688,21 @@ final customerControllerProvider = Provider<CustomerController>((ref) {
 
 /// Local y menú para la ficha (C3), también cuando se abre por ruta directa.
 final restaurantDetailProvider =
-    FutureProvider.autoDispose.family<Restaurant?, String>((ref, id) {
-  return ref.watch(customerRepositoryProvider).getRestaurantById(id);
+    FutureProvider.autoDispose.family<Restaurant?, String>((ref, id) async {
+  final detail = await ref.watch(customerRepositoryProvider).getRestaurantById(id);
+  if (detail != null) {
+    ref.read(customerControllerProvider).syncRestaurantSummary(detail);
+  }
+  return detail;
+});
+
+/// Fuente única de verdad del estado de ocupación (`LIBRE`, `MOVIDO`, `LLENO`)
+/// compartida entre la tarjeta del Marketplace y la cabecera de `RestaurantSheet`.
+final restaurantOccupancyProvider =
+    Provider.family<String, String>((ref, restaurantId) {
+  final controller = ref.watch(customerControllerProvider);
+  final fromList = controller.state.restaurantById(restaurantId);
+  return fromList?.occupancy ?? 'LIBRE';
 });
 
 /// Plan y su local para el detalle del plan (C5).

@@ -10,30 +10,38 @@ enum OwnerRole { owner, cashier }
 class OwnerOrder {
   const OwnerOrder({
     this.id,
+    this.restaurantId,
     required this.number,
     required this.dinerName,
     required this.amount,
+    this.totalCents,
     required this.createdAt,
     this.soup,
     this.main,
     this.drink,
     this.estimatedArrival,
+    this.estimatedArrivalLabel,
     this.takeaway = false,
+    this.takeawaySurchargeCents = 25,
     this.paidByPlan = false,
     this.validated = false,
   });
 
   final String? id;
+  final String? restaurantId;
   final String number;
   final String dinerName;
   final String? soup;
   final String? main;
   final String? drink;
   final DateTime? estimatedArrival;
+  final String? estimatedArrivalLabel;
   final bool takeaway;
+  final int takeawaySurchargeCents;
 
   /// Lo que se cobra en efectivo (0 si lo cubre un plan prepagado).
   final double amount;
+  final int? totalCents;
   final DateTime createdAt;
 
   /// El pedido sale del plan del comensal: no se cobra, se valida con su QR.
@@ -41,6 +49,9 @@ class OwnerOrder {
 
   /// Con plan: ya se validó el QR y se descontó el almuerzo; falta entregar.
   final bool validated;
+
+  int get effectiveTotalCents =>
+      paidByPlan ? 0 : (totalCents ?? (amount * 100).round());
 
   /// `BCD-ORD-42`: lo que lee el escáner de Caja.
   String get qrCode => 'BCD-ORD-$number';

@@ -43,6 +43,9 @@ class AppColors {
   static const Color lightFooterBg = Color(0xFF2D0050);
   static const Color lightFooterAccent = Color(0xFFDEB7FF);
 
+  static const Color lightWalletAccent = Color(0xFFFFD54F);
+  static const Color lightOnWalletAccent = Color(0xFF3E2700);
+
   // Modo Oscuro
   static const Color darkBackground = Color(0xFF1C1127);
   static const Color darkSurface = Color(0xFF2A1B3A);
@@ -75,6 +78,9 @@ class AppColors {
 
   static const Color darkFooterBg = Color(0xFF120A1A);
   static const Color darkFooterAccent = Color(0xFFDEB7FF);
+
+  static const Color darkWalletAccent = Color(0xFFF5B700);
+  static const Color darkOnWalletAccent = Color(0xFF2B1B00);
 
   // Tokens de QR (Inmutables en ambos temas para garantizar lectura óptica)
   static const Color qrForeground = Color(0xFF2D0050);
@@ -114,6 +120,8 @@ class BocadooColors extends ThemeExtension<BocadooColors> {
   final Color qrForeground;
   final Color qrBackground;
   final Color imageForeground;
+  final Color walletAccent;
+  final Color onWalletAccent;
   final LinearGradient heroGradient;
 
   const BocadooColors({
@@ -132,6 +140,8 @@ class BocadooColors extends ThemeExtension<BocadooColors> {
     required this.qrForeground,
     required this.qrBackground,
     this.imageForeground = AppColors.imageForeground,
+    required this.walletAccent,
+    required this.onWalletAccent,
     required this.heroGradient,
   });
 
@@ -150,6 +160,8 @@ class BocadooColors extends ThemeExtension<BocadooColors> {
     inputBg: AppColors.lightInputBg,
     qrForeground: AppColors.qrForeground,
     qrBackground: AppColors.qrBackground,
+    walletAccent: AppColors.lightWalletAccent,
+    onWalletAccent: AppColors.lightOnWalletAccent,
     heroGradient: AppColors.lightHeroGradient,
   );
 
@@ -168,6 +180,8 @@ class BocadooColors extends ThemeExtension<BocadooColors> {
     inputBg: AppColors.darkInputBg,
     qrForeground: AppColors.qrForeground,
     qrBackground: AppColors.qrBackground,
+    walletAccent: AppColors.darkWalletAccent,
+    onWalletAccent: AppColors.darkOnWalletAccent,
     heroGradient: AppColors.darkHeroGradient,
   );
 
@@ -187,6 +201,8 @@ class BocadooColors extends ThemeExtension<BocadooColors> {
     Color? inputBg,
     Color? qrForeground,
     Color? qrBackground,
+    Color? walletAccent,
+    Color? onWalletAccent,
     LinearGradient? heroGradient,
   }) {
     return BocadooColors(
@@ -204,6 +220,8 @@ class BocadooColors extends ThemeExtension<BocadooColors> {
       inputBg: inputBg ?? this.inputBg,
       qrForeground: qrForeground ?? this.qrForeground,
       qrBackground: qrBackground ?? this.qrBackground,
+      walletAccent: walletAccent ?? this.walletAccent,
+      onWalletAccent: onWalletAccent ?? this.onWalletAccent,
       heroGradient: heroGradient ?? this.heroGradient,
     );
   }
@@ -250,6 +268,8 @@ class BocadooColors extends ThemeExtension<BocadooColors> {
       qrForeground: qrForeground,
       qrBackground: qrBackground,
       imageForeground: imageForeground,
+      walletAccent: Color.lerp(walletAccent, other.walletAccent, t)!,
+      onWalletAccent: Color.lerp(onWalletAccent, other.onWalletAccent, t)!,
       heroGradient: heroGradient,
     );
   }

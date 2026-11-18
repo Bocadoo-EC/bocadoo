@@ -23,6 +23,10 @@ class DemoPreorder {
     this.takeaway = false,
     this.takeawaySurcharge = 0.25,
     this.singleLunchPrice = 3.00,
+    this.basePriceCents = 0,
+    this.takeawaySurchargeCents = 0,
+    this.totalCents = 0,
+    this.estimatedArrivalLabel,
     this.hasPlan = false,
   });
 
@@ -37,6 +41,10 @@ class DemoPreorder {
   final bool takeaway;
   final double takeawaySurcharge;
   final double singleLunchPrice;
+  final int basePriceCents;
+  final int takeawaySurchargeCents;
+  final int totalCents;
+  final String? estimatedArrivalLabel;
   final bool hasPlan;
 
   /// Lo que se cobra en caja (las preórdenes se cobran en efectivo).
@@ -51,6 +59,21 @@ class DemoPreorder {
   bool validated = false;
 
   bool get isOpen => status == PreorderStatus.pending;
+
+  int get effectiveBaseCents =>
+      basePriceCents > 0 ? basePriceCents : (singleLunchPrice * 100).round();
+
+  int get effectiveSurchargeCents => takeaway
+      ? (takeawaySurchargeCents > 0
+          ? takeawaySurchargeCents
+          : (takeawaySurcharge * 100).round())
+      : 0;
+
+  int get effectiveTotalCents {
+    if (hasPlan) return 0;
+    if (totalCents > 0) return totalCents;
+    return effectiveBaseCents + effectiveSurchargeCents;
+  }
 }
 
 /// Calificación rápida de un comensal (C10 → O15).
@@ -98,6 +121,8 @@ class DemoStore extends ChangeNotifier {
   /// Mesas ya cobradas en caja.
   final Set<String> settledTables = {};
   final List<DemoFeedback> feedback = [];
+  final Map<String, String> occupancyOverrides = {};
+  final Map<String, int> remainingLunchesByRest = {'r1': 14, 'r2': 6};
 
   int _orderSeq = 43;
   int _tableSeq = 1235;
@@ -126,6 +151,9 @@ class DemoStore extends ChangeNotifier {
         soup: 'Locro de papa con queso',
         main: 'Seco de pollo con maduro',
         detail: 'Locro de papa con queso · Seco de pollo con maduro',
+        basePriceCents: 300,
+        totalCents: 0,
+        estimatedArrivalLabel: '12:30',
         amount: 0,
         hasPlan: true,
         createdAt: now.subtract(const Duration(minutes: 3)),
@@ -140,6 +168,9 @@ class DemoStore extends ChangeNotifier {
         soup: 'Locro de papa con queso',
         main: 'Seco de pollo con maduro',
         detail: 'Locro de papa con queso · Seco de pollo con maduro',
+        basePriceCents: 300,
+        totalCents: 300,
+        estimatedArrivalLabel: 'En 15 min',
         amount: 3.00,
         createdAt: now.subtract(const Duration(minutes: 6)),
         expiresAt: now.add(const Duration(minutes: 24)),
@@ -153,6 +184,9 @@ class DemoStore extends ChangeNotifier {
         soup: 'Sopa de lenteja',
         main: 'Trucha frita con ensalada',
         detail: 'Sopa de lenteja · Trucha frita con ensalada',
+        basePriceCents: 300,
+        totalCents: 300,
+        estimatedArrivalLabel: '13:00',
         amount: 3.00,
         createdAt: now.subtract(const Duration(minutes: 12)),
         expiresAt: now.add(const Duration(minutes: 18)),

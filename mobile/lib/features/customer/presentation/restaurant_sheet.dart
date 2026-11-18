@@ -4,6 +4,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../../core/contracts/models.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/utils/formatters.dart';
 import 'customer_controller.dart';
 import 'customer_widgets.dart';
 
@@ -24,11 +25,70 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
   bool _breakfastMode = false;
   bool _takeaway = false;
   bool _sending = false;
+  String _selectedArrival = 'En 15 min';
+  String? _customArrival;
+
+  List<String> _availableArrivalOptions() {
+    final now = EcuadorTime.now();
+    final nowMinutes = now.hour * 60 + now.minute;
+    return [
+      'En 15 min',
+      if (nowMinutes < 12 * 60 + 30) '12:30',
+      if (nowMinutes < 13 * 60) '13:00',
+    ];
+  }
+
+  (TimeOfDay, TimeOfDay) _parseLunchRange(String schedule) {
+    final matches = RegExp(r'(\d{1,2}):(\d{2})').allMatches(schedule).toList();
+    if (matches.length >= 2) {
+      final sh = int.tryParse(matches[0].group(1)!) ?? 11;
+      final sm = int.tryParse(matches[0].group(2)!) ?? 30;
+      final eh = int.tryParse(matches[1].group(1)!) ?? 15;
+      final em = int.tryParse(matches[1].group(2)!) ?? 30;
+      return (TimeOfDay(hour: sh, minute: sm), TimeOfDay(hour: eh, minute: em));
+    }
+    return (const TimeOfDay(hour: 11, minute: 30), const TimeOfDay(hour: 15, minute: 30));
+  }
+
+  Future<void> _pickCustomTime(Restaurant r) async {
+    final (start, end) = _parseLunchRange(r.schedule);
+    final initial = TimeOfDay(
+      hour: start.hour < 12 ? 12 : start.hour,
+      minute: 30,
+    );
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: initial,
+      helpText: 'Hora estimada (${r.schedule})',
+    );
+    if (picked == null || !mounted) return;
+    final pickedMins = picked.hour * 60 + picked.minute;
+    final startMins = start.hour * 60 + start.minute;
+    final endMins = end.hour * 60 + end.minute;
+    if (pickedMins < startMins || pickedMins > endMins) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Elige una hora dentro del horario de atención (${r.schedule}).'),
+        ),
+      );
+      return;
+    }
+    final formatted =
+        '${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}';
+    setState(() {
+      _customArrival = formatted;
+      _selectedArrival = formatted;
+    });
+  }
 
   void _applyDefaults(Restaurant r) {
     _soupId ??= r.soups.where((m) => !m.isSoldOut).firstOrNull?.id;
     _mainId ??= r.mains.where((m) => !m.isSoldOut).firstOrNull?.id;
     _breakfastId ??= r.breakfasts.where((m) => !m.isSoldOut).firstOrNull?.id;
+    final options = _availableArrivalOptions();
+    if (_selectedArrival != _customArrival && !options.contains(_selectedArrival)) {
+      _selectedArrival = 'En 15 min';
+    }
   }
 
   Future<void> _order(CustomerController controller, Restaurant r) async {
@@ -39,6 +99,7 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
       mainId: _breakfastMode ? null : _mainId,
       breakfastId: _breakfastMode ? _breakfastId : null,
       takeaway: _takeaway,
+      estimatedArrival: _selectedArrival,
     );
     if (!mounted) return;
     setState(() => _sending = false);
@@ -155,6 +216,7 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
               ],
               _HeaderCard(
                 restaurant: r,
+                occupancy: ref.watch(restaurantOccupancyProvider(r.id)),
                 hasPlanHere: s.passFor(r.id) != null || r.hasPlan,
                 onTable: _openTable,
               ),
@@ -233,13 +295,57 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                ElevatedButton(
-                  onPressed: canOrder ? () => _order(controller, r) : null,
-                  child: Text(
-                    breakfastMode
-                        ? 'Preordenar desayuno'
-                        : 'Preordenar almuerzo',
+                Text(
+                  'Hora estimada de consumo',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    color: colors.onSurfaceVariant,
                   ),
+                ),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  children: [
+                    for (final opt in _availableArrivalOptions())
+                      ChoiceChip(
+                        label: Text(opt),
+                        selected: _selectedArrival == opt,
+                        onSelected: (_) => setState(() => _selectedArrival = opt),
+                      ),
+                    ChoiceChip(
+                      label: Text(_customArrival ?? '+'),
+                      selected: _customArrival != null &&
+                          _selectedArrival == _customArrival,
+                      onSelected: (_) => _pickCustomTime(r),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Builder(
+                  builder: (context) {
+                    final hasPlanHere = s.passFor(r.id) != null;
+                    final baseCents = breakfastMode
+                        ? Money.toCents(chosenBreakfast?.price ?? r.singleLunchPrice)
+                        : Money.toCents(r.singleLunchPrice);
+                    final surchargeCents =
+                        _takeaway ? Money.toCents(r.takeawaySurcharge) : 0;
+                    final totalCents =
+                        hasPlanHere ? 0 : baseCents + surchargeCents;
+                    return ElevatedButton(
+                      onPressed: canOrder ? () => _order(controller, r) : null,
+                      child: Text(
+                        breakfastMode
+                            ? (hasPlanHere
+                                ? 'Preordenar desayuno (Plan)'
+                                : 'Preordenar desayuno · ${formatCents(totalCents)}')
+                            : (hasPlanHere
+                                ? 'Preordenar almuerzo (Plan)'
+                                : 'Preordenar almuerzo · ${formatCents(totalCents)}'),
+                      ),
+                    );
+                  },
                 ),
                 if (hasActiveOrder) ...[
                   const SizedBox(height: 8),
@@ -263,11 +369,13 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
 
 class _HeaderCard extends StatelessWidget {
   final Restaurant restaurant;
+  final String occupancy;
   final bool hasPlanHere;
   final VoidCallback onTable;
 
   const _HeaderCard({
     required this.restaurant,
+    required this.occupancy,
     required this.hasPlanHere,
     required this.onTable,
   });
@@ -313,12 +421,11 @@ class _HeaderCard extends StatelessWidget {
                   bottom: 10,
                   child: Row(
                     children: [
-                      Flexible(child: OccupancyDetail(occupancy: r.occupancy)),
+                      Flexible(child: OccupancyDetail(occupancy: occupancy)),
                       if (r.hasLocation) ...[
                         const SizedBox(width: 6),
                         DistancePill(
-                          text:
-                              '${r.distanceKm} km · ${r.walkingMinutes} min a pie',
+                          text: r.formattedDistance,
                         ),
                       ],
                     ],

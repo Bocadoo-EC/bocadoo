@@ -35,14 +35,6 @@ class _RestaurantsScreenState extends ConsumerState<RestaurantsScreen> {
     context.push('/customer/restaurants/${r.id}');
   }
 
-  Future<void> _quickOrder(CustomerController controller, Restaurant r) async {
-    final ok = await controller.quickOrder(r);
-    if (!ok && mounted) {
-      final msg = controller.lastActionError ?? _limitNotice;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-    }
-  }
-
   Future<void> _reserve(CustomerController controller, RestaurantOffer offer) async {
     final ok = await controller.reserveOffer(offer);
     if (!ok && mounted) {
@@ -181,9 +173,9 @@ class _RestaurantsScreenState extends ConsumerState<RestaurantsScreen> {
             for (final r in filtered) ...[
               _RestaurantCard(
                 restaurant: r,
+                occupancy: ref.watch(restaurantOccupancyProvider(r.id)),
                 onOpen: () => _openRestaurant(r),
                 onTable: () => context.push('/customer/mesa?restaurantId=${r.id}'),
-                onOrder: () => _quickOrder(controller, r),
                 onReserve: (o) => _reserve(controller, o),
               ),
               const SizedBox(height: 14),
@@ -603,16 +595,16 @@ class _OfferBadge extends StatelessWidget {
 
 class _RestaurantCard extends StatelessWidget {
   final Restaurant restaurant;
+  final String occupancy;
   final VoidCallback onOpen;
   final VoidCallback onTable;
-  final VoidCallback onOrder;
   final ValueChanged<RestaurantOffer> onReserve;
 
   const _RestaurantCard({
     required this.restaurant,
+    required this.occupancy,
     required this.onOpen,
     required this.onTable,
-    required this.onOrder,
     required this.onReserve,
   });
 
@@ -654,10 +646,10 @@ class _RestaurantCard extends StatelessWidget {
                 left: 8,
                 right: 8,
                 child: Row(children: [
-                  OccupancyChip(occupancy: r.occupancy),
+                  OccupancyChip(occupancy: occupancy),
                   const Spacer(),
                   if (r.hasLocation)
-                    DistancePill(text: '${r.distanceKm} km · ${r.walkingMinutes} min'),
+                    DistancePill(text: r.formattedDistance),
                 ]),
               ),
               Positioned(
@@ -727,13 +719,23 @@ class _RestaurantCard extends StatelessWidget {
               Divider(height: 1, color: colors.outlineVariant),
               const SizedBox(height: 10),
               Row(children: [
-                Expanded(child: PillAction(label: 'Ver Menú', icon: Icons.visibility_outlined, onPressed: onOpen)),
+                Expanded(
+                  child: PillAction(
+                    label: 'Armar mesa',
+                    icon: Icons.group_add_outlined,
+                    tonal: false,
+                    onPressed: onTable,
+                  ),
+                ),
                 const SizedBox(width: 8),
-                PillAction(label: 'Mesa', icon: Icons.group_outlined, tonal: false, onPressed: onTable),
-                if (r.hasMenu) ...[
-                  const SizedBox(width: 8),
-                  PillAction(label: 'Pedir', icon: Icons.arrow_forward_rounded, trailingIcon: true, onPressed: onOrder),
-                ],
+                Expanded(
+                  child: PillAction(
+                    label: 'Ver menú',
+                    icon: Icons.arrow_forward,
+                    trailingIcon: true,
+                    onPressed: onOpen,
+                  ),
+                ),
               ]),
             ]),
           ),

@@ -4,6 +4,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../../core/config/app_mode.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/utils/formatters.dart';
 import '../domain/models/extras_models.dart';
 import 'owner_controller.dart';
 import 'owner_format.dart';
@@ -59,12 +60,37 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
   }
 
   /// Qué hace el botón principal de la tarjeta según el pedido:
-  /// con plan sin validar → validar su QR; con plan validado → entregar;
-  /// en efectivo → cobrar y entregar.
-  Future<void> _act(OwnerOrder order) {
-    if (order.paidByPlan && !order.validated) return _validate(order);
-    if (order.paidByPlan) return _deliver(order);
-    return _charge(order);
+  /// invoca el disparador transaccional único `confirmAndRedeemOrder`
+  /// tras confirmar en la hoja correspondiente.
+  Future<void> _act(OwnerOrder order) async {
+    final sheet = order.paidByPlan && !order.validated
+        ? _ValidateOrderSheet(order: order)
+        : (order.paidByPlan ? null : _ChargeOrderSheet(order: order));
+    if (sheet != null && await _openSheet(sheet) != true) return;
+    if (!mounted) return;
+    await _confirmOrder(order);
+  }
+
+  Future<void> _confirmOrder(OwnerOrder order) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final repo = ref.read(ownerOrdersRepositoryProvider);
+    final restaurantId = ref.read(ownerRestaurantIdProvider);
+    final res = await repo.confirmAndRedeemOrder(order.number, restaurantId);
+    if (!mounted) return;
+    _refresh();
+    if (!res.isValid) {
+      final apiErr = AppMode.useMock
+          ? null
+          : ref.read(apiOwnerRepositoryProvider).consumeLastError();
+      showInfoSnackBar(
+        messenger,
+        res.supportingLine.isNotEmpty
+            ? res.supportingLine
+            : (apiErr ?? 'No se pudo completar el pedido #${order.number}.'),
+      );
+      return;
+    }
+    showInfoSnackBar(messenger, '${res.title} · ${res.supportingLine}');
   }
 
   Future<bool?> _openSheet(Widget child) => showModalBottomSheet<bool>(
@@ -76,63 +102,6 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
         shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
         builder: (_) => child,
       );
-
-  Future<void> _validate(OwnerOrder order) async {
-    final messenger = ScaffoldMessenger.of(context);
-    if (await _openSheet(_ValidateOrderSheet(order: order)) != true || !mounted) return;
-    final repo = ref.read(ownerOrdersRepositoryProvider);
-    final restaurantId = ref.read(ownerRestaurantIdProvider);
-    final ok = await repo.validateOrder(restaurantId, order.number);
-    if (!mounted) return;
-    _refresh();
-    if (!ok) {
-      final apiErr = AppMode.useMock
-          ? null
-          : ref.read(apiOwnerRepositoryProvider).consumeLastError();
-      showInfoSnackBar(
-        messenger,
-        apiErr ?? 'No se pudo validar el pedido #${order.number}. Revisa el plan de ${order.dinerName}.',
-      );
-      return;
-    }
-    showUndoSnackBar(
-      messenger,
-      label: 'Pedido #${order.number} validado con el plan de ${order.dinerName.split(' ').first}',
-      onUndo: () async {
-        await repo.undoValidate(restaurantId, order.number);
-        if (mounted) _refresh();
-      },
-    );
-  }
-
-  Future<void> _charge(OwnerOrder order) async {
-    if (await _openSheet(_ChargeOrderSheet(order: order)) != true || !mounted) return;
-    await _deliver(order);
-  }
-
-  Future<void> _deliver(OwnerOrder order) async {
-    final messenger = ScaffoldMessenger.of(context);
-    final repo = ref.read(ownerOrdersRepositoryProvider);
-    final restaurantId = ref.read(ownerRestaurantIdProvider);
-    final ok = await repo.deliverOrder(restaurantId, order.number);
-    if (!mounted) return;
-    _refresh();
-    if (!ok) {
-      final apiErr = AppMode.useMock
-          ? null
-          : ref.read(apiOwnerRepositoryProvider).consumeLastError();
-      showInfoSnackBar(messenger, apiErr ?? 'No se pudo entregar el pedido #${order.number}');
-      return;
-    }
-    showUndoSnackBar(
-      messenger,
-      label: 'Pedido #${order.number} entregado',
-      onUndo: () async {
-        await repo.undoDeliver(restaurantId, order.number);
-        if (mounted) _refresh();
-      },
-    );
-  }
 
   void _back() => context.go('/owner/caja');
 
@@ -239,8 +208,13 @@ class _OrderCard extends StatelessWidget {
           ),
           Icon(Icons.schedule_rounded, size: 15, color: colors.onSurfaceVariant),
           const SizedBox(width: 4),
-          Text(_ago(order.createdAt),
-              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: colors.onSurfaceVariant)),
+          Text(
+            order.estimatedArrivalLabel ??
+                (order.estimatedArrival != null
+                    ? OwnerFormat.time(order.estimatedArrival!)
+                    : _ago(order.createdAt)),
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: colors.onSurfaceVariant),
+          ),
         ]),
         const SizedBox(height: 10),
         Container(
@@ -259,10 +233,18 @@ class _OrderCard extends StatelessWidget {
                 line('Jugo', order.drink!),
               ],
               const TextSpan(text: '\n'),
-              line('Modalidad', order.takeaway ? 'Para llevar' : 'En local'),
-              if (order.estimatedArrival != null) ...[
+              line(
+                'Modalidad',
+                order.takeaway
+                    ? 'Para llevar (+${OwnerFormat.money(Money.fromCents(order.takeawaySurchargeCents))})'
+                    : 'En local',
+              ),
+              if (order.estimatedArrivalLabel != null || order.estimatedArrival != null) ...[
                 const TextSpan(text: '\n'),
-                line('Llegada est.', OwnerFormat.time(order.estimatedArrival!)),
+                line(
+                  'Llegada est.',
+                  order.estimatedArrivalLabel ?? OwnerFormat.time(order.estimatedArrival!),
+                ),
               ],
               const TextSpan(text: '\n'),
               line(
@@ -282,8 +264,10 @@ class _OrderCard extends StatelessWidget {
             Icon(Icons.payments_outlined, size: 18, color: colors.onSurface),
             const SizedBox(width: 6),
             Expanded(
-              child: Text('${OwnerFormat.money(order.amount)} en efectivo',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: colors.onSurface)),
+              child: Text(
+                '${OwnerFormat.money(Money.fromCents(order.effectiveTotalCents))} en efectivo',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: colors.onSurface),
+              ),
             ),
             OwnerSmallButton(label: 'Cobrar y entregar', icon: Icons.check_circle_outline_rounded, onPressed: onAction),
           ])
@@ -381,7 +365,7 @@ class _ChargeOrderSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     final dishes = [_short(order.soup), _short(order.main)].where((d) => d.isNotEmpty).join(' + ');
-    final amount = OwnerFormat.money(order.amount);
+    final amount = OwnerFormat.money(Money.fromCents(order.effectiveTotalCents));
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),

@@ -4,6 +4,7 @@ import '../../../core/contracts/models.dart';
 import '../../../core/contracts/qr_parser.dart';
 import '../../../core/contracts/repositories.dart';
 import '../../../core/demo/demo_store.dart';
+import '../../../core/utils/formatters.dart';
 import '../domain/models/cash_models.dart';
 import '../domain/models/extras_models.dart';
 import '../domain/models/metrics_models.dart';
@@ -298,30 +299,8 @@ class MockOwnerRepository
 
     if (passId.startsWith('ORD:')) {
       final orderNumber = passId.substring(4);
-      final order = _store.preorderByNumber(orderNumber);
-      if (order == null ||
-          order.restaurantId != restaurantId ||
-          !order.isOpen ||
-          _redeemedCodes.contains(passId)) {
-        return false;
-      }
-      _redeemedCodes.add(passId);
-      if (_lastValidatedCodeKey != null) {
-        _redeemedCodes.add(_lastValidatedCodeKey!);
-      }
-      if (order.hasPlan) {
-        if (!order.validated) {
-          final ok = await validateOrder(restaurantId, orderNumber);
-          if (!ok) return false;
-        }
-        order
-          ..status = PreorderStatus.delivered
-          ..deliveredAt = now;
-        _store.changed();
-        return true;
-      } else {
-        return deliverOrder(restaurantId, orderNumber);
-      }
+      final res = await confirmAndRedeemOrder(orderNumber, restaurantId);
+      return res.isValid;
     }
 
     if (passId.startsWith('MESA:')) {
@@ -360,6 +339,10 @@ class MockOwnerRepository
     }
 
     plan.remaining -= 1;
+    if (student.userId == DemoStore.dinerUserId) {
+      final curr = _store.remainingLunchesByRest[student.restaurantId] ?? 0;
+      if (curr > 0) _store.remainingLunchesByRest[student.restaurantId] = curr - 1;
+    }
     final redemption = _Redemption(
       id: _nextId('red'),
       userId: student.userId,
@@ -371,9 +354,9 @@ class MockOwnerRepository
       TransactionItem(
         id: redemption.id,
         customerName: student.name,
-        type: 'Validado',
+        type: 'Canje de plan',
         amount: 0,
-        paymentMethod: 'Plan',
+        paymentMethod: 'Canje de plan (\$0,00)',
         timestamp: now,
       ),
     );
@@ -443,7 +426,9 @@ class MockOwnerRepository
     final now = _clock();
     final today = _todayTransactions(now);
 
-    final redeemed = today.where((t) => t.type == 'Validado').length +
+    final redeemed = today
+            .where((t) => t.type == 'Validado' || t.type == 'Canje de plan')
+            .length +
         today.fold<int>(0, (sum, t) => sum + (_posLunchUnits[t.id] ?? 0));
     final plansSold = today.where((t) => t.type == 'Venta Plan').length;
     final income = today.fold<double>(0, (sum, t) => sum + t.amount);
@@ -794,6 +779,8 @@ class MockOwnerRepository
   @override
   Future<bool> setManualBusy(String restaurantId, {required bool busy}) async {
     await _simulateLatency();
+    _store.occupancyOverrides[restaurantId] = busy ? 'LLENO' : 'LIBRE';
+    _store.changed();
     return true;
   }
 
@@ -896,12 +883,16 @@ class MockOwnerRepository
       for (final o in _openPreorders())
         OwnerOrder(
           number: o.number,
+          restaurantId: o.restaurantId,
           dinerName: o.dinerName,
           soup: o.soup,
           main: o.main,
           takeaway: o.takeaway,
-          amount: o.amount,
+          takeawaySurchargeCents: o.effectiveSurchargeCents,
+          amount: Money.fromCents(o.effectiveTotalCents),
+          totalCents: o.effectiveTotalCents,
           createdAt: o.createdAt,
+          estimatedArrivalLabel: o.estimatedArrivalLabel,
           paidByPlan: o.hasPlan,
           validated: o.validated,
         ),
@@ -910,6 +901,147 @@ class MockOwnerRepository
 
   /// Pedido con plan → (plan y comensal al que se le descontó, id del descuento).
   final Map<String, (String, String, String)> _validatedOrders = {};
+
+  @override
+  Future<ScanResult> confirmAndRedeemOrder(
+    String orderIdOrCode,
+    String activeRestaurantId,
+  ) async {
+    await _simulateLatency();
+    final now = _clock();
+    final cleaned = BocadooQrParser.sanitizeManualInput(orderIdOrCode);
+    final codeKey = cleaned.length == BocadooQrParser.shortCodeLength
+        ? cleaned
+        : orderIdOrCode.trim().toUpperCase();
+
+    final order = _findPreorderByCode(orderIdOrCode) ??
+        _store.preorderByNumber(orderIdOrCode.trim());
+    if (order == null) {
+      return const ScanResult(
+        isValid: false,
+        outcome: 'ROJO',
+        title: 'No encontrado',
+        supportingLine: 'No encontramos esa preorden activa.',
+        actionRequired: 'NINGUNA',
+      );
+    }
+
+    if (order.restaurantId != activeRestaurantId) {
+      return const ScanResult(
+        isValid: false,
+        outcome: 'ROJO',
+        title: 'Es de otro local',
+        supportingLine: 'Este código pertenece a otro restaurante',
+        actionRequired: 'NINGUNA',
+      );
+    }
+
+    final ordKey = 'ORD:${order.number}';
+    if (!order.isOpen ||
+        _redeemedCodes.contains(ordKey) ||
+        _redeemedCodes.contains(codeKey)) {
+      return ScanResult(
+        isValid: false,
+        outcome: 'ROJO',
+        title: 'Ya canjeado',
+        supportingLine: 'Este código ya fue canjeado anteriormente',
+        studentName: order.dinerName,
+        actionRequired: 'NINGUNA',
+      );
+    }
+
+    _redeemedCodes.add(ordKey);
+    _redeemedCodes.add(codeKey);
+    _redeemedCodes.add(
+      BocadooQrParser.generateOrderCode(
+        order.number,
+        orderId: order.number,
+        restaurantId: order.restaurantId,
+      ),
+    );
+
+    if (order.hasPlan) {
+      final student = _studentByName(order.dinerName);
+      final plan = student?.nextRedeemablePlan(now);
+      if (student == null || plan == null) {
+        _redeemedCodes.remove(ordKey);
+        _redeemedCodes.remove(codeKey);
+        return ScanResult(
+          isValid: false,
+          outcome: 'ROJO',
+          title: 'Sin saldo',
+          supportingLine: 'El comensal no tiene almuerzos disponibles en su plan.',
+          studentName: order.dinerName,
+          actionRequired: 'VENDER_PLAN',
+        );
+      }
+      plan.remaining -= 1;
+      if (student.userId == DemoStore.dinerUserId) {
+        final curr = _store.remainingLunchesByRest[order.restaurantId] ?? 0;
+        if (curr > 0) _store.remainingLunchesByRest[order.restaurantId] = curr - 1;
+      }
+      final r = _Redemption(
+        id: _nextId('red'),
+        userId: student.userId,
+        planId: plan.id,
+        timestamp: now,
+      );
+      _redemptions.add(r);
+      _transactions.add(TransactionItem(
+        id: r.id,
+        customerName: 'Pedido #${order.number} · ${order.dinerName}',
+        type: 'Canje de plan',
+        amount: 0,
+        paymentMethod: 'Canje de plan (\$0,00)',
+        timestamp: now,
+      ));
+      order
+        ..validated = true
+        ..status = PreorderStatus.delivered
+        ..deliveredAt = now;
+      _validatedOrders[order.number] = (student.userId, plan.id, r.id);
+      _store.changed();
+      return ScanResult(
+        isValid: true,
+        outcome: 'VERDE',
+        title: 'Preorden #${order.number} canjeada',
+        supportingLine: 'Canje de plan (\$0,00) · -1 almuerzo',
+        studentName: order.dinerName,
+        remainingLunches: plan.remaining,
+        redemptionId: r.id,
+        redeemedAt: now,
+        actionRequired: 'NINGUNA',
+      );
+    }
+
+    final totalCents = order.effectiveTotalCents;
+    final saleId = _nextId('ord');
+    _transactions.add(TransactionItem(
+      id: saleId,
+      customerName: 'Pedido #${order.number} · ${order.dinerName}',
+      type: 'Venta Suelta',
+      amount: Money.fromCents(totalCents),
+      paymentMethod: 'Efectivo',
+      timestamp: now,
+    ));
+    _posLunchUnits[saleId] = 1;
+    _deliveredSales[order.number] = saleId;
+    order
+      ..status = PreorderStatus.delivered
+      ..deliveredAt = now;
+    _store.changed();
+
+    return ScanResult(
+      isValid: true,
+      outcome: 'VERDE',
+      title: 'Preorden #${order.number} cobrada',
+      supportingLine: '${order.soup ?? ''} · ${order.main ?? ''}'.trim(),
+      studentName: order.dinerName,
+      redemptionId: saleId,
+      redeemedAt: now,
+      actionRequired: 'NINGUNA',
+    );
+  }
 
   @override
   Future<bool> validateOrder(String restaurantId, String orderNumber) async {
@@ -921,14 +1053,18 @@ class MockOwnerRepository
     final plan = student?.nextRedeemablePlan(now);
     if (student == null || plan == null) return false;
     plan.remaining -= 1;
+    if (student.userId == DemoStore.dinerUserId) {
+      final curr = _store.remainingLunchesByRest[order.restaurantId] ?? 0;
+      if (curr > 0) _store.remainingLunchesByRest[order.restaurantId] = curr - 1;
+    }
     final r = _Redemption(id: _nextId('red'), userId: student.userId, planId: plan.id, timestamp: now);
     _redemptions.add(r);
     _transactions.add(TransactionItem(
       id: r.id,
       customerName: 'Pedido #$orderNumber · ${order.dinerName}',
-      type: 'Validado',
+      type: 'Canje de plan',
       amount: 0,
-      paymentMethod: 'Plan',
+      paymentMethod: 'Canje de plan (\$0,00)',
       timestamp: now,
     ));
     order.validated = true;
@@ -958,30 +1094,8 @@ class MockOwnerRepository
 
   @override
   Future<bool> deliverOrder(String restaurantId, String orderNumber) async {
-    await _simulateLatency();
-    final order = _store.preorderByNumber(orderNumber);
-    if (order == null || !order.isOpen) return false;
-    // Con plan, primero se valida su QR (descuenta el almuerzo).
-    if (order.hasPlan && !order.validated) return false;
-    final now = _clock();
-    order
-      ..status = PreorderStatus.delivered
-      ..deliveredAt = now;
-    if (!order.hasPlan) {
-      final saleId = _nextId('ord');
-      _transactions.add(TransactionItem(
-        id: saleId,
-        customerName: 'Pedido #$orderNumber · ${order.dinerName}',
-        type: 'Venta Suelta',
-        amount: _round2(order.amount),
-        paymentMethod: 'Efectivo',
-        timestamp: now,
-      ));
-      _posLunchUnits[saleId] = 1;
-      _deliveredSales[orderNumber] = saleId;
-    }
-    _store.changed();
-    return true;
+    final res = await confirmAndRedeemOrder(orderNumber, restaurantId);
+    return res.isValid;
   }
 
   @override

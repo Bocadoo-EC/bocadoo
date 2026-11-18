@@ -150,6 +150,13 @@ abstract class IOwnerOrdersRepository {
   Future<bool> deliverOrder(String restaurantId, String orderNumber);
 
   Future<bool> undoDeliver(String restaurantId, String orderNumber);
+
+  /// Disparador transaccional único (escáner QR, código de 6 chars o botón
+  /// "Cobrar y entregar") con validación de pertenencia al local e idempotencia.
+  Future<ScanResult> confirmAndRedeemOrder(
+    String orderIdOrCode,
+    String activeRestaurantId,
+  );
 }
 
 /// O5 · Mesas con amigos por cobrar desde caja.

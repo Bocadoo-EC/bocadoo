@@ -44,6 +44,7 @@ class ApiCustomerRepository implements ICustomerRepository {
   final Map<String, PlanTemplate> _planCache = {};
   final Map<String, List<String>> _planIncludesByName = {};
   final Map<String, String> _orderIdByNumber = {};
+  final Map<String, String> _estimatedArrivalByOrderNumber = {};
 
   List<Map<String, dynamic>>? _sellosCache;
   DateTime? _sellosCacheAt;
@@ -299,7 +300,7 @@ class ApiCustomerRepository implements ICustomerRepository {
       if (a.hasLocation != b.hasLocation) {
         return a.hasLocation ? -1 : 1;
       }
-      return a.distanceKm.compareTo(b.distanceKm);
+      return a.resolvedMeters.compareTo(b.resolvedMeters);
     });
 
     if (category != null && category.isNotEmpty && category != 'Todos') {
@@ -511,6 +512,7 @@ class ApiCustomerRepository implements ICustomerRepository {
     String? breakfastId,
     String? offerId,
     required bool takeaway,
+    String? estimatedArrival,
   }) async {
     final platos = <String>[
       if (soupId != null && soupId.isNotEmpty) soupId,
@@ -550,7 +552,32 @@ class ApiCustomerRepository implements ICustomerRepository {
       ),
     );
     _idempotency.done(intent);
-    final order = _mapPedidoToActiveOrder(res ?? const {});
+    final mapped = _mapPedidoToActiveOrder(res ?? const {});
+    final eta = estimatedArrival ?? mapped.estimatedArrivalLabel ?? 'En 15 min';
+    if (mapped.orderNumber.isNotEmpty) {
+      _estimatedArrivalByOrderNumber[mapped.orderNumber] = eta;
+    }
+    final order = ActiveOrder(
+      id: mapped.id,
+      restaurantId: mapped.restaurantId ?? restaurantId,
+      orderNumber: mapped.orderNumber,
+      status: mapped.status,
+      restaurantName: mapped.restaurantName,
+      qrPayload: mapped.qrPayload,
+      detail: mapped.detail,
+      soup: mapped.soup,
+      main: mapped.main,
+      takeaway: mapped.takeaway,
+      takeawaySurcharge: mapped.takeawaySurcharge,
+      singleLunchPrice: mapped.singleLunchPrice,
+      basePriceCents: mapped.basePriceCents,
+      takeawaySurchargeCents: mapped.takeawaySurchargeCents,
+      totalCents: mapped.totalCents,
+      estimatedArrivalLabel: eta,
+      hasPlan: mapped.hasPlan,
+      expiresAt: mapped.expiresAt,
+      paidAmount: mapped.paidAmount,
+    );
     eventsService.track(
       'comensal.preorden_creada',
       restaurantId: restaurantId,
@@ -1089,20 +1116,23 @@ class ApiCustomerRepository implements ICustomerRepository {
   }
 
   Future<LatLng?> _resolveUserPosition() async {
-    if (_positionResolved) return _cachedUserPosition;
+    if (_positionResolved && _cachedUserPosition != null) {
+      return _cachedUserPosition;
+    }
     _positionResolved = true;
 
     final savedLat = await _profileStore.getLat();
     final savedLng = await _profileStore.getLng();
-    if (savedLat != null && savedLng != null) {
-      _cachedUserPosition = LatLng(savedLat, savedLng);
-      return _cachedUserPosition;
+    if (LocationService.isValidCoordinate(savedLat, savedLng)) {
+      final saved = LatLng(savedLat!, savedLng!);
+      if (LocationService.meters(saved, LocationService.fallbackPuce) <= 1000000) {
+        _cachedUserPosition = saved;
+        return _cachedUserPosition;
+      }
     }
 
-    final (outcome, current) = await LocationService.current();
-    if (outcome == LocationOutcome.granted && current != null) {
-      _cachedUserPosition = current;
-    }
+    final (_, current) = await LocationService.resolveWithFallback();
+    _cachedUserPosition = current;
     return _cachedUserPosition;
   }
 
@@ -1117,9 +1147,15 @@ class ApiCustomerRepository implements ICustomerRepository {
     }
 
     final prev = _restaurantCache[id];
-    final lat = _asDouble(json['latitud']);
-    final lng = _asDouble(json['longitud']);
-    final distanceKm = _computeDistanceKm(userPos, lat, lng);
+    final rawLat = _asDouble(json['latitud']);
+    final rawLng = _asDouble(json['longitud']);
+    final validRestCoords = LocationService.isValidCoordinate(rawLat, rawLng);
+    final lat = validRestCoords ? rawLat : null;
+    final lng = validRestCoords ? rawLng : null;
+    final distanceMeters = _computeDistanceMeters(userPos, lat, lng);
+    final distanceKm = distanceMeters != null
+        ? (distanceMeters / 100.0).round() / 10.0
+        : 99.0;
 
     final tags = _asStringList(json['etiquetas']);
     final categories = <String>{
@@ -1141,6 +1177,7 @@ class ApiCustomerRepository implements ICustomerRepository {
       address: (json['direccion'] ?? '').toString(),
       zone: (zona['nombre'] ?? '').toString(),
       distanceKm: distanceKm,
+      distanceMeters: distanceMeters,
       imageUrl: logoUrl ?? '',
       logoUrl: logoUrl,
       singleLunchPrice: singlePrice,
@@ -1272,6 +1309,7 @@ class ApiCustomerRepository implements ICustomerRepository {
       zone: base.zone,
       rating: base.rating,
       distanceKm: base.distanceKm,
+      distanceMeters: base.distanceMeters,
       imageUrl: base.imageUrl,
       logoUrl: base.logoUrl,
       singleLunchPrice: base.singleLunchPrice,
@@ -1342,33 +1380,54 @@ class ApiCustomerRepository implements ICustomerRepository {
       _ => 'PREPARANDO',
     };
 
-    final recargoCents = _asInt(json['recargoLlevarCentavos']) ?? 0;
-    final almuerzoPriceCents = _asInt(almuerzo?['precioCentavos']) ?? 0;
-    final totalCents = _asInt(json['totalCentavos']) ?? 0;
+    final takeaway = json['paraLlevar'] == true;
+    final hasPlan = almuerzo?['cubiertoPorPlan'] == true;
+    final recargoCents = _asInt(json['recargoLlevarCentavos']) ??
+        Money.toCents(cachedRest?.takeawaySurcharge ?? 0.25);
+    final rawBaseCents = _asInt(almuerzo?['precioCentavos']) ?? 0;
+    final baseCents = rawBaseCents > 0
+        ? rawBaseCents
+        : Money.toCents(cachedRest?.singleLunchPrice ?? 3.00);
+    final rawTotalCents = _asInt(json['totalCentavos']) ?? 0;
+    final expectedNoPlanCents =
+        baseCents + (takeaway ? recargoCents : 0);
+    final resolvedTotalCents = hasPlan
+        ? 0
+        : (rawTotalCents >= expectedNoPlanCents
+            ? rawTotalCents
+            : expectedNoPlanCents);
+
+    final orderNum = numero.isEmpty ? id : numero;
+    final rawEta = json['horaEstimada'] ?? json['horaLlegada'];
+    final etaDt = rawEta != null ? DateTime.tryParse(rawEta.toString()) : null;
+    final etaLabel = _estimatedArrivalByOrderNumber[orderNum] ??
+        (etaDt != null ? _formatEcuadorTime(etaDt) : null);
 
     return ActiveOrder(
       id: id.isEmpty ? null : id,
-      orderNumber: numero.isEmpty ? id : numero,
+      restaurantId: restId.isEmpty ? null : restId,
+      orderNumber: orderNum,
       status: status,
       restaurantName: (rest['nombre'] ?? '').toString(),
       qrPayload: BocadooQrParser.generateOrderCode(
-        numero.isEmpty ? id : numero,
+        orderNum,
         orderId: id.isEmpty ? null : id,
-        restaurantId: (rest['id'] ?? '').toString(),
+        restaurantId: restId,
       ),
       detail: parts.join(' · '),
       soup: soup,
       main: main,
-      takeaway: json['paraLlevar'] == true,
-      takeawaySurcharge: recargoCents > 0
-          ? Money.fromCents(recargoCents)
-          : (cachedRest?.takeawaySurcharge ?? 0.25),
-      singleLunchPrice: almuerzoPriceCents > 0
-          ? Money.fromCents(almuerzoPriceCents)
-          : (cachedRest?.singleLunchPrice ?? 3.00),
-      hasPlan: almuerzo?['cubiertoPorPlan'] == true,
+      takeaway: takeaway,
+      takeawaySurcharge: Money.fromCents(recargoCents),
+      singleLunchPrice: Money.fromCents(baseCents),
+      basePriceCents: baseCents,
+      takeawaySurchargeCents: recargoCents,
+      totalCents: resolvedTotalCents,
+      estimatedArrivalLabel: etaLabel,
+      hasPlan: hasPlan,
       expiresAt: DateTime.tryParse((json['venceEn'] ?? '').toString()),
-      paidAmount: status == 'ENTREGADO' ? Money.fromCents(totalCents) : null,
+      paidAmount:
+          status == 'ENTREGADO' ? Money.fromCents(resolvedTotalCents) : null,
     );
   }
 
@@ -1438,11 +1497,10 @@ class ApiCustomerRepository implements ICustomerRepository {
     return DateTime.tryParse('${ymd.trim()}T23:59:59-05:00');
   }
 
-  double _computeDistanceKm(LatLng? userPos, double? lat, double? lng) {
-    if (lat == null || lng == null) return 99.0;
-    if (userPos == null) return 0.5;
-    final meters = LocationService.meters(userPos, LatLng(lat, lng));
-    return (meters / 100.0).round() / 10.0;
+  int? _computeDistanceMeters(LatLng? userPos, double? lat, double? lng) {
+    if (!LocationService.isValidCoordinate(lat, lng)) return null;
+    final origin = userPos ?? LocationService.fallbackPuce;
+    return LocationService.meters(origin, LatLng(lat!, lng!));
   }
 
   String _mapOccupancy(String? nivel) => switch (nivel) {

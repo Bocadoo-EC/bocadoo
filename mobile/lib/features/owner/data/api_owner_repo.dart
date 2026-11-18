@@ -259,16 +259,36 @@ class ApiOwnerRepository
 
     final estado = (json['estado'] ?? '').toString().toUpperCase();
     final paidByPlan = almuerzo?['cubiertoPorPlan'] == true;
+    final takeaway = json['paraLlevar'] == true;
     final number = _asInt(json['numero']).toString();
     final id = (json['id'] ?? '').toString();
-    final amount = Money.fromCents(_asInt(json['totalCentavos']));
+    final rest = json['restaurante'] is Map ? json['restaurante'] as Map : null;
+    final orderRestId =
+        (rest?['id'] ?? json['restauranteId'] ?? _session.activeRestaurantId ?? '')
+            .toString();
+
+    final baseCents = _asInt(almuerzo?['precioCentavos']);
+    final recargoCents = takeaway
+        ? (_asInt(json['recargoLlevarCentavos']) > 0
+            ? _asInt(json['recargoLlevarCentavos'])
+            : 25)
+        : 0;
+    final rawTotalCents = _asInt(json['totalCentavos']);
+    final resolvedTotalCents = paidByPlan
+        ? 0
+        : (takeaway && baseCents > 0 && rawTotalCents <= baseCents
+            ? baseCents + recargoCents
+            : (rawTotalCents > 0
+                ? rawTotalCents
+                : (baseCents > 0 ? baseCents + recargoCents : 0)));
+    final amount = Money.fromCents(resolvedTotalCents);
     final validated = estado == 'CANJEADA';
 
     if (id.isNotEmpty && number.isNotEmpty) {
       BocadooQrParser.generateOrderCode(
         number,
         orderId: id,
-        restaurantId: _session.activeRestaurantId,
+        restaurantId: orderRestId,
       );
       final prev = _ordersByNumber[number];
       _ordersByNumber[number] = _OrderCacheEntry(
@@ -287,15 +307,18 @@ class ApiOwnerRepository
 
     return OwnerOrder(
       id: id.isEmpty ? null : id,
+      restaurantId: orderRestId.isEmpty ? null : orderRestId,
       number: number,
       dinerName: dinerName,
       amount: amount,
+      totalCents: resolvedTotalCents,
       createdAt: _parseDateTime(json['creadoEn']),
       soup: soup,
       main: mainDish,
       drink: drink,
       estimatedArrival: estimatedArrival,
-      takeaway: json['paraLlevar'] == true,
+      takeaway: takeaway,
+      takeawaySurchargeCents: recargoCents > 0 ? recargoCents : 25,
       paidByPlan: paidByPlan,
       validated: validated,
     );
@@ -416,79 +439,15 @@ class ApiOwnerRepository
     // Preorden activa (6 caracteres, BCD-ORD-, #N o UUID).
     final order = await _findOrderByAnyCode(rawPayload, restaurantId);
     if (order != null) {
-      final ordKey = 'ORD:${order.number}';
-      if (_redeemedCodes.contains(ordKey)) {
-        return ScanResult(
-          isValid: false,
-          outcome: 'ROJO',
-          title: 'Ya canjeado',
-          supportingLine: 'Este código ya fue canjeado anteriormente',
-          studentName: order.dinerName,
-          actionRequired: 'NINGUNA',
-        );
-      }
-      if (order.paidByPlan && !order.validated) {
-        final okVal = await validateOrder(restaurantId, order.number);
-        if (!okVal) {
-          return ScanResult(
-            isValid: false,
-            outcome: 'ROJO',
-            title: 'No se pudo canjear',
-            supportingLine:
-                _lastError ?? 'No se pudo validar el plan de la preorden.',
-            studentName: order.dinerName,
-            actionRequired: 'NINGUNA',
-          );
-        }
-      }
-      final entry = _ordersByNumber[order.number] ??
-          _OrderCacheEntry(
-            id: order.id ?? order.number,
-            number: order.number,
-            paidByPlan: order.paidByPlan,
-            validated: order.validated,
-            amount: order.amount,
-          );
-      try {
-        await _commitDeliverOrder(entry);
-      } catch (e) {
-        return ScanResult(
-          isValid: false,
-          outcome: 'ROJO',
-          title: 'No se pudo completar',
-          supportingLine:
-              _lastError ?? 'No se pudo marcar el pedido como entregado.',
-          studentName: order.dinerName,
-          actionRequired: 'NINGUNA',
-        );
-      }
-      _redeemedCodes.add(ordKey);
-      _redeemedCodes.add(codeKey);
-      _sessionValidatedTransactions.insert(
-        0,
-        TransactionItem(
-          id: 'ord-${order.number}-${DateTime.now().millisecondsSinceEpoch}',
-          customerName: order.dinerName,
-          type: order.paidByPlan ? 'Validado' : 'Pedido #${order.number}',
-          amount: order.paidByPlan ? 0 : order.amount,
-          paymentMethod: order.paidByPlan ? 'Plan' : 'Efectivo',
-          timestamp: DateTime.now(),
-        ),
+      final result = await confirmAndRedeemOrder(
+        order.number,
+        restaurantId,
+        rawCodeKey: codeKey,
       );
-      final dishSummary = [
-        if (order.soup != null && order.soup!.isNotEmpty) order.soup!,
-        if (order.main != null && order.main!.isNotEmpty) order.main!,
-      ].join(' · ');
-      return ScanResult(
-        isValid: true,
-        outcome: 'VERDE',
-        title: 'Preorden #${order.number} registrada',
-        supportingLine:
-            dishSummary.isNotEmpty ? dishSummary : 'Pedido completado',
-        studentName: order.dinerName,
-        passId: ordKey,
-        actionRequired: 'NINGUNA',
-      );
+      if (!result.isValid && result.supportingLine.isNotEmpty) {
+        _lastError = result.supportingLine;
+      }
+      return result;
     }
 
     // Mesa activa (6 caracteres o BCD-MESA-).
@@ -598,9 +557,9 @@ class ApiOwnerRepository
           TransactionItem(
             id: passId,
             customerName: clienteNombre ?? 'Comensal',
-            type: 'Validado',
+            type: 'Canje de plan',
             amount: 0,
-            paymentMethod: 'Plan',
+            paymentMethod: 'Canje de plan (\$0,00)',
             timestamp: redeemedAt ?? DateTime.now(),
           ),
         );
@@ -895,20 +854,24 @@ class ApiOwnerRepository
       out.add(
         TransactionItem(
           id: (p['id'] ?? '').toString(),
-          customerName: name,
-          type: paidByPlan && totalCents == 0 ? 'Validado' : 'Pedido #$numero',
-          amount: Money.fromCents(totalCents),
-          paymentMethod: paidByPlan && totalCents == 0 ? 'Plan' : 'Efectivo',
+          customerName: 'Pedido #$numero · $name',
+          type: paidByPlan && totalCents == 0 ? 'Canje de plan' : 'Pedido #$numero',
+          amount: Money.fromCents(paidByPlan ? 0 : totalCents),
+          paymentMethod:
+              paidByPlan && totalCents == 0 ? 'Canje de plan (\$0,00)' : 'Efectivo',
           timestamp: _parseDateTime(p['servidoEn'] ?? p['creadoEn']),
         ),
       );
+      ventaOrderRefs.add('Pedido #$numero');
     }
 
     final existingIds = out.map((e) => e.id).toSet();
     for (final tx in _sessionValidatedTransactions) {
-      if (!existingIds.contains(tx.id)) {
-        out.add(tx);
+      if (existingIds.contains(tx.id)) continue;
+      if (tx.type.startsWith('Pedido #') && ventaOrderRefs.contains(tx.type)) {
+        continue;
       }
+      out.add(tx);
     }
 
     out.sort((a, b) => b.timestamp.compareTo(a.timestamp));
@@ -1628,6 +1591,201 @@ class ApiOwnerRepository
     return _ordersByNumber[orderNumber];
   }
 
+  final Set<String> _inFlightOrders = <String>{};
+
+  @override
+  Future<ScanResult> confirmAndRedeemOrder(
+    String orderIdOrCode,
+    String activeRestaurantId, {
+    String? rawCodeKey,
+  }) async {
+    _lastError = null;
+    final cleaned = BocadooQrParser.sanitizeManualInput(orderIdOrCode);
+    final codeKey = rawCodeKey ??
+        (cleaned.length == BocadooQrParser.shortCodeLength
+            ? cleaned
+            : orderIdOrCode.trim().toUpperCase());
+
+    final codeRestId = BocadooQrParser.restaurantForCode(orderIdOrCode);
+    if (codeRestId != null &&
+        codeRestId.isNotEmpty &&
+        activeRestaurantId.isNotEmpty &&
+        codeRestId != activeRestaurantId) {
+      return const ScanResult(
+        isValid: false,
+        outcome: 'ROJO',
+        title: 'Es de otro local',
+        supportingLine: 'Este código pertenece a otro restaurante',
+        actionRequired: 'NINGUNA',
+      );
+    }
+
+    if (_redeemedCodes.contains(codeKey)) {
+      return const ScanResult(
+        isValid: false,
+        outcome: 'ROJO',
+        title: 'Ya canjeado',
+        supportingLine: 'Este código ya fue canjeado anteriormente',
+        actionRequired: 'NINGUNA',
+      );
+    }
+
+    var order = await _findOrderByAnyCode(orderIdOrCode, activeRestaurantId);
+    order ??= await resolveOrderByNumber(orderIdOrCode.trim());
+    if (order == null) {
+      // Comprobar si la orden ya fue completada (SERVIDA) hoy para idempotencia.
+      try {
+        final servidas = await guard(
+          () => _api.getList(
+            '${ApiConfig.v1}/caja/pedidos',
+            query: {'estado': 'SERVIDA'},
+            restaurant: true,
+          ),
+        );
+        final numTarget = BocadooQrParser.resolveOrderNumber(orderIdOrCode) ??
+            orderIdOrCode.replaceAll('#', '').trim();
+        for (final raw in servidas.whereType<Map>()) {
+          final rawNum = _asInt(raw['numero']).toString();
+          final rawId = (raw['id'] ?? '').toString();
+          final genCode = BocadooQrParser.generateOrderCode(
+            rawNum,
+            orderId: rawId,
+            restaurantId: activeRestaurantId,
+          );
+          if (rawNum == numTarget ||
+              rawId == orderIdOrCode.trim() ||
+              (cleaned.length == BocadooQrParser.shortCodeLength &&
+                  genCode == cleaned)) {
+            _redeemedCodes.add('ORD:$rawNum');
+            _redeemedCodes.add(codeKey);
+            return const ScanResult(
+              isValid: false,
+              outcome: 'ROJO',
+              title: 'Ya canjeado',
+              supportingLine: 'Este código ya fue canjeado anteriormente',
+              actionRequired: 'NINGUNA',
+            );
+          }
+        }
+      } catch (_) {}
+
+      return const ScanResult(
+        isValid: false,
+        outcome: 'ROJO',
+        title: 'No encontrado',
+        supportingLine: 'No encontramos esa preorden activa.',
+        actionRequired: 'NINGUNA',
+      );
+    }
+
+    if (order.restaurantId != null &&
+        order.restaurantId!.isNotEmpty &&
+        activeRestaurantId.isNotEmpty &&
+        order.restaurantId != activeRestaurantId) {
+      return const ScanResult(
+        isValid: false,
+        outcome: 'ROJO',
+        title: 'Es de otro local',
+        supportingLine: 'Este código pertenece a otro restaurante',
+        actionRequired: 'NINGUNA',
+      );
+    }
+
+    final ordKey = 'ORD:${order.number}';
+    if (_redeemedCodes.contains(ordKey) ||
+        _inFlightOrders.contains(order.number)) {
+      return ScanResult(
+        isValid: false,
+        outcome: 'ROJO',
+        title: 'Ya canjeado',
+        supportingLine: 'Este código ya fue canjeado anteriormente',
+        studentName: order.dinerName,
+        actionRequired: 'NINGUNA',
+      );
+    }
+
+    _inFlightOrders.add(order.number);
+    try {
+      if (order.paidByPlan && !order.validated) {
+        final okVal = await validateOrder(activeRestaurantId, order.number);
+        if (!okVal) {
+          return ScanResult(
+            isValid: false,
+            outcome: 'ROJO',
+            title: 'No se pudo canjear',
+            supportingLine:
+                _lastError ?? 'No se pudo validar el plan de la preorden.',
+            studentName: order.dinerName,
+            actionRequired: 'NINGUNA',
+          );
+        }
+      }
+
+      final entry = _ordersByNumber[order.number] ??
+          _OrderCacheEntry(
+            id: order.id ?? order.number,
+            number: order.number,
+            paidByPlan: order.paidByPlan,
+            validated: order.validated,
+            amount: Money.fromCents(order.effectiveTotalCents),
+          );
+
+      await _commitDeliverOrder(entry);
+      if (_lastError != null && _lastError!.isNotEmpty) {
+        return ScanResult(
+          isValid: false,
+          outcome: 'ROJO',
+          title: 'No se pudo completar',
+          supportingLine: _lastError!,
+          studentName: order.dinerName,
+          actionRequired: 'NINGUNA',
+        );
+      }
+
+      _redeemedCodes.add(ordKey);
+      _redeemedCodes.add(codeKey);
+      _redeemedCodes.add(
+        BocadooQrParser.generateOrderCode(
+          order.number,
+          orderId: order.id,
+          restaurantId: activeRestaurantId,
+        ),
+      );
+      _sessionValidatedTransactions.insert(
+        0,
+        TransactionItem(
+          id: 'ord-${order.number}-${DateTime.now().millisecondsSinceEpoch}',
+          customerName: 'Pedido #${order.number} · ${order.dinerName}',
+          type: order.paidByPlan ? 'Canje de plan' : 'Pedido #${order.number}',
+          amount: order.paidByPlan ? 0 : Money.fromCents(order.effectiveTotalCents),
+          paymentMethod: order.paidByPlan ? 'Canje de plan (\$0,00)' : 'Efectivo',
+          timestamp: DateTime.now(),
+        ),
+      );
+
+      final dishSummary = [
+        if (order.soup != null && order.soup!.isNotEmpty) order.soup!,
+        if (order.main != null && order.main!.isNotEmpty) order.main!,
+      ].join(' · ');
+
+      return ScanResult(
+        isValid: true,
+        outcome: 'VERDE',
+        title: order.paidByPlan
+            ? 'Preorden #${order.number} canjeada'
+            : 'Preorden #${order.number} cobrada',
+        supportingLine: order.paidByPlan
+            ? 'Canje de plan (\$0,00) · $dishSummary'
+            : (dishSummary.isNotEmpty ? dishSummary : 'Pedido completado'),
+        studentName: order.dinerName,
+        passId: ordKey,
+        actionRequired: 'NINGUNA',
+      );
+    } finally {
+      _inFlightOrders.remove(order.number);
+    }
+  }
+
   @override
   Future<bool> validateOrder(String restaurantId, String orderNumber) async {
     _lastError = null;
@@ -1761,15 +1919,16 @@ class ApiOwnerRepository
                   idempotencyKey: ik,
                 ).then((v) => v ?? <String, dynamic>{}),
           );
-          porCobrarCents = _asInt(
-            canje['porCobrarCentavos'],
-            Money.toCents(entry.amount),
-          );
+          final localCents = entry.paidByPlan ? 0 : Money.toCents(entry.amount);
+          final remoteCents = _asInt(canje['porCobrarCentavos'], localCents);
+          porCobrarCents = entry.paidByPlan
+              ? remoteCents
+              : (localCents > remoteCents ? localCents : remoteCents);
         } finally {
           _idempotency.done(intent);
         }
       } else {
-        porCobrarCents = Money.toCents(entry.amount);
+        porCobrarCents = entry.paidByPlan ? 0 : Money.toCents(entry.amount);
       }
 
       await guard(

@@ -8,7 +8,7 @@ import '../../../core/contracts/models.dart';
 import '../../../core/contracts/qr_parser.dart';
 import '../../../core/theme/app_theme.dart';
 import 'customer_controller.dart';
-import 'customer_widgets.dart' show formatMoney;
+import 'customer_widgets.dart' show formatCents, formatMoney;
 import 'social_widgets.dart';
 
 /// C8 · Estado del pedido: QR de la preorden y cómo se valida en caja.
@@ -136,12 +136,21 @@ class _OrderStatusSheetState extends ConsumerState<OrderStatusSheet> {
                 Expanded(
                   child: Text(
                     order.takeaway
-                        ? 'Modalidad: Para llevar (+ ${formatMoney(order.takeawaySurcharge)})'
+                        ? 'Modalidad: Para llevar (+ ${formatCents(order.effectiveSurchargeCents)})'
                         : 'Modalidad: Para comer en el local',
                     style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: colors.onSurfaceVariant),
                   ),
                 ),
               ]),
+              const SizedBox(height: 4),
+              if (order.estimatedArrivalLabel != null && order.estimatedArrivalLabel!.isNotEmpty)
+                _Line(label: 'Hora estimada:', value: order.estimatedArrivalLabel!),
+              _Line(
+                label: 'Total en caja:',
+                value: order.hasPlan
+                    ? 'Cubierto por tu plan (\$0,00)'
+                    : '${formatCents(order.effectiveTotalCents)} en efectivo',
+              ),
             ]),
           ),
         ]),

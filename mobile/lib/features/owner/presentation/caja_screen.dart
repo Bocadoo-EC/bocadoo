@@ -516,15 +516,19 @@ class _ChargeRow extends StatelessWidget {
       child: Row(children: [
         Expanded(
           child: Text(
-            '${item.customerName} · ${item.paymentMethod}',
+            item.amount > 0
+                ? '${item.customerName} · ${item.paymentMethod}'
+                : item.customerName,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: colors.onSurface),
           ),
         ),
         const SizedBox(width: 8),
-        Text(item.amount > 0 ? OwnerFormat.money(item.amount) : 'Plan',
-            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: colors.onSurface)),
+        Text(
+          item.amount > 0 ? OwnerFormat.money(item.amount) : 'Canje de plan (\$0,00)',
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: colors.onSurface),
+        ),
       ]),
     );
   }

@@ -123,6 +123,7 @@ class Restaurant {
   final String zone;
   final double rating;
   final double distanceKm;
+  final int? distanceMeters;
   final String imageUrl;
   final String? logoUrl;
   final double singleLunchPrice;
@@ -155,6 +156,7 @@ class Restaurant {
     this.zone = '',
     this.rating = 4.5,
     this.distanceKm = 0.5,
+    this.distanceMeters,
     required this.imageUrl,
     this.logoUrl,
     required this.singleLunchPrice,
@@ -176,11 +178,22 @@ class Restaurant {
     this.slug,
   });
 
-  bool get hasLocation => latitude != null && longitude != null;
+  bool get hasLocation =>
+      latitude != null &&
+      longitude != null &&
+      !(latitude!.abs() < 0.0001 && longitude!.abs() < 0.0001);
 
-  int get walkingMinutes {
-    final minutes = (distanceKm * 12).round();
-    return minutes < 2 ? 2 : minutes;
+  int get resolvedMeters => distanceMeters ?? (distanceKm * 1000).round();
+
+  int get walkingMinutes => (resolvedMeters / 80).round().clamp(1, 9999);
+
+  String get formattedDistance {
+    final m = resolvedMeters;
+    final mins = walkingMinutes;
+    if (m < 1000) {
+      return '$m m · $mins min a pie';
+    }
+    return '${(m / 1000).toStringAsFixed(1)} km · $mins min a pie';
   }
 
   List<MenuItem> get soups =>
@@ -201,6 +214,7 @@ class Restaurant {
     String? zone,
     double? rating,
     double? distanceKm,
+    int? distanceMeters,
     String? imageUrl,
     String? logoUrl,
     double? singleLunchPrice,
@@ -219,6 +233,7 @@ class Restaurant {
       zone: zone ?? this.zone,
       rating: rating ?? this.rating,
       distanceKm: distanceKm ?? this.distanceKm,
+      distanceMeters: distanceMeters ?? this.distanceMeters,
       imageUrl: imageUrl ?? this.imageUrl,
       logoUrl: logoUrl ?? this.logoUrl,
       singleLunchPrice: singleLunchPrice ?? this.singleLunchPrice,
@@ -338,6 +353,7 @@ class ActiveTable {
 @immutable
 class ActiveOrder {
   final String? id;
+  final String? restaurantId;
   final String orderNumber;
   final String status; // PREPARANDO, LISTO, ENTREGADO
   final String restaurantName;
@@ -348,6 +364,10 @@ class ActiveOrder {
   final bool takeaway;
   final double takeawaySurcharge;
   final double singleLunchPrice;
+  final int basePriceCents;
+  final int takeawaySurchargeCents;
+  final int totalCents;
+  final String? estimatedArrivalLabel;
   final bool hasPlan;
 
   /// Hasta cuándo se guarda la preorden (cuenta regresiva de C8).
@@ -358,8 +378,24 @@ class ActiveOrder {
 
   bool get isDelivered => status == 'ENTREGADO';
 
+  int get effectiveBaseCents =>
+      basePriceCents > 0 ? basePriceCents : (singleLunchPrice * 100).round();
+
+  int get effectiveSurchargeCents => takeaway
+      ? (takeawaySurchargeCents > 0
+          ? takeawaySurchargeCents
+          : (takeawaySurcharge * 100).round())
+      : 0;
+
+  int get effectiveTotalCents {
+    if (hasPlan) return 0;
+    if (totalCents > 0) return totalCents;
+    return effectiveBaseCents + effectiveSurchargeCents;
+  }
+
   const ActiveOrder({
     this.id,
+    this.restaurantId,
     required this.orderNumber,
     required this.restaurantName,
     required this.qrPayload,
@@ -370,6 +406,10 @@ class ActiveOrder {
     this.takeaway = false,
     this.takeawaySurcharge = 0.25,
     this.singleLunchPrice = 3.00,
+    this.basePriceCents = 0,
+    this.takeawaySurchargeCents = 0,
+    this.totalCents = 0,
+    this.estimatedArrivalLabel,
     this.hasPlan = false,
     this.expiresAt,
     this.paidAmount,

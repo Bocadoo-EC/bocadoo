@@ -52,10 +52,13 @@ class _PaseScreenState extends ConsumerState<PaseScreen> {
       listenable: controller,
       builder: (context, _) {
         final s = controller.state;
+        final hasActiveOrder = s.activeOrder != null;
+        final isSingleActiveOrder =
+            hasActiveOrder && !s.activeOrder!.hasPlan && !s.activeOrder!.isDelivered;
+        final activePasses =
+            s.passes.where((p) => p.remainingLunches > 0).toList();
         final hasAnyPassOrLive =
-            s.passes.isNotEmpty ||
-            s.activeOrder != null ||
-            s.activeTable != null;
+            s.passes.isNotEmpty || hasActiveOrder || s.activeTable != null;
         if (!hasAnyPassOrLive &&
             (s.isLoading || s.status == CustomerStatus.initial)) {
           return const _PaseSkeleton();
@@ -72,40 +75,47 @@ class _PaseScreenState extends ConsumerState<PaseScreen> {
           onRefresh: () => controller.loadDashboard(silent: true),
           child: SingleChildScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.only(bottom: 96),
+            padding: EdgeInsets.fromLTRB(
+              16,
+              MediaQuery.paddingOf(context).top + 12,
+              16,
+              96,
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _Hero(state: s, controller: controller),
-                Transform.translate(
-                  offset: const Offset(0, -48),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        _QrCard(state: s, controller: controller),
-                        if (shouldShowFeedback(
-                          s.pendingFeedback,
-                          DateTime.now(),
-                        )) ...[
-                          const SizedBox(height: 16),
-                          FeedbackCard(controller: controller),
-                        ],
-                        if (stampRestaurantId != null)
-                          if (s.stampCards[stampRestaurantId]
-                              case final card?) ...[
-                            const SizedBox(height: 16),
-                            _StampSection(card: card, controller: controller),
-                          ],
-                        const SizedBox(height: 16),
-                        _TableButton(hasTable: s.activeTable != null),
-                        const SizedBox(height: 20),
-                        _RecentActivity(items: s.recentActivity),
-                      ],
-                    ),
+                _WalletTopBar(state: s),
+                if (s.consumptionNotice != null) ...[
+                  const SizedBox(height: 10),
+                  _ConsumptionConfirmedBanner(
+                    message: s.consumptionNotice!,
+                    onDismiss: controller.clearConsumptionNotice,
                   ),
+                ],
+                const SizedBox(height: 14),
+                _WalletDeck(
+                  state: s,
+                  controller: controller,
+                  activePasses: activePasses,
+                  showYellowDiscover: !isSingleActiveOrder,
                 ),
+                if (shouldShowFeedback(
+                  s.pendingFeedback,
+                  DateTime.now(),
+                )) ...[
+                  const SizedBox(height: 16),
+                  FeedbackCard(controller: controller),
+                ],
+                if (stampRestaurantId != null)
+                  if (s.stampCards[stampRestaurantId]
+                      case final card?) ...[
+                    const SizedBox(height: 16),
+                    _StampSection(card: card, controller: controller),
+                  ],
+                const SizedBox(height: 16),
+                _TableButton(hasTable: s.activeTable != null),
+                const SizedBox(height: 20),
+                _RecentActivity(items: s.recentActivity),
               ],
             ),
           ),
@@ -115,329 +125,802 @@ class _PaseScreenState extends ConsumerState<PaseScreen> {
   }
 }
 
-String _modeLabel(QrMode mode, CustomerUiState s) => switch (mode) {
-  QrMode.plan => 'Mi plan',
-  QrMode.preorden => 'Preorden #${s.activeOrder?.orderNumber ?? ''}',
-  QrMode.mesa => 'Mesa ${s.activeTable?.time ?? ''}',
-};
+void _showZoomedQr(BuildContext context, String value, String label, {String? restaurantId}) {
+  final colors = context.colorScheme;
+  final shortCode = BocadooQrParser.toShortCode(value, restaurantId: restaurantId);
+  showGeneralDialog<void>(
+    context: context,
+    barrierDismissible: true,
+    barrierLabel: 'Cerrar QR ampliado',
+    pageBuilder: (ctx, _, _) => GestureDetector(
+      onTap: () => Navigator.of(ctx).pop(),
+      child: Material(
+        color: colors.surface,
+        child: SafeArea(
+          child: Stack(
+            children: [
+              Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      label.toUpperCase(),
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 0.8,
+                        color: colors.primary,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(20),
+                      decoration: BoxDecoration(
+                        color: ctx.bocadooColors.qrBackground,
+                        borderRadius: BorderRadius.circular(28),
+                        border: Border.all(color: colors.outlineVariant),
+                      ),
+                      child: _Qr(value: shortCode, size: 280),
+                    ),
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: colors.primaryContainer,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        shortCode,
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 2.5,
+                          color: colors.primary,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Toca en cualquier lugar para cerrar',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: colors.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Positioned(
+                top: 8,
+                right: 8,
+                child: IconButton.filledTonal(
+                  tooltip: 'Cerrar QR ampliado',
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  icon: const Icon(Icons.close_rounded),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
 
-class _Hero extends StatelessWidget {
+class _WalletTopBar extends StatelessWidget {
   final CustomerUiState state;
-  final CustomerController controller;
 
-  const _Hero({required this.state, required this.controller});
+  const _WalletTopBar({required this.state});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    final b = context.bocadooColors;
+    return Row(
+      children: [
+        Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            gradient: b.heroGradient,
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Icon(
+            Icons.wallet_rounded,
+            size: 20,
+            color: b.imageForeground,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Tu billetera Bocadoo',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: colors.onSurfaceVariant,
+                ),
+              ),
+              Text(
+                'Mi Pase',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w900,
+                  height: 1.1,
+                  color: colors.onSurface,
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (state.isOffline)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: colors.primaryContainer,
+              borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.wifi_off_rounded, size: 14, color: colors.primary),
+                const SizedBox(width: 4),
+                Text(
+                  'Offline',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    color: colors.primary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _ConsumptionConfirmedBanner extends StatelessWidget {
+  final String message;
+  final VoidCallback onDismiss;
+
+  const _ConsumptionConfirmedBanner({
+    required this.message,
+    required this.onDismiss,
+  });
 
   @override
   Widget build(BuildContext context) {
     final b = context.bocadooColors;
-    final colors = context.colorScheme;
-    final fg = b.imageForeground;
-    final pass = state.currentPass;
-    final modes = state.availableQrModes;
-    final mode = state.qrMode;
-
     return Container(
+      padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
       decoration: BoxDecoration(
-        gradient: b.heroGradient,
-        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(40)),
+        color: b.successContainer,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: b.success.withValues(alpha: 0.35)),
       ),
-      padding: EdgeInsets.fromLTRB(
-        20,
-        MediaQuery.paddingOf(context).top + 16,
-        20,
-        72,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+      child: Row(
         children: [
-          Row(
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: fg.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Icon(Icons.restaurant_rounded, size: 20, color: fg),
+          Icon(Icons.check_circle_rounded, size: 20, color: b.success),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+                color: b.onSuccessContainer,
               ),
-              const SizedBox(width: 12),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Cerrar aviso',
+            visualDensity: VisualDensity.compact,
+            onPressed: onDismiss,
+            icon: Icon(Icons.close_rounded, size: 18, color: b.onSuccessContainer),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WalletDeck extends StatelessWidget {
+  final CustomerUiState state;
+  final CustomerController controller;
+  final List<CustomerPass> activePasses;
+  final bool showYellowDiscover;
+
+  const _WalletDeck({
+    required this.state,
+    required this.controller,
+    required this.activePasses,
+    required this.showYellowDiscover,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final mode = state.qrMode;
+    final frontPasses = activePasses.isNotEmpty ? activePasses : state.passes;
+    final hasAnyCard =
+        frontPasses.isNotEmpty || state.activeOrder != null || state.activeTable != null;
+
+    final backCards = <Widget>[];
+    if (showYellowDiscover) {
+      backCards.add(
+        _DiscoverWalletTab(
+          onTap: () => context.go('/customer/restaurants'),
+        ),
+      );
+    }
+
+    if (state.activeOrder != null && mode != QrMode.preorden) {
+      final ord = state.activeOrder!;
+      backCards.add(
+        _StackedOrderTab(
+          order: ord,
+          onTap: () => controller.selectQrMode(QrMode.preorden),
+        ),
+      );
+    }
+
+    if (state.activeTable != null && mode != QrMode.mesa) {
+      backCards.add(
+        _StackedTableTab(
+          table: state.activeTable!,
+          onTap: () => controller.selectQrMode(QrMode.mesa),
+        ),
+      );
+    }
+
+    for (final (i, pass) in state.passes.indexed) {
+      if (pass.remainingLunches <= 0) continue;
+      if (mode == QrMode.plan && i == state.passIndex) continue;
+      backCards.add(
+        _StackedPlanTab(
+          pass: pass,
+          tintIndex: i,
+          onTap: () => controller.selectPass(i),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (backCards.isNotEmpty)
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (var i = 0; i < backCards.length; i++)
+                Align(
+                  alignment: Alignment.topCenter,
+                  heightFactor: (hasAnyCard || i < backCards.length - 1) ? 0.78 : 1.0,
+                  child: backCards[i],
+                ),
+            ],
+          ),
+        if (hasAnyCard)
+          _ActiveWalletCard(state: state)
+        else
+          const _EmptyPlanPrompt(),
+      ],
+    );
+  }
+}
+
+class _DiscoverWalletTab extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _DiscoverWalletTab({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final b = context.bocadooColors;
+    return Material(
+      color: b.walletAccent,
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      elevation: 2,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 14, 18, 22),
+          child: Row(
+            children: [
+              Icon(Icons.explore_rounded, size: 22, color: b.onWalletAccent),
+              const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'TU ALMUERZO DE HOY',
+                      'Descubrir restaurantes',
                       style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 0.8,
-                        color: fg.withValues(alpha: 0.8),
+                        fontSize: 15,
+                        fontWeight: FontWeight.w900,
+                        color: b.onWalletAccent,
                       ),
                     ),
                     Text(
-                      pass?.restaurantName ??
-                          state.activeOrder?.restaurantName ??
-                          'Bocadoo',
+                      'Explora menús de hoy y arma tu pedido',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: b.onWalletAccent.withValues(alpha: 0.8),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.arrow_forward_rounded, size: 18, color: b.onWalletAccent),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StackedPlanTab extends StatelessWidget {
+  final CustomerPass pass;
+  final int tintIndex;
+  final VoidCallback onTap;
+
+  const _StackedPlanTab({
+    required this.pass,
+    required this.tintIndex,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    final usePrimaryTint = tintIndex.isEven;
+    final bg = usePrimaryTint ? colors.primaryContainer : colors.secondaryContainer;
+    final fg = usePrimaryTint ? colors.onPrimaryContainer : colors.onSecondaryContainer;
+    return Material(
+      color: bg,
+      shape: RoundedRectangleBorder(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        side: BorderSide(color: colors.outlineVariant.withValues(alpha: 0.7)),
+      ),
+      elevation: 2,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 14, 18, 22),
+          child: Row(
+            children: [
+              Icon(Icons.confirmation_number_rounded, size: 18, color: fg),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      pass.restaurantName,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontSize: 16,
+                        fontSize: 15,
                         fontWeight: FontWeight.w900,
                         color: fg,
                       ),
                     ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 5,
-                ),
-                decoration: BoxDecoration(
-                  color: pass != null
-                      ? b.successContainer
-                      : fg.withValues(alpha: 0.18),
-                  borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        color: pass != null ? b.success : fg,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 6),
                     Text(
-                      pass != null ? 'Pase activo' : 'Sin plan',
+                      '${pass.remainingLunches} de ${pass.totalLunches} disponibles · Vence ${formatShortDate(pass.expiresAt)}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 12,
-                        fontWeight: FontWeight.w900,
-                        color: pass != null ? b.success : fg,
+                        fontWeight: FontWeight.w700,
+                        color: fg.withValues(alpha: 0.82),
                       ),
                     ),
                   ],
                 ),
               ),
+              Icon(Icons.unfold_more_rounded, size: 18, color: fg),
             ],
           ),
-          if (state.isOffline) ...[
-            const SizedBox(height: 12),
-            Center(
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 6,
+        ),
+      ),
+    );
+  }
+}
+
+class _StackedOrderTab extends StatelessWidget {
+  final ActiveOrder order;
+  final VoidCallback onTap;
+
+  const _StackedOrderTab({required this.order, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    final b = context.bocadooColors;
+    return Material(
+      color: b.successContainer,
+      shape: RoundedRectangleBorder(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        side: BorderSide(color: b.success.withValues(alpha: 0.35)),
+      ),
+      elevation: 2,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 14, 18, 22),
+          child: Row(
+            children: [
+              Icon(Icons.receipt_long_rounded, size: 18, color: b.success),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Preorden #${order.orderNumber} · ${order.restaurantName}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w900,
+                    color: b.onSuccessContainer,
+                  ),
                 ),
-                decoration: BoxDecoration(
-                  color: fg.withValues(alpha: 0.16),
-                  borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+              ),
+              Icon(Icons.qr_code_2_rounded, size: 18, color: colors.primary),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StackedTableTab extends StatelessWidget {
+  final ActiveTable table;
+  final VoidCallback onTap;
+
+  const _StackedTableTab({required this.table, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    return Material(
+      color: colors.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        side: BorderSide(color: colors.outlineVariant),
+      ),
+      elevation: 2,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 14, 18, 22),
+          child: Row(
+            children: [
+              Icon(Icons.groups_rounded, size: 18, color: colors.primary),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Mesa ${table.time} · ${table.restaurantName} (${table.membersCount})',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w900,
+                    color: colors.onSurface,
+                  ),
                 ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
+              ),
+              Icon(Icons.qr_code_2_rounded, size: 18, color: colors.primary),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ActiveWalletCard extends StatelessWidget {
+  final CustomerUiState state;
+
+  const _ActiveWalletCard({required this.state});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    final b = context.bocadooColors;
+    final fg = b.imageForeground;
+    final mode = state.qrMode;
+    final pass = state.currentPass;
+    final order = state.activeOrder;
+    final table = state.activeTable;
+
+    final String title;
+    final String badgeLabel;
+    final Color badgeBg;
+    final Color badgeFg;
+    final String? shortRestaurantId;
+
+    if (mode == QrMode.preorden && order != null) {
+      title = order.restaurantName;
+      badgeLabel = order.hasPlan ? 'Preorden · Plan Activo' : 'Preorden Sin Plan';
+      badgeBg = order.hasPlan ? b.successContainer : b.walletAccent;
+      badgeFg = order.hasPlan ? b.success : b.onWalletAccent;
+      shortRestaurantId = order.restaurantId;
+    } else if (mode == QrMode.mesa && table != null) {
+      title = table.restaurantName;
+      badgeLabel = 'Mesa Compartida';
+      badgeBg = colors.surface;
+      badgeFg = colors.primary;
+      shortRestaurantId = null;
+    } else if (pass != null) {
+      title = pass.restaurantName;
+      badgeLabel = 'Plan Activo';
+      badgeBg = b.successContainer;
+      badgeFg = b.success;
+      shortRestaurantId = pass.restaurantId;
+    } else {
+      title = 'Bocadoo';
+      badgeLabel = 'Mi Pase';
+      badgeBg = colors.surface;
+      badgeFg = colors.primary;
+      shortRestaurantId = null;
+    }
+
+    final shortCode = BocadooQrParser.toShortCode(
+      state.qrValue,
+      restaurantId: shortRestaurantId,
+    );
+
+    return Container(
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: colors.outlineVariant),
+        boxShadow: [
+          BoxShadow(
+            color: colors.primary.withValues(alpha: 0.14),
+            blurRadius: 24,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
+            decoration: BoxDecoration(gradient: b.heroGradient),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
                   children: [
-                    Icon(Icons.wifi_off_rounded, size: 14, color: fg),
-                    const SizedBox(width: 6),
-                    Text(
-                      'Sin conexión · Código guardado',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: fg,
+                    Expanded(
+                      child: Text(
+                        title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w900,
+                          height: 1.15,
+                          color: fg,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: badgeBg,
+                        borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+                      ),
+                      child: Text(
+                        badgeLabel,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
+                          color: badgeFg,
+                        ),
                       ),
                     ),
                   ],
                 ),
-              ),
-            ),
-          ],
-          if (modes.length > 1) ...[
-            const SizedBox(height: 16),
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: Container(
-                padding: const EdgeInsets.all(4),
-                decoration: BoxDecoration(
-                  color: fg.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-                ),
-                child: Row(
-                  children: [
-                    for (final m in modes)
-                      Expanded(
-                        child: GestureDetector(
-                          onTap: () => controller.selectQrMode(m),
-                          child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 180),
-                            padding: const EdgeInsets.symmetric(vertical: 8),
-                            decoration: BoxDecoration(
-                              color: m == mode ? colors.surface : null,
-                              borderRadius: BorderRadius.circular(
-                                AppTheme.buttonRadius,
-                              ),
-                            ),
-                            child: Text(
-                              _modeLabel(m, state),
-                              textAlign: TextAlign.center,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w800,
-                                color: m == mode ? colors.onSurface : fg,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-          const SizedBox(height: 16),
-          Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: Column(
-              children: [
-                if (pass != null) ...[
+                const SizedBox(height: 12),
+                if (mode == QrMode.preorden && order != null) ...[
                   Text(
-                    pass.restaurantName,
-                    textAlign: TextAlign.center,
+                    order.detail.isNotEmpty
+                        ? order.detail
+                        : 'Preorden #${order.orderNumber}',
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w900,
-                      height: 1.15,
-                      color: fg,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: fg.withValues(alpha: 0.94),
                     ),
                   ),
                   const SizedBox(height: 6),
-                  _BigCount(
-                    value: '${pass.remainingLunches}',
-                    unit: 'almuerzos',
-                    size: 52,
-                    color: fg,
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 6,
+                    children: [
+                      if (order.estimatedArrivalLabel != null)
+                        _HeroChip(
+                          icon: Icons.schedule_rounded,
+                          label: 'Hora: ${order.estimatedArrivalLabel!}',
+                          fg: fg,
+                        ),
+                      _HeroChip(
+                        icon: order.hasPlan
+                            ? Icons.confirmation_number_outlined
+                            : Icons.payments_outlined,
+                        label: order.hasPlan
+                            ? 'Cubierto por plan'
+                            : 'Total: ${formatCents(order.effectiveTotalCents)}',
+                        fg: fg,
+                      ),
+                    ],
+                  ),
+                ] else if (mode == QrMode.mesa && table != null) ...[
+                  Text(
+                    '${table.membersCount} en la mesa · Llegada ${table.time}',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
+                      color: fg,
+                    ),
+                  ),
+                ] else if (pass != null) ...[
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.baseline,
+                    textBaseline: TextBaseline.alphabetic,
+                    children: [
+                      Text(
+                        '${pass.remainingLunches}',
+                        style: TextStyle(
+                          fontSize: 40,
+                          fontWeight: FontWeight.w900,
+                          height: 1,
+                          color: fg,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'de ${pass.totalLunches} disponibles',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: fg.withValues(alpha: 0.9),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Vence ${formatShortDate(pass.expiresAt)}',
+                    '${pass.planName} · Vence ${formatShortDate(pass.expiresAt)}',
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
                       color: fg.withValues(alpha: 0.85),
                     ),
                   ),
-                ] else if (state.activeOrder != null) ...[
-                  Text(
-                    state.activeOrder!.restaurantName,
-                    textAlign: TextAlign.center,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w900,
-                      height: 1.15,
-                      color: fg,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Preorden #${state.activeOrder!.orderNumber}',
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w800,
-                      color: fg.withValues(alpha: 0.9),
-                    ),
-                  ),
-                ] else ...[
-                  Text(
-                    'Ahorra en cada almuerzo',
-                    textAlign: TextAlign.center,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w900,
-                      height: 1.15,
-                      color: fg,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Adquiere un plan en tu restaurante favorito y olvídate del efectivo diario.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: fg.withValues(alpha: 0.88),
-                    ),
-                  ),
                 ],
-                if (mode == QrMode.preorden && state.activeOrder != null) ...[
-                  const SizedBox(height: 10),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 4,
-                    ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+            child: Column(
+              children: [
+                GestureDetector(
+                  onTap: () => _showZoomedQr(
+                    context,
+                    state.qrValue,
+                    title,
+                    restaurantId: shortRestaurantId,
+                  ),
+                  child: Container(
+                    width: 212,
+                    height: 212,
+                    padding: const EdgeInsets.all(14),
+                    alignment: Alignment.center,
                     decoration: BoxDecoration(
-                      color: b.successContainer,
-                      borderRadius: BorderRadius.circular(
-                        AppTheme.buttonRadius,
-                      ),
+                      color: b.qrBackground,
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(color: colors.outlineVariant),
                     ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
+                    child: Stack(
+                      clipBehavior: Clip.none,
                       children: [
-                        Icon(
-                          Icons.schedule_rounded,
-                          size: 14,
-                          color: b.success,
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          state.activeOrder!.status == 'LISTO'
-                              ? 'Listo para entregar'
-                              : 'Preparando tu plato',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w900,
-                            color: b.success,
+                        _Qr(value: shortCode, size: 176),
+                        Positioned(
+                          right: -14,
+                          bottom: -14,
+                          child: Container(
+                            padding: const EdgeInsets.all(5),
+                            decoration: BoxDecoration(
+                              color: colors.primary,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              Icons.open_in_full_rounded,
+                              size: 14,
+                              color: colors.onPrimary,
+                            ),
                           ),
                         ),
                       ],
                     ),
                   ),
-                  if (state.activeOrder!.detail.isNotEmpty) ...[
-                    const SizedBox(height: 6),
-                    Text(
-                      state.activeOrder!.detail,
-                      textAlign: TextAlign.center,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: fg.withValues(alpha: 0.9),
-                      ),
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 18,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: colors.primaryContainer,
+                    borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+                  ),
+                  child: Text(
+                    shortCode,
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 2.5,
+                      color: colors.onPrimaryContainer,
                     ),
-                  ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  mode == QrMode.preorden
+                      ? (order?.hasPlan == true
+                          ? 'Presenta este QR o dicta el código para descontar de tu plan'
+                          : 'Presenta este QR o dicta el código en caja para confirmar y pagar')
+                      : 'Muestra este QR o dicta el código de 6 caracteres en caja',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: colors.onSurfaceVariant,
+                  ),
+                ),
+                if (mode == QrMode.preorden && order != null) ...[
+                  const SizedBox(height: 4),
+                  TextButton(
+                    onPressed: () =>
+                        context.push('/customer/pedido/${order.orderNumber}'),
+                    child: const Text('Ver estado del pedido'),
+                  ),
                 ],
-                if (mode == QrMode.mesa && state.activeTable != null) ...[
-                  const SizedBox(height: 8),
-                  _BigCount(
-                    value: '${state.activeTable!.membersCount}',
-                    unit: 'en la mesa · ${state.activeTable!.time}',
-                    size: 44,
-                    color: fg,
+                if (mode == QrMode.mesa && table != null) ...[
+                  const SizedBox(height: 4),
+                  TextButton(
+                    onPressed: () => context.push('/customer/mesa'),
+                    child: const Text('Ver mesa y compartir'),
                   ),
                 ],
               ],
@@ -449,371 +932,102 @@ class _Hero extends StatelessWidget {
   }
 }
 
-class _BigCount extends StatelessWidget {
-  final String value;
-  final String unit;
-  final double size;
-  final Color color;
+class _HeroChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color fg;
 
-  const _BigCount({
-    required this.value,
-    required this.unit,
-    required this.size,
-    required this.color,
+  const _HeroChip({
+    required this.icon,
+    required this.label,
+    required this.fg,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.baseline,
-      textBaseline: TextBaseline.alphabetic,
-      children: [
-        Text(
-          value,
-          style: TextStyle(
-            fontSize: size,
-            fontWeight: FontWeight.w800,
-            height: 1,
-            letterSpacing: -1,
-            color: color,
-            fontFeatures: const [FontFeature.tabularFigures()],
-          ),
-        ),
-        const SizedBox(width: 8),
-        Flexible(
-          child: Text(
-            unit,
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: fg.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: fg),
+          const SizedBox(width: 5),
+          Text(
+            label,
             style: TextStyle(
-              fontSize: size > 48 ? 18 : 16,
-              fontWeight: FontWeight.w700,
-              color: color,
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              color: fg,
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
 
-class _QrCard extends StatelessWidget {
-  final CustomerUiState state;
-  final CustomerController controller;
-
-  const _QrCard({required this.state, required this.controller});
+class _EmptyPlanPrompt extends StatelessWidget {
+  const _EmptyPlanPrompt();
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
-    final b = context.bocadooColors;
-    final mode = state.qrMode;
-    final linkStyle = TextStyle(
-      fontSize: 13,
-      fontWeight: FontWeight.w700,
-      color: colors.primary,
-      decoration: TextDecoration.underline,
-      decorationColor: colors.primary,
-    );
-    final hintStyle = TextStyle(
-      fontSize: 12,
-      fontWeight: FontWeight.w600,
-      color: colors.onSurfaceVariant,
-    );
-
-    if (state.availableQrModes.isEmpty) {
-      return Container(
-        padding: const EdgeInsets.all(22),
-        decoration: BoxDecoration(
-          color: colors.surface,
-          borderRadius: BorderRadius.circular(32),
-          border: Border.all(color: colors.outlineVariant),
-          boxShadow: [
-            BoxShadow(
-              color: colors.primary.withValues(alpha: 0.10),
-              blurRadius: 28,
-              offset: const Offset(0, 12),
-            ),
-          ],
-        ),
-        child: Column(
-          children: [
-            Container(
-              width: 64,
-              height: 64,
-              decoration: BoxDecoration(
-                color: colors.primaryContainer,
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                Icons.local_offer_rounded,
-                size: 30,
-                color: colors.primary,
-              ),
-            ),
-            const SizedBox(height: 14),
-            Text(
-              'Todavía no tienes un plan activo',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w900,
-                color: colors.onSurface,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Elige un paquete semanal o mensual y presenta tu QR en caja para ahorrar en cada comida.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: colors.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 18),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: () => context.go('/customer/plans'),
-                icon: const Icon(Icons.confirmation_number_outlined),
-                label: const Text('Ver planes y ahorrar'),
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextButton(
-              onPressed: () => context.go('/customer/restaurants'),
-              child: Text('Explorar restaurantes cercanos', style: linkStyle),
-            ),
-          ],
-        ),
-      );
-    }
-
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
         color: colors.surface,
-        borderRadius: BorderRadius.circular(32),
+        borderRadius: BorderRadius.circular(28),
         border: Border.all(color: colors.outlineVariant),
-        boxShadow: [
-          BoxShadow(
-            color: colors.primary.withValues(alpha: 0.10),
-            blurRadius: 28,
-            offset: const Offset(0, 12),
-          ),
-        ],
       ),
       child: Column(
         children: [
-          GestureDetector(
-            onTap: () =>
-                _showZoomedQr(context, state.qrValue, _modeLabel(mode, state)),
-            child: Container(
-              width: 208,
-              height: 208,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: b.qrBackground,
-                borderRadius: BorderRadius.circular(24),
-                border: Border.all(color: colors.outlineVariant),
-              ),
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  _Qr(
-                    value: BocadooQrParser.toShortCode(
-                      state.qrValue,
-                      restaurantId: mode == QrMode.plan
-                          ? state.currentPass?.restaurantId
-                          : null,
-                    ),
-                    size: 160,
-                  ),
-                  Positioned(
-                    right: -16,
-                    bottom: -16,
-                    child: Container(
-                      padding: const EdgeInsets.all(5),
-                      decoration: BoxDecoration(
-                        color: colors.primary,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        Icons.open_in_full_rounded,
-                        size: 14,
-                        color: colors.onPrimary,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+            width: 58,
+            height: 58,
             decoration: BoxDecoration(
               color: colors.primaryContainer,
-              borderRadius: BorderRadius.circular(999),
+              shape: BoxShape.circle,
             ),
-            child: Text(
-              BocadooQrParser.toShortCode(
-                state.qrValue,
-                restaurantId: mode == QrMode.plan
-                    ? state.currentPass?.restaurantId
-                    : null,
-              ),
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w900,
-                letterSpacing: 2.0,
-                color: colors.primary,
-              ),
+            child: Icon(
+              Icons.local_offer_rounded,
+              size: 28,
+              color: colors.primary,
             ),
           ),
-          if (mode == QrMode.preorden && state.activeOrder != null) ...[
-            const SizedBox(height: 12),
-            Text(
-              'Al escanear se descuenta de tu plan',
-              textAlign: TextAlign.center,
-              style: hintStyle,
+          const SizedBox(height: 12),
+          Text(
+            'Todavía no tienes un plan activo',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w900,
+              color: colors.onSurface,
             ),
-            TextButton(
-              onPressed: () => context.push(
-                '/customer/pedido/${state.activeOrder!.orderNumber}',
-              ),
-              child: Text('Ver estado del pedido', style: linkStyle),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Elige un paquete semanal o mensual y presenta tu QR en caja para ahorrar en cada comida.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: colors.onSurfaceVariant,
             ),
-          ],
-          if (mode == QrMode.mesa && state.activeTable != null) ...[
-            const SizedBox(height: 12),
-            Text(
-              'Tus amigos lo escanean para unirse. En caja: una cuenta o cada uno lo suyo.',
-              textAlign: TextAlign.center,
-              style: hintStyle,
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: () => context.go('/customer/plans'),
+              icon: const Icon(Icons.confirmation_number_outlined),
+              label: const Text('Ver planes y ahorrar'),
             ),
-            TextButton(
-              onPressed: () => context.push('/customer/mesa'),
-              child: Text('Ver mesa y compartir', style: linkStyle),
-            ),
-          ],
-          if (mode == QrMode.plan && state.passes.length > 1) ...[
-            const SizedBox(height: 12),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _RoundIcon(
-                  icon: Icons.chevron_left_rounded,
-                  tooltip: 'Restaurante anterior',
-                  onTap: controller.previousPass,
-                ),
-                const SizedBox(width: 16),
-                Text(
-                  '${state.passIndex + 1} de ${state.passes.length}',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: colors.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                _RoundIcon(
-                  icon: Icons.chevron_right_rounded,
-                  tooltip: 'Siguiente restaurante',
-                  onTap: controller.nextPass,
-                ),
-              ],
-            ),
-          ],
+          ),
         ],
-      ),
-    );
-  }
-
-  void _showZoomedQr(BuildContext context, String value, String label) {
-    final colors = context.colorScheme;
-    showGeneralDialog<void>(
-      context: context,
-      barrierDismissible: true,
-      barrierLabel: 'Cerrar QR ampliado',
-      pageBuilder: (ctx, _, _) => GestureDetector(
-        onTap: () => Navigator.of(ctx).pop(),
-        child: Material(
-          color: colors.surface,
-          child: SafeArea(
-            child: Stack(
-              children: [
-                Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        label.toUpperCase(),
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 0.8,
-                          color: colors.primary,
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Container(
-                        padding: const EdgeInsets.all(20),
-                        decoration: BoxDecoration(
-                          color: ctx.bocadooColors.qrBackground,
-                          borderRadius: BorderRadius.circular(28),
-                          border: Border.all(color: colors.outlineVariant),
-                        ),
-                        child: _Qr(
-                          value: BocadooQrParser.toShortCode(value),
-                          size: 280,
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: colors.primaryContainer,
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                        child: Text(
-                          BocadooQrParser.toShortCode(value),
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: 2.5,
-                            color: colors.primary,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'Toca en cualquier lugar para cerrar',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: colors.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Positioned(
-                  top: 8,
-                  right: 8,
-                  child: IconButton.filledTonal(
-                    tooltip: 'Cerrar QR ampliado',
-                    onPressed: () => Navigator.of(ctx).pop(),
-                    icon: const Icon(Icons.close_rounded),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -840,32 +1054,6 @@ class _Qr extends StatelessWidget {
         dataModuleShape: QrDataModuleShape.square,
         color: b.qrForeground,
       ),
-    );
-  }
-}
-
-class _RoundIcon extends StatelessWidget {
-  final IconData icon;
-  final String tooltip;
-  final VoidCallback onTap;
-
-  const _RoundIcon({
-    required this.icon,
-    required this.tooltip,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colorScheme;
-    return IconButton(
-      tooltip: tooltip,
-      onPressed: onTap,
-      style: IconButton.styleFrom(
-        backgroundColor: colors.primaryContainer,
-        foregroundColor: colors.onPrimaryContainer,
-      ),
-      icon: Icon(icon, size: 24),
     );
   }
 }
