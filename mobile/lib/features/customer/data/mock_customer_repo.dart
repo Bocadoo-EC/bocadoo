@@ -108,6 +108,11 @@ class MockCustomerRepository implements ICustomerRepository {
 
   Restaurant _withLiveGeoAndOccupancy(Restaurant r, LatLng userPos) {
     final overrideOcc = _store.occupancyOverrides[r.id];
+    final hasOverrideUntil = _store.fullUntilByRest.containsKey(r.id);
+    final overrideUntil = _store.fullUntilByRest[r.id];
+    final effectiveOcc = overrideOcc ?? r.occupancy;
+    final clearFullUntil = effectiveOcc != 'LLENO' ||
+        (hasOverrideUntil && overrideUntil == null);
     final avail = _store.menuAvailabilityByRest[r.id] ??
         (_store.menuPublishedByRest[r.id] == false
             ? MenuAvailabilityState.sinPublicar
@@ -135,7 +140,9 @@ class MockCustomerRepository implements ICustomerRepository {
         : r.offers;
     if (!r.hasLocation) {
       return r.copyWith(
-        occupancy: overrideOcc ?? r.occupancy,
+        occupancy: effectiveOcc,
+        fullUntil: overrideUntil,
+        clearFullUntil: clearFullUntil,
         todayMenu: visibleMenu,
         offers: filteredOffers,
       );
@@ -145,7 +152,9 @@ class MockCustomerRepository implements ICustomerRepository {
     return r.copyWith(
       distanceMeters: meters,
       distanceKm: km,
-      occupancy: overrideOcc ?? r.occupancy,
+      occupancy: effectiveOcc,
+      fullUntil: overrideUntil,
+      clearFullUntil: clearFullUntil,
       todayMenu: visibleMenu,
       offers: filteredOffers,
     );

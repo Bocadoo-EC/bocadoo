@@ -1261,6 +1261,12 @@ class ApiCustomerRepository implements ICustomerRepository {
     final logoUrl = json['logoUrl']?.toString();
     final desc = (json['descripcionCorta'] ?? '').toString().trim();
     final ocupacion = _asMap(json['ocupacion']);
+    final fullRaw = ocupacion['llenoHasta'] ??
+        ocupacion['hasta'] ??
+        json['llenoManualHasta'];
+    final fullUntil = fullRaw is String && fullRaw.isNotEmpty
+        ? DateTime.tryParse(fullRaw)?.toLocal()
+        : null;
     final singlePrice =
         Money.fromCents(_asInt(json['precioSueltoCentavos']) ?? 300);
 
@@ -1293,6 +1299,7 @@ class ApiCustomerRepository implements ICustomerRepository {
       takeawaySurcharge: prev?.takeawaySurcharge ?? 0.25,
       latitude: lat,
       longitude: lng,
+      fullUntil: fullUntil,
     );
 
     _restaurantCache[id] = mapped;
@@ -1427,6 +1434,7 @@ class ApiCustomerRepository implements ICustomerRepository {
       takeawaySurcharge: base.takeawaySurcharge,
       latitude: base.latitude,
       longitude: base.longitude,
+      fullUntil: base.fullUntil,
     );
 
     final availability = (!published || menuItems.isEmpty)

@@ -452,41 +452,180 @@ final shiftClosedProvider = FutureProvider.autoDispose<bool>((ref) {
   return ref.read(ownerCashRepositoryProvider).isShiftClosed(ref.read(ownerRestaurantIdProvider));
 });
 
-/// Hora hasta la que el local está marcado lleno a mano (`null` = no marcado).
-final busyUntilProvider = NotifierProvider<BusyUntilNotifier, DateTime?>(BusyUntilNotifier.new);
+/// Estado manual del semáforo en Caja y temporizador local de `LLENO`.
+@immutable
+class ManualOccupancyState {
+  const ManualOccupancyState({
+    this.manual = ManualOccupancyStatus.libre,
+    this.fullUntil,
+    this.tick = 0,
+  });
 
-class BusyUntilNotifier extends Notifier<DateTime?> {
+  final ManualOccupancyStatus manual;
+  final DateTime? fullUntil;
+  final int tick;
+}
+
+final manualOccupancyProvider =
+    NotifierProvider<ManualOccupancyNotifier, ManualOccupancyState>(
+  ManualOccupancyNotifier.new,
+);
+
+/// Fuente de verdad única en Dueño del estado público efectivo del restaurante.
+/// Jerarquía: 1) `AGOTADO_HOY` si menú sin disponibles; 2) semáforo manual.
+final ownerPublicStatusProvider =
+    Provider.autoDispose<RestaurantPublicStatus>((ref) {
+  final menuAvail = ref.watch(menuAvailabilityProvider);
+  final manualState = ref.watch(manualOccupancyProvider);
+  return resolveRestaurantPublicStatus(
+    menuAvailability: menuAvail,
+    manual: manualState.manual,
+    fullUntil: manualState.fullUntil,
+  );
+});
+
+/// Compatibilidad: fecha límite mientras el local está marcado `LLENO`.
+final busyUntilProvider = Provider<DateTime?>(
+  (ref) => ref.watch(manualOccupancyProvider).fullUntil,
+);
+
+class ManualOccupancyNotifier extends Notifier<ManualOccupancyState> {
   static const busyDuration = Duration(minutes: 20);
+  static const extendDuration = Duration(minutes: 15);
+  Timer? _timer;
   bool _loadedFromApi = false;
+  bool _disposed = false;
 
   @override
-  DateTime? build() {
+  ManualOccupancyState build() {
     ref.watch(ownerRestaurantIdProvider);
+    _disposed = false;
+    ref.onDispose(() {
+      _disposed = true;
+      _timer?.cancel();
+      _timer = null;
+    });
     if (!AppMode.useMock && !_loadedFromApi) {
       _loadedFromApi = true;
       Future.microtask(_loadInitial);
     }
-    return null;
+    return const ManualOccupancyState();
   }
 
   Future<void> _loadInitial() async {
-    final until = await ref.read(apiOwnerRepositoryProvider).fetchManualBusyUntil();
-    if (until != null) {
-      state = until;
+    final repo = ref.read(apiOwnerRepositoryProvider);
+    final rid = ref.read(ownerRestaurantIdProvider);
+    final until = await repo.fetchManualBusyUntil();
+    if (_disposed) return;
+    if (until != null && until.isAfter(DateTime.now())) {
+      state = ManualOccupancyState(
+        manual: ManualOccupancyStatus.lleno,
+        fullUntil: until,
+      );
+      _startTimer();
+      return;
+    }
+    final pref = await repo.fetchManualOccupancyPreference(rid);
+    if (_disposed) return;
+    if (pref == ManualOccupancyStatus.concurrido) {
+      state = const ManualOccupancyState(manual: ManualOccupancyStatus.concurrido);
     }
   }
 
-  bool get isBusy => state != null && state!.isAfter(DateTime.now());
+  void _startTimer() {
+    _timer?.cancel();
+    _timer = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (_disposed) return;
+      final until = state.fullUntil;
+      if (state.manual != ManualOccupancyStatus.lleno || until == null) {
+        _timer?.cancel();
+        _timer = null;
+        return;
+      }
+      if (!until.isAfter(DateTime.now())) {
+        _timer?.cancel();
+        _timer = null;
+        unawaited(setStatus(ManualOccupancyStatus.libre));
+        return;
+      }
+      state = ManualOccupancyState(
+        manual: state.manual,
+        fullUntil: until,
+        tick: state.tick + 1,
+      );
+    });
+  }
 
-  Future<void> toggle() async {
+  Future<void> setStatus(ManualOccupancyStatus next) async {
     final prev = state;
-    final busy = !isBusy;
-    state = busy ? DateTime.now().add(busyDuration) : null;
-    final ok = await ref
-        .read(ownerCashRepositoryProvider)
-        .setManualBusy(ref.read(ownerRestaurantIdProvider), busy: busy);
-    if (!ok) {
-      state = prev;
+    final rid = ref.read(ownerRestaurantIdProvider);
+    if (next == ManualOccupancyStatus.lleno) {
+      final until = DateTime.now().add(busyDuration);
+      state = ManualOccupancyState(
+        manual: ManualOccupancyStatus.lleno,
+        fullUntil: until,
+        tick: prev.tick + 1,
+      );
+      _startTimer();
+      final syncedUntil =
+          await ref.read(ownerCashRepositoryProvider).setManualOccupancy(
+                rid,
+                status: ManualOccupancyStatus.lleno,
+                fullUntil: until,
+              );
+      if (_disposed) return;
+      if (syncedUntil == null) {
+        state = prev;
+        if (prev.manual != ManualOccupancyStatus.lleno) {
+          _timer?.cancel();
+          _timer = null;
+        }
+        return;
+      }
+      if (syncedUntil.isAfter(DateTime.now())) {
+        state = ManualOccupancyState(
+          manual: ManualOccupancyStatus.lleno,
+          fullUntil: syncedUntil,
+          tick: state.tick + 1,
+        );
+      }
+      return;
+    }
+
+    _timer?.cancel();
+    _timer = null;
+    state = ManualOccupancyState(manual: next, tick: prev.tick + 1);
+    await ref.read(ownerCashRepositoryProvider).setManualOccupancy(
+          rid,
+          status: next,
+        );
+  }
+
+  Future<void> extendFull15Min() async {
+    final prev = state;
+    final rid = ref.read(ownerRestaurantIdProvider);
+    final base = (prev.fullUntil != null && prev.fullUntil!.isAfter(DateTime.now()))
+        ? prev.fullUntil!
+        : DateTime.now();
+    final extendedUntil = base.add(extendDuration);
+    state = ManualOccupancyState(
+      manual: ManualOccupancyStatus.lleno,
+      fullUntil: extendedUntil,
+      tick: prev.tick + 1,
+    );
+    _startTimer();
+    final synced = await ref.read(ownerCashRepositoryProvider).setManualOccupancy(
+          rid,
+          status: ManualOccupancyStatus.lleno,
+          fullUntil: extendedUntil,
+        );
+    if (_disposed) return;
+    if (synced != null && synced.isAfter(DateTime.now())) {
+      state = ManualOccupancyState(
+        manual: ManualOccupancyStatus.lleno,
+        fullUntil: synced,
+        tick: state.tick + 1,
+      );
     }
   }
 }

@@ -173,8 +173,7 @@ class _RestaurantsScreenState extends ConsumerState<RestaurantsScreen> {
             for (final r in filtered) ...[
               _RestaurantCard(
                 restaurant: r,
-                occupancy: ref.watch(restaurantOccupancyProvider(r.id)),
-                menuAvailability: s.menuAvailabilityFor(r.id),
+                publicStatus: ref.watch(restaurantPublicStatusProvider(r.id)),
                 onOpen: () => _openRestaurant(r),
                 onTable: () => context.push('/customer/mesa?restaurantId=${r.id}'),
                 onReserve: (o) => _reserve(controller, o),
@@ -596,16 +595,14 @@ class _OfferBadge extends StatelessWidget {
 
 class _RestaurantCard extends StatelessWidget {
   final Restaurant restaurant;
-  final String occupancy;
-  final MenuAvailabilityState menuAvailability;
+  final RestaurantPublicStatus publicStatus;
   final VoidCallback onOpen;
   final VoidCallback onTable;
   final ValueChanged<RestaurantOffer> onReserve;
 
   const _RestaurantCard({
     required this.restaurant,
-    required this.occupancy,
-    required this.menuAvailability,
+    required this.publicStatus,
     required this.onOpen,
     required this.onTable,
     required this.onReserve,
@@ -616,8 +613,7 @@ class _RestaurantCard extends StatelessWidget {
     final colors = context.colorScheme;
     final b = context.bocadooColors;
     final r = restaurant;
-    final isMenuSoldOut = r.isMenuSoldOutToday ||
-        menuAvailability == MenuAvailabilityState.agotadoTotal;
+    final isMenuSoldOut = publicStatus.isSoldOutToday;
 
     return Material(
       color: colors.surface,
@@ -651,43 +647,7 @@ class _RestaurantCard extends StatelessWidget {
                 left: 8,
                 right: 8,
                 child: Row(children: [
-                  if (isMenuSoldOut)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 5,
-                      ),
-                      decoration: BoxDecoration(
-                        color: b.dangerContainer,
-                        borderRadius: BorderRadius.circular(
-                          AppTheme.buttonRadius,
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Container(
-                            width: 8,
-                            height: 8,
-                            decoration: BoxDecoration(
-                              color: b.danger,
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            'Almuerzos agotados hoy',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w800,
-                              color: b.onDangerContainer,
-                            ),
-                          ),
-                        ],
-                      ),
-                    )
-                  else
-                    OccupancyChip(occupancy: occupancy),
+                  OccupancyChip(status: publicStatus),
                   const Spacer(),
                   if (r.hasLocation)
                     DistancePill(text: r.formattedDistance),

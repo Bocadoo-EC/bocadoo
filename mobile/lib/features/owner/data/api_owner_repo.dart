@@ -1973,29 +1973,78 @@ class ApiOwnerRepository
 
   @override
   Future<bool> setManualBusy(String restaurantId, {required bool busy}) async {
-    _lastError = null;
+    final res = await setManualOccupancy(
+      restaurantId,
+      status: busy ? ManualOccupancyStatus.lleno : ManualOccupancyStatus.libre,
+    );
+    return _lastError == null && (!busy || res != null);
+  }
+
+  static const String _manualOccupancyPrefPrefix = 'owner_manual_occupancy_';
+
+  /// Lee la preferencia manual local (`libre` | `concurrido`) cuando el servidor no está `lleno`.
+  Future<ManualOccupancyStatus> fetchManualOccupancyPreference(
+    String restaurantId,
+  ) async {
     try {
-      await guard(
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('$_manualOccupancyPrefPrefix$restaurantId');
+      return parseManualOccupancy(raw);
+    } catch (_) {
+      return ManualOccupancyStatus.libre;
+    }
+  }
+
+  @override
+  Future<DateTime?> setManualOccupancy(
+    String restaurantId, {
+    required ManualOccupancyStatus status,
+    DateTime? fullUntil,
+  }) async {
+    _lastError = null;
+    final busy = status == ManualOccupancyStatus.lleno;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        '$_manualOccupancyPrefPrefix$restaurantId',
+        status == ManualOccupancyStatus.concurrido ? 'CONCURRIDO' : 'LIBRE',
+      );
+    } catch (_) {}
+
+    try {
+      final res = await guard(
         () => _api.send<Map<String, dynamic>>(
-          'POST',
-          '${ApiConfig.v1}/restaurante/lleno',
-          body: {'lleno': busy},
-          restaurant: true,
-        ),
+              'POST',
+              '${ApiConfig.v1}/restaurante/lleno',
+              body: {'lleno': busy},
+              restaurant: true,
+            ).then((v) => v ?? <String, dynamic>{}),
       );
       eventsService.track(
         'dueno.aforo_cambiado',
         restaurantId: restaurantId,
-        props: {'lleno': busy},
+        props: {'lleno': busy, 'estado': status.name},
       );
-      return true;
+      if (!busy) return null;
+      final serverRaw = res['llenoManualHasta']?.toString();
+      if (serverRaw != null && serverRaw.isNotEmpty) {
+        final serverDt = DateTime.tryParse(serverRaw)?.toLocal();
+        if (serverDt != null && serverDt.isAfter(DateTime.now())) {
+          // Si el usuario extendió manualmente (`+ 15 min`), respetar el límite mayor.
+          if (fullUntil != null && fullUntil.isAfter(serverDt)) {
+            return fullUntil;
+          }
+          return serverDt;
+        }
+      }
+      return fullUntil ?? DateTime.now().add(const Duration(minutes: 20));
     } on ApiException catch (e) {
       final detail = e.detail.trim();
       _lastError =
           ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
               ? detail
               : e.userMessage;
-      return false;
+      return null;
     }
   }
 

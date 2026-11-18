@@ -122,6 +122,7 @@ class DemoStore extends ChangeNotifier {
   final Set<String> settledTables = {};
   final List<DemoFeedback> feedback = [];
   final Map<String, String> occupancyOverrides = {};
+  final Map<String, DateTime?> fullUntilByRest = {};
   final Map<String, int> remainingLunchesByRest = {'r1': 14, 'r2': 6};
   final Map<String, bool> menuPublishedByRest = {
     'r1': false,

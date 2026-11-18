@@ -1010,10 +1010,32 @@ class MockOwnerRepository
 
   @override
   Future<bool> setManualBusy(String restaurantId, {required bool busy}) async {
-    await _simulateLatency();
-    _store.occupancyOverrides[restaurantId] = busy ? 'LLENO' : 'LIBRE';
-    _store.changed();
+    await setManualOccupancy(
+      restaurantId,
+      status: busy ? ManualOccupancyStatus.lleno : ManualOccupancyStatus.libre,
+    );
     return true;
+  }
+
+  @override
+  Future<DateTime?> setManualOccupancy(
+    String restaurantId, {
+    required ManualOccupancyStatus status,
+    DateTime? fullUntil,
+  }) async {
+    await _simulateLatency();
+    final legacy = switch (status) {
+      ManualOccupancyStatus.lleno => 'LLENO',
+      ManualOccupancyStatus.concurrido => 'MOVIDO',
+      ManualOccupancyStatus.libre => 'LIBRE',
+    };
+    final effectiveUntil = status == ManualOccupancyStatus.lleno
+        ? (fullUntil ?? DateTime.now().add(const Duration(minutes: 20)))
+        : null;
+    _store.occupancyOverrides[restaurantId] = legacy;
+    _store.fullUntilByRest[restaurantId] = effectiveUntil;
+    _store.changed();
+    return effectiveUntil;
   }
 
   @override

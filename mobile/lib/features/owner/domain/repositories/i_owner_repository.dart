@@ -129,6 +129,14 @@ abstract class IOwnerCashRepository {
 
   Future<bool> setManualBusy(String restaurantId, {required bool busy});
 
+  /// Actualiza el semáforo manual (`libre`, `concurrido`, `lleno`) y devuelve
+  /// la hora límite cuando aplica (`LLENO`), o `null` en otro caso.
+  Future<DateTime?> setManualOccupancy(
+    String restaurantId, {
+    required ManualOccupancyStatus status,
+    DateTime? fullUntil,
+  });
+
   Future<int> getOrdersOnTheWayCount(String restaurantId);
 
   Future<bool> isShiftClosed(String restaurantId);

@@ -157,8 +157,15 @@ class CustomerUiState {
       if (filters.contains(RestaurantFilter.withPlan) && !r.hasPlan) {
         return false;
       }
-      if (filters.contains(RestaurantFilter.free) && r.occupancy != 'LIBRE') {
-        return false;
+      if (filters.contains(RestaurantFilter.free)) {
+        final effective = resolveRestaurantPublicStatus(
+          menuAvailability: menuAvailabilityFor(r.id),
+          manual: parseManualOccupancy(r.occupancy),
+          fullUntil: r.fullUntil,
+        ).effective;
+        if (effective != RestaurantEffectiveStatus.libre) {
+          return false;
+        }
       }
       if (filters.contains(RestaurantFilter.offers) && !r.hasOffer) {
         return false;
@@ -252,6 +259,7 @@ class CustomerController extends ChangeNotifier {
   final ICustomerRepository _repository;
   CustomerUiState _state = const CustomerUiState();
   Timer? _undoTimer;
+  Timer? _occupancyExpiryTimer;
   Future<void> Function()? _undoAction;
   LifecyclePollingController? _orderPoller;
   bool _disposed = false;
@@ -271,7 +279,29 @@ class CustomerController extends ChangeNotifier {
   void _emit(CustomerUiState next) {
     if (_disposed) return;
     _state = next;
+    _scheduleOccupancyExpiry(next.restaurants);
     notifyListeners();
+  }
+
+  void _scheduleOccupancyExpiry(List<Restaurant> restaurants) {
+    _occupancyExpiryTimer?.cancel();
+    _occupancyExpiryTimer = null;
+    final now = DateTime.now();
+    DateTime? soonest;
+    for (final r in restaurants) {
+      final until = r.fullUntil;
+      if (r.occupancy == 'LLENO' && until != null && until.isAfter(now)) {
+        if (soonest == null || until.isBefore(soonest)) {
+          soonest = until;
+        }
+      }
+    }
+    if (soonest == null) return;
+    final delay = soonest.difference(now) + const Duration(seconds: 1);
+    _occupancyExpiryTimer = Timer(delay, () {
+      if (_disposed) return;
+      notifyListeners();
+    });
   }
 
   void _onDemoStoreChanged() {
@@ -908,6 +938,7 @@ class CustomerController extends ChangeNotifier {
       DemoStore.instance.removeListener(_onDemoStoreChanged);
     }
     _undoTimer?.cancel();
+    _occupancyExpiryTimer?.cancel();
     _orderPoller?.dispose();
     super.dispose();
   }
@@ -938,13 +969,29 @@ final restaurantDetailProvider =
   return detail;
 });
 
-/// Fuente única de verdad del estado de ocupación (`LIBRE`, `MOVIDO`, `LLENO`)
-/// compartida entre la tarjeta del Marketplace y la cabecera de `RestaurantSheet`.
+/// Fuente única de verdad en Comensal del estado público efectivo del local
+/// (`libre`, `concurrido`, `lleno` con timer, o `agotadoHoy`), compartida
+/// entre la tarjeta del Marketplace (`DondeComer`) y `RestaurantSheet`.
+final restaurantPublicStatusProvider =
+    Provider.family<RestaurantPublicStatus, String>((ref, restaurantId) {
+  final controller = ref.watch(customerControllerProvider);
+  final s = controller.state;
+  final fromList = s.restaurantById(restaurantId);
+  var menuAvail = s.menuAvailabilityFor(restaurantId);
+  if (fromList != null && fromList.isMenuSoldOutToday) {
+    menuAvail = MenuAvailabilityState.agotadoTotal;
+  }
+  return resolveRestaurantPublicStatus(
+    menuAvailability: menuAvail,
+    manual: parseManualOccupancy(fromList?.occupancy),
+    fullUntil: fromList?.fullUntil,
+  );
+});
+
+/// Compatibilidad: código legado de ocupación (`LIBRE`, `MOVIDO`, `LLENO`).
 final restaurantOccupancyProvider =
     Provider.family<String, String>((ref, restaurantId) {
-  final controller = ref.watch(customerControllerProvider);
-  final fromList = controller.state.restaurantById(restaurantId);
-  return fromList?.occupancy ?? 'LIBRE';
+  return ref.watch(restaurantPublicStatusProvider(restaurantId)).legacyOccupancy;
 });
 
 /// Plan y su local para el detalle del plan (C5).

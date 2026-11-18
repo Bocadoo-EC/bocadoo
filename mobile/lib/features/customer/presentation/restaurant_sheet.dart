@@ -182,9 +182,11 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
     final chosenBreakfast = r.breakfasts
         .where((b) => b.id == _breakfastId && !b.isSoldOut)
         .firstOrNull;
-    final menuSoldOutAll = breakfastMode
-        ? r.breakfasts.every((b) => b.isSoldOut)
-        : r.isMenuSoldOutToday;
+    final publicStatus = ref.watch(restaurantPublicStatusProvider(r.id));
+    final menuSoldOutAll = publicStatus.isSoldOutToday ||
+        (breakfastMode
+            ? r.breakfasts.every((b) => b.isSoldOut)
+            : r.isMenuSoldOutToday);
     final canOrder =
         !hasActiveOrder &&
         !_sending &&
@@ -227,7 +229,7 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
               ],
               _HeaderCard(
                 restaurant: r,
-                occupancy: ref.watch(restaurantOccupancyProvider(r.id)),
+                publicStatus: publicStatus,
                 hasPlanHere: s.passFor(r.id) != null || r.hasPlan,
                 onTable: _openTable,
               ),
@@ -425,13 +427,13 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
 
 class _HeaderCard extends StatelessWidget {
   final Restaurant restaurant;
-  final String occupancy;
+  final RestaurantPublicStatus publicStatus;
   final bool hasPlanHere;
   final VoidCallback onTable;
 
   const _HeaderCard({
     required this.restaurant,
-    required this.occupancy,
+    required this.publicStatus,
     required this.hasPlanHere,
     required this.onTable,
   });
@@ -477,7 +479,7 @@ class _HeaderCard extends StatelessWidget {
                   bottom: 10,
                   child: Row(
                     children: [
-                      Flexible(child: OccupancyDetail(occupancy: occupancy)),
+                      Flexible(child: OccupancyDetail(status: publicStatus)),
                       if (r.hasLocation) ...[
                         const SizedBox(width: 6),
                         DistancePill(

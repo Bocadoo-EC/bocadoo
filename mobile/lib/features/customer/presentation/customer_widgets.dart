@@ -1,5 +1,6 @@
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/contracts/models.dart';
 import '../../../core/theme/app_theme.dart';
 
 String formatMoney(double amount) => formatCents((amount * 100).round());
@@ -100,48 +101,97 @@ class CoverImage extends StatelessWidget {
   }
 }
 
-/// Chip de ocupación sobre la portada de la tarjeta (Libre, Movido, Lleno).
+/// Chip del estado público unificado sobre la portada de la tarjeta en Marketplace.
 class OccupancyChip extends StatelessWidget {
-  final String occupancy;
-  const OccupancyChip({super.key, required this.occupancy});
+  final RestaurantPublicStatus status;
+  const OccupancyChip({super.key, required this.status});
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.colorScheme;
     final b = context.bocadooColors;
-    final (label, icon, bg, fg) = switch (occupancy) {
-      'MOVIDO' => ('Movido', Icons.schedule_rounded, colors.primaryContainer, colors.onPrimaryContainer),
-      'LLENO' => ('Lleno', Icons.do_not_disturb_on_outlined, b.dangerContainer, b.onDangerContainer),
-      _ => ('Libre', Icons.check_circle_outline_rounded, b.successContainer, b.success),
+    final mins = status.remainingFullMinutes;
+    final (String label, Color dot, Color bg, Color fg) = switch (status.effective) {
+      RestaurantEffectiveStatus.libre => (
+          'Libre',
+          b.success,
+          b.successContainer,
+          b.onSuccessContainer,
+        ),
+      RestaurantEffectiveStatus.concurrido => (
+          'Concurrido',
+          b.onWalletAccent,
+          b.walletAccent,
+          b.onWalletAccent,
+        ),
+      RestaurantEffectiveStatus.lleno => (
+          mins > 0 ? 'Lleno · ${mins}m' : 'Lleno',
+          b.dangerForeground,
+          b.danger,
+          b.dangerForeground,
+        ),
+      RestaurantEffectiveStatus.agotadoHoy => (
+          'Agotado hoy',
+          b.danger,
+          b.dangerContainer,
+          b.onDangerContainer,
+        ),
     };
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
       ),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, size: 14, color: fg),
-        const SizedBox(width: 4),
-        Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: fg)),
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(color: dot, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          label,
+          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: fg),
+        ),
       ]),
     );
   }
 }
 
-/// Ocupación descrita en la ficha del local (Fluido · Llegas y te sientas).
+/// Estado público unificado en la cabecera de la ficha del local.
 class OccupancyDetail extends StatelessWidget {
-  final String occupancy;
-  const OccupancyDetail({super.key, required this.occupancy});
+  final RestaurantPublicStatus status;
+  const OccupancyDetail({super.key, required this.status});
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.colorScheme;
     final b = context.bocadooColors;
-    final (label, dot, bg, fg) = switch (occupancy) {
-      'MOVIDO' => ('Movido · Hora pico', colors.primary, colors.primaryContainer, colors.onPrimaryContainer),
-      'LLENO' => ('Lleno · Espera ~15 min', b.danger, b.dangerContainer, b.onDangerContainer),
-      _ => ('Fluido · Llegas y te sientas', b.success, b.successContainer, b.onSuccessContainer),
+    final mins = status.remainingFullMinutes;
+    final (String label, Color dot, Color bg, Color fg) = switch (status.effective) {
+      RestaurantEffectiveStatus.libre => (
+          'Libre · Llegas y te sientas',
+          b.success,
+          b.successContainer,
+          b.onSuccessContainer,
+        ),
+      RestaurantEffectiveStatus.concurrido => (
+          'Concurrido · Poca espera',
+          b.onWalletAccent,
+          b.walletAccent,
+          b.onWalletAccent,
+        ),
+      RestaurantEffectiveStatus.lleno => (
+          mins > 0 ? 'Lleno · Espera ~${mins} min' : 'Lleno · Sin mesas ahora',
+          b.dangerForeground,
+          b.danger,
+          b.dangerForeground,
+        ),
+      RestaurantEffectiveStatus.agotadoHoy => (
+          'Agotado hoy',
+          b.danger,
+          b.dangerContainer,
+          b.onDangerContainer,
+        ),
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -152,7 +202,14 @@ class OccupancyDetail extends StatelessWidget {
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Container(width: 8, height: 8, decoration: BoxDecoration(color: dot, shape: BoxShape.circle)),
         const SizedBox(width: 6),
-        Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: fg)),
+        Flexible(
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: fg),
+          ),
+        ),
       ]),
     );
   }

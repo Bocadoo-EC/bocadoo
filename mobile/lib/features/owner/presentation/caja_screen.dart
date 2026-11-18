@@ -56,7 +56,7 @@ class _CajaScreenState extends ConsumerState<CajaScreen> {
       body: SafeArea(
         bottom: false,
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          _Header(lunchesToday: summary.value?.lunchesRedeemedToday ?? 0),
+          const _Header(),
           const _OrdersStrip(),
           Expanded(
             child: summary.when(
@@ -73,74 +73,264 @@ class _CajaScreenState extends ConsumerState<CajaScreen> {
 }
 
 class _Header extends ConsumerWidget {
-  const _Header({required this.lunchesToday});
-
-  final int lunchesToday;
+  const _Header();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colorScheme;
     final b = context.bocadooColors;
-    final busyUntil = ref.watch(busyUntilProvider);
-    final now = DateTime.now();
-    final busy = busyUntil != null && busyUntil.isAfter(now);
-    final minutesLeft = busy ? (busyUntil.difference(now).inSeconds / 60).ceil() : 0;
-    final movido = lunchesToday >= 10;
+    final status = ref.watch(ownerPublicStatusProvider);
+
+    final (Color bg, Color fg, Color dot, String label) = switch (status.effective) {
+      RestaurantEffectiveStatus.libre => (
+          b.successContainer,
+          b.onSuccessContainer,
+          b.success,
+          'Libre',
+        ),
+      RestaurantEffectiveStatus.concurrido => (
+          b.walletAccent.withValues(alpha: 0.45),
+          b.onWalletAccent,
+          b.onWalletAccent,
+          'Concurrido',
+        ),
+      RestaurantEffectiveStatus.lleno => (
+          b.danger,
+          b.dangerForeground,
+          b.dangerForeground,
+          status.remainingFullMinutes > 0
+              ? 'Lleno · ${status.remainingFullMinutes}m'
+              : 'Lleno',
+        ),
+      RestaurantEffectiveStatus.agotadoHoy => (
+          b.dangerContainer,
+          b.onDangerContainer,
+          b.danger,
+          'Agotado hoy',
+        ),
+    };
 
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
       decoration: BoxDecoration(border: Border(bottom: BorderSide(color: colors.outlineVariant))),
       child: Row(children: [
         Text('Caja', style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900, color: colors.onSurface)),
-        const SizedBox(width: 8),
-        if (!busy)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-            decoration: BoxDecoration(
-              color: movido ? colors.primaryContainer : b.successContainer,
-              borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-            ),
-            child: Text(
-              movido ? 'Movido' : 'Libre',
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w800,
-                color: movido ? colors.onPrimaryContainer : b.success,
-              ),
-            ),
-          ),
         const Spacer(),
         Material(
-          color: busy ? b.danger : colors.primaryContainer,
+          color: bg,
           shape: const StadiumBorder(),
           child: InkWell(
             customBorder: const StadiumBorder(),
-            onTap: () => ref.read(busyUntilProvider.notifier).toggle(),
+            onTap: () => showModalBottomSheet<void>(
+              context: context,
+              showDragHandle: true,
+              useRootNavigator: true,
+              builder: (_) => const _PublicStatusSheet(),
+            ),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
                 Container(
-                  width: 9,
-                  height: 9,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: busy ? b.dangerForeground : colors.primary,
-                  ),
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(shape: BoxShape.circle, color: dot),
                 ),
                 const SizedBox(width: 6),
                 Text(
-                  busy ? 'Lleno (${minutesLeft}m)' : 'Marcar lleno',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w800,
-                    color: busy ? b.dangerForeground : colors.onPrimaryContainer,
-                  ),
+                  label,
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: fg),
                 ),
+                const SizedBox(width: 2),
+                Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: fg),
               ]),
             ),
           ),
         ),
       ]),
+    );
+  }
+}
+
+class _PublicStatusSheet extends ConsumerWidget {
+  const _PublicStatusSheet();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colorScheme;
+    final b = context.bocadooColors;
+    final status = ref.watch(ownerPublicStatusProvider);
+    final notifier = ref.read(manualOccupancyProvider.notifier);
+    final isFullActive = status.manual == ManualOccupancyStatus.lleno &&
+        status.remainingFullMinutes > 0;
+
+    Widget optionTile({
+      required String title,
+      required String subtitle,
+      required Color dotColor,
+      required bool selected,
+      required VoidCallback onTap,
+      Widget? trailing,
+    }) {
+      return Material(
+        color: selected
+            ? colors.primaryContainer.withValues(alpha: 0.45)
+            : colors.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: BorderSide(
+            color: selected ? colors.primary : colors.outlineVariant,
+            width: selected ? 1.5 : 1,
+          ),
+        ),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(18),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: Row(children: [
+              Container(
+                width: 12,
+                height: 12,
+                decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                        color: colors.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: colors.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (trailing != null) ...[
+                const SizedBox(width: 8),
+                trailing,
+              ] else if (selected)
+                Icon(Icons.check_circle_rounded, color: colors.primary, size: 20),
+            ]),
+          ),
+        ),
+      );
+    }
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Disponibilidad del local',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w900,
+                color: colors.onSurface,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Se refleja al instante en el Marketplace y tu ficha para comensales.',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: colors.onSurfaceVariant,
+              ),
+            ),
+            if (status.isSoldOutToday) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: b.dangerContainer,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Row(children: [
+                  Icon(Icons.no_meals_rounded, size: 18, color: b.onDangerContainer),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Todos los platos del menú de hoy están agotados. El público ve "Agotado hoy" hasta que reactives platos.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: b.onDangerContainer,
+                      ),
+                    ),
+                  ),
+                ]),
+              ),
+            ],
+            const SizedBox(height: 14),
+            optionTile(
+              title: 'Libre',
+              subtitle: 'Hay mesas disponibles sin espera.',
+              dotColor: b.success,
+              selected: status.manual == ManualOccupancyStatus.libre,
+              onTap: () {
+                Navigator.of(context).pop();
+                unawaited(notifier.setStatus(ManualOccupancyStatus.libre));
+              },
+            ),
+            const SizedBox(height: 8),
+            optionTile(
+              title: 'Concurrido',
+              subtitle: 'Pocas mesas disponibles / ligera espera.',
+              dotColor: b.onWalletAccent,
+              selected: status.manual == ManualOccupancyStatus.concurrido,
+              onTap: () {
+                Navigator.of(context).pop();
+                unawaited(notifier.setStatus(ManualOccupancyStatus.concurrido));
+              },
+            ),
+            const SizedBox(height: 8),
+            optionTile(
+              title: isFullActive
+                  ? 'Lleno · Quedan ${status.remainingFullMinutes} min'
+                  : 'Lleno (20 min)',
+              subtitle: 'Sin disponibilidad temporal (vuelve a Libre automáticamente).',
+              dotColor: b.danger,
+              selected: status.manual == ManualOccupancyStatus.lleno,
+              onTap: () {
+                Navigator.of(context).pop();
+                unawaited(notifier.setStatus(ManualOccupancyStatus.lleno));
+              },
+              trailing: isFullActive
+                  ? FilledButton.tonal(
+                      style: FilledButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                      ),
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                        unawaited(notifier.extendFull15Min());
+                      },
+                      child: const Text(
+                        '+ 15 min',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+                      ),
+                    )
+                  : null,
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

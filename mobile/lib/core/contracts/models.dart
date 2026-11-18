@@ -21,6 +21,100 @@ MenuAvailabilityState evaluateMenuAvailability({
       : MenuAvailabilityState.agotadoTotal;
 }
 
+/// Semáforo manual de aforo operado por el dueño/cajero desde Caja.
+enum ManualOccupancyStatus { libre, concurrido, lleno }
+
+/// Estado público efectivo del restaurante visible para Caja y Comensal.
+enum RestaurantEffectiveStatus { libre, concurrido, lleno, agotadoHoy }
+
+ManualOccupancyStatus parseManualOccupancy(String? raw) =>
+    switch ((raw ?? '').toUpperCase()) {
+      'LLENO' => ManualOccupancyStatus.lleno,
+      'CONCURRIDO' || 'MODERADO' || 'MOVIDO' => ManualOccupancyStatus.concurrido,
+      _ => ManualOccupancyStatus.libre,
+    };
+
+/// Fuente de verdad unificada del estado público del restaurante.
+@immutable
+class RestaurantPublicStatus {
+  final RestaurantEffectiveStatus effective;
+  final ManualOccupancyStatus manual;
+  final DateTime? fullUntil;
+
+  const RestaurantPublicStatus({
+    required this.effective,
+    required this.manual,
+    this.fullUntil,
+  });
+
+  bool get isSoldOutToday => effective == RestaurantEffectiveStatus.agotadoHoy;
+  bool get isFull => effective == RestaurantEffectiveStatus.lleno;
+
+  int get remainingFullMinutes {
+    final until = fullUntil;
+    if (until == null) return 0;
+    final secs = until.difference(DateTime.now()).inSeconds;
+    if (secs <= 0) return 0;
+    return (secs / 60).ceil();
+  }
+
+  /// Código de compatibilidad (`LIBRE`, `MOVIDO`, `LLENO`).
+  String get legacyOccupancy => switch (effective) {
+        RestaurantEffectiveStatus.concurrido => 'MOVIDO',
+        RestaurantEffectiveStatus.lleno ||
+        RestaurantEffectiveStatus.agotadoHoy =>
+          'LLENO',
+        RestaurantEffectiveStatus.libre => 'LIBRE',
+      };
+
+  @override
+  bool operator ==(Object other) =>
+      other is RestaurantPublicStatus &&
+      other.effective == effective &&
+      other.manual == manual &&
+      other.fullUntil == fullUntil;
+
+  @override
+  int get hashCode => Object.hash(effective, manual, fullUntil);
+}
+
+/// Evalúa el estado público efectivo respetando la jerarquía estricta:
+/// 1. Prioridad 1: `AGOTADO_HOY` si el menú del día quedó con 0 platos disponibles.
+/// 2. Prioridad 2: Semáforo manual (`LIBRE` | `CONCURRIDO` | `LLENO` vigente hasta `fullUntil`).
+RestaurantPublicStatus resolveRestaurantPublicStatus({
+  required MenuAvailabilityState menuAvailability,
+  required ManualOccupancyStatus manual,
+  DateTime? fullUntil,
+  DateTime? now,
+}) {
+  final clock = now ?? DateTime.now();
+  final fullActive = manual == ManualOccupancyStatus.lleno &&
+      (fullUntil == null || fullUntil.isAfter(clock));
+  final effectiveManual =
+      (manual == ManualOccupancyStatus.lleno && !fullActive)
+          ? ManualOccupancyStatus.libre
+          : manual;
+
+  if (menuAvailability == MenuAvailabilityState.agotadoTotal) {
+    return RestaurantPublicStatus(
+      effective: RestaurantEffectiveStatus.agotadoHoy,
+      manual: effectiveManual,
+      fullUntil: fullActive ? fullUntil : null,
+    );
+  }
+
+  final effective = switch (effectiveManual) {
+    ManualOccupancyStatus.lleno => RestaurantEffectiveStatus.lleno,
+    ManualOccupancyStatus.concurrido => RestaurantEffectiveStatus.concurrido,
+    ManualOccupancyStatus.libre => RestaurantEffectiveStatus.libre,
+  };
+  return RestaurantPublicStatus(
+    effective: effective,
+    manual: effectiveManual,
+    fullUntil: fullActive ? fullUntil : null,
+  );
+}
+
 /// Modelo inmutable de un Pase de Almuerzos para el Comensal
 @immutable
 class CustomerPass {
@@ -169,6 +263,9 @@ class Restaurant {
   /// Identificador URL (`slug`) devuelto por `/v1/restaurantes` para consultar detalle y planes.
   final String? slug;
 
+  /// Hora hasta la que el local permanece en estado `LLENO`.
+  final DateTime? fullUntil;
+
   const Restaurant({
     required this.id,
     required this.name,
@@ -197,6 +294,7 @@ class Restaurant {
     this.latitude,
     this.longitude,
     this.slug,
+    this.fullUntil,
   });
 
   bool get hasLocation =>
@@ -257,6 +355,8 @@ class Restaurant {
     List<MenuItem>? todayMenu,
     List<RestaurantOffer>? offers,
     String? slug,
+    DateTime? fullUntil,
+    bool clearFullUntil = false,
   }) {
     return Restaurant(
       id: id ?? this.id,
@@ -286,6 +386,7 @@ class Restaurant {
       latitude: latitude,
       longitude: longitude,
       slug: slug ?? this.slug,
+      fullUntil: clearFullUntil ? null : (fullUntil ?? this.fullUntil),
     );
   }
 }
