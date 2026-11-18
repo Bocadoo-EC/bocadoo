@@ -560,10 +560,17 @@ class _RegistrarConsumoScreenState
                   ),
                   if (_planMode) ...[
                     const SizedBox(height: 8),
-                    _PlanNotice(
-                      lunchCents: lunchCents,
-                      onScan: () => openScannerFlow(context, ref),
-                    ),
+                    Builder(builder: (context) {
+                      final menuAsync = ref.watch(posMenuProvider);
+                      final menuReady =
+                          !menuAsync.hasValue || ref.watch(isTodayMenuPublishedProvider);
+                      return _PlanNotice(
+                        lunchCents: lunchCents,
+                        menuPublished: menuReady,
+                        onScan: () => openScannerFlow(context, ref),
+                        onPublishMenu: () => context.go('/owner/menu'),
+                      );
+                    }),
                   ],
                   const SizedBox(height: 8),
                   SingleChildScrollView(
@@ -1637,14 +1644,55 @@ class _ModeSwitch extends StatelessWidget {
 }
 
 class _PlanNotice extends StatelessWidget {
-  const _PlanNotice({required this.lunchCents, required this.onScan});
+  const _PlanNotice({
+    required this.lunchCents,
+    required this.menuPublished,
+    required this.onScan,
+    required this.onPublishMenu,
+  });
 
   final int lunchCents;
+  final bool menuPublished;
   final VoidCallback onScan;
+  final VoidCallback onPublishMenu;
 
   @override
   Widget build(BuildContext context) {
     final b = context.bocadooColors;
+    if (!menuPublished) {
+      return Container(
+        padding: const EdgeInsets.fromLTRB(12, 8, 6, 8),
+        decoration: BoxDecoration(
+          color: b.walletAccent.withValues(alpha: 0.25),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: b.walletAccent),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, size: 18, color: b.onWalletAccent),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Publica el Menú de hoy para habilitar el escaneo de QR',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: b.onWalletAccent,
+                ),
+              ),
+            ),
+            TextButton(
+              onPressed: onPublishMenu,
+              style: TextButton.styleFrom(foregroundColor: b.onWalletAccent),
+              child: const Text(
+                'Publicar →',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     return Container(
       padding: const EdgeInsets.fromLTRB(10, 6, 4, 8),
       decoration: BoxDecoration(

@@ -7,6 +7,7 @@ import 'package:latlong2/latlong.dart';
 import '../../../core/config/app_mode.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/contracts/repositories.dart';
+import '../../../core/demo/demo_store.dart';
 import '../../../core/location/location_service.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/network/api_exception.dart';
@@ -56,6 +57,7 @@ class CustomerUiState {
   final String? consumptionNotice;
   final String? errorMessage;
   final bool isOffline;
+  final Map<String, bool> todayMenuPublishedByRest;
 
   const CustomerUiState({
     this.status = CustomerStatus.initial,
@@ -80,10 +82,22 @@ class CustomerUiState {
     this.consumptionNotice,
     this.errorMessage,
     this.isOffline = false,
+    this.todayMenuPublishedByRest = const {},
   });
 
   bool get isLoading => status == CustomerStatus.loading;
   bool get isError => status == CustomerStatus.error;
+
+  bool hasPublishedTodayMenu(String restaurantId) {
+    if (todayMenuPublishedByRest.containsKey(restaurantId)) {
+      return todayMenuPublishedByRest[restaurantId]!;
+    }
+    final rest = restaurantById(restaurantId);
+    if (rest != null && rest.todayMenu.any((m) => !m.isSoldOut)) {
+      return true;
+    }
+    return false;
+  }
 
   CustomerPass? get currentPass =>
       passes.isEmpty ? null : passes[passIndex.clamp(0, passes.length - 1)];
@@ -187,6 +201,7 @@ class CustomerUiState {
     bool clearConsumptionNotice = false,
     String? errorMessage,
     bool? isOffline,
+    Map<String, bool>? todayMenuPublishedByRest,
   }) {
     return CustomerUiState(
       status: status ?? this.status,
@@ -215,6 +230,8 @@ class CustomerUiState {
           : consumptionNotice ?? this.consumptionNotice,
       errorMessage: errorMessage,
       isOffline: isOffline ?? this.isOffline,
+      todayMenuPublishedByRest:
+          todayMenuPublishedByRest ?? this.todayMenuPublishedByRest,
     );
   }
 }
@@ -232,13 +249,77 @@ class CustomerController extends ChangeNotifier {
   String? lastActionError;
 
   CustomerController({ICustomerRepository? repository})
-      : _repository = repository ?? MockCustomerRepository();
+      : _repository = repository ?? MockCustomerRepository() {
+    if (AppMode.useMock) {
+      DemoStore.instance.addListener(_onDemoStoreChanged);
+    }
+  }
 
   CustomerUiState get state => _state;
 
   void _emit(CustomerUiState next) {
+    if (_disposed) return;
     _state = next;
     notifyListeners();
+  }
+
+  void _onDemoStoreChanged() {
+    if (_disposed || !AppMode.useMock) return;
+    final store = DemoStore.instance;
+    final nextMenuMap = Map<String, bool>.from(_state.todayMenuPublishedByRest)
+      ..addAll(store.menuPublishedByRest);
+    final updatedPasses = [
+      for (final p in _state.passes)
+        p.copyWith(
+          remainingLunches:
+              store.remainingLunchesByRest[p.restaurantId] ?? p.remainingLunches,
+        ),
+    ];
+    _emit(_state.copyWith(
+      passes: updatedPasses,
+      todayMenuPublishedByRest: nextMenuMap,
+    ));
+  }
+
+  Future<Map<String, bool>> _resolveMenuPublishedForPasses(
+    List<CustomerPass> passes,
+    List<Restaurant> restaurants,
+  ) async {
+    final map = Map<String, bool>.from(_state.todayMenuPublishedByRest);
+    if (AppMode.useMock) {
+      map.addAll(DemoStore.instance.menuPublishedByRest);
+      return map;
+    }
+
+    final repo = _repository;
+    final ids = <String>{
+      for (final p in passes)
+        if (p.restaurantId.isNotEmpty) p.restaurantId,
+    };
+    if (ids.isEmpty) return map;
+
+    await Future.wait([
+      for (final rid in ids)
+        () async {
+          try {
+            final detail = await _repository.getRestaurantById(rid);
+            if (detail != null) {
+              if (repo is ApiCustomerRepository) {
+                map[rid] = repo.cachedTodayMenuPublished(rid) ??
+                    detail.todayMenu.any((m) => !m.isSoldOut);
+              } else {
+                map[rid] = detail.todayMenu.any((m) => !m.isSoldOut);
+              }
+            }
+          } catch (_) {
+            if (repo is ApiCustomerRepository) {
+              final cached = repo.cachedTodayMenuPublished(rid);
+              if (cached != null) map[rid] = cached;
+            }
+          }
+        }(),
+    ]);
+    return map;
   }
 
   Future<void> loadDashboard({bool silent = false}) async {
@@ -263,6 +344,8 @@ class CustomerController extends ChangeNotifier {
         final card = await _repository.getStampCard(p.restaurantId);
         if (card != null) stamps[p.restaurantId] = card;
       }
+      final menuPublishedMap =
+          await _resolveMenuPublishedForPasses(passes, restaurants);
 
       _emit(CustomerUiState(
         status: CustomerStatus.success,
@@ -283,6 +366,7 @@ class CustomerController extends ChangeNotifier {
         plansRestaurantId: _state.plansRestaurantId,
         planTemplates: _state.planTemplates,
         undo: _state.undo,
+        todayMenuPublishedByRest: menuPublishedMap,
       ));
       if (restaurants.isNotEmpty) {
         final targetId = _state.plansRestaurantId != null &&
@@ -291,7 +375,12 @@ class CustomerController extends ChangeNotifier {
             : restaurants.first.id;
         await selectPlansRestaurant(targetId);
       }
-      _syncOrderPolling(order, table: table);
+      _syncOrderPolling(
+        order,
+        table: table,
+        passes: passes,
+        menuPublishedByRest: menuPublishedMap,
+      );
       unawaited(_hydrateRestaurants(restaurants, force: silent));
     } catch (e) {
       if (_state.passes.isNotEmpty) {
@@ -310,8 +399,7 @@ class CustomerController extends ChangeNotifier {
   }
 
   /// Vuelve a leer lo que puede cambiar desde la caja (pedido entregado,
-  /// mesa cobrada) sin mostrar carga. Lo llama el marco al entrar y cada 5 s
-  /// mientras hay un pedido activo.
+  /// mesa cobrada o publicación del menú del día) sin mostrar carga.
   Future<void> refreshLive() async {
     if (_state.status != CustomerStatus.success) return;
     try {
@@ -334,6 +422,12 @@ class CustomerController extends ChangeNotifier {
         } catch (_) {}
       }
 
+      final activePasses = updatedPasses ?? _state.passes;
+      final nextMenuMap = await _resolveMenuPublishedForPasses(
+        activePasses,
+        _state.restaurants,
+      );
+
       String? notice;
       if (orderJustFinished && previousOrder != null) {
         notice = previousOrder.hasPlan
@@ -349,8 +443,14 @@ class CustomerController extends ChangeNotifier {
         activeTable: table,
         clearActiveTable: table == null,
         consumptionNotice: notice,
+        todayMenuPublishedByRest: nextMenuMap,
       ));
-      _syncOrderPolling(order, table: table);
+      _syncOrderPolling(
+        order,
+        table: table,
+        passes: activePasses,
+        menuPublishedByRest: nextMenuMap,
+      );
     } catch (_) {
       // Se conserva lo que ya se mostraba.
     }
@@ -361,14 +461,22 @@ class CustomerController extends ChangeNotifier {
     final order = _state.activeOrder;
     if (order == null || !order.isDelivered) return;
     _emit(_state.copyWith(clearActiveOrder: true));
-    _syncOrderPolling(null);
+    _syncOrderPolling(
+      null,
+      table: _state.activeTable,
+      passes: _state.passes,
+      menuPublishedByRest: _state.todayMenuPublishedByRest,
+    );
     await _repository.acknowledgeOrder(order.orderNumber);
   }
 
   /// Regenera el QR rotativo del plan en pantalla (anti-captura).
+  /// Bloqueado cuando el restaurante aún no ha publicado el menú de hoy.
   Future<void> refreshQr() async {
     final pass = _state.currentPass;
-    if (pass == null) return;
+    if (pass == null || !_state.hasPublishedTodayMenu(pass.restaurantId)) {
+      return;
+    }
     try {
       final token = await _repository.refreshQrToken(pass.id);
       final updated = [
@@ -376,6 +484,12 @@ class CustomerController extends ChangeNotifier {
       ];
       await _repository.saveCachedPass(updated[_state.passIndex]);
       _emit(_state.copyWith(passes: updated));
+    } on ApiException catch (e) {
+      if (e.code == 'MENU_NO_PUBLICADO') {
+        final updatedMap = Map<String, bool>.from(_state.todayMenuPublishedByRest)
+          ..[pass.restaurantId] = false;
+        _emit(_state.copyWith(todayMenuPublishedByRest: updatedMap));
+      }
     } catch (_) {
       // Se conserva el QR anterior hasta el siguiente ciclo.
     }
@@ -393,15 +507,19 @@ class CustomerController extends ChangeNotifier {
       _emit(_state.copyWith(clearConsumptionNotice: true));
 
   void syncRestaurantSummary(Restaurant detail) {
+    final nextMenuMap = Map<String, bool>.from(_state.todayMenuPublishedByRest)
+      ..[detail.id] = detail.todayMenu.any((m) => !m.isSoldOut);
     final idx = _state.restaurants.indexWhere((r) => r.id == detail.id);
-    if (idx < 0) return;
-    if (_state.restaurants[idx].occupancy == detail.occupancy &&
-        _state.restaurants[idx].hasMenu == detail.hasMenu) {
+    if (idx < 0) {
+      _emit(_state.copyWith(todayMenuPublishedByRest: nextMenuMap));
       return;
     }
     final next = List<Restaurant>.from(_state.restaurants);
     next[idx] = detail;
-    _emit(_state.copyWith(restaurants: next));
+    _emit(_state.copyWith(
+      restaurants: next,
+      todayMenuPublishedByRest: nextMenuMap,
+    ));
   }
 
   void nextPass() {
@@ -621,11 +739,23 @@ class CustomerController extends ChangeNotifier {
     _emit(_state.copyWith(clearUndo: true));
   }
 
-  void _syncOrderPolling(ActiveOrder? order, {ActiveTable? table}) {
-    final shouldPoll = (order != null && !order.isDelivered) || table != null;
+  void _syncOrderPolling(
+    ActiveOrder? order, {
+    ActiveTable? table,
+    List<CustomerPass>? passes,
+    Map<String, bool>? menuPublishedByRest,
+  }) {
+    final activePasses = passes ?? _state.passes;
+    final menuMap = menuPublishedByRest ?? _state.todayMenuPublishedByRest;
+    final hasUnpublishedPass = !AppMode.useMock &&
+        activePasses.any(
+          (p) => p.remainingLunches > 0 && !(menuMap[p.restaurantId] ?? false),
+        );
+    final shouldPoll =
+        (order != null && !order.isDelivered) || table != null || hasUnpublishedPass;
     if (shouldPoll) {
       _orderPoller ??= LifecyclePollingController(
-        interval: const Duration(seconds: 5),
+        interval: const Duration(seconds: 8),
         onTick: refreshLive,
       );
       if (!_orderPoller!.isRunning) {
@@ -646,6 +776,7 @@ class CustomerController extends ChangeNotifier {
   }) async {
     if (base.isEmpty) return;
     final updated = List<Restaurant>.from(base);
+    final nextMenuMap = Map<String, bool>.from(_state.todayMenuPublishedByRest);
     var changed = false;
     var fetched = 0;
     for (var i = 0; i < updated.length && fetched < 8; i++) {
@@ -656,18 +787,25 @@ class CustomerController extends ChangeNotifier {
         final detail = await _repository.getRestaurantById(updated[i].id);
         if (detail != null && !_disposed) {
           updated[i] = detail;
+          nextMenuMap[detail.id] = detail.todayMenu.any((m) => !m.isSoldOut);
           changed = true;
         }
       } catch (_) {}
     }
     if (changed && !_disposed) {
-      _emit(_state.copyWith(restaurants: updated));
+      _emit(_state.copyWith(
+        restaurants: updated,
+        todayMenuPublishedByRest: nextMenuMap,
+      ));
     }
   }
 
   @override
   void dispose() {
     _disposed = true;
+    if (AppMode.useMock) {
+      DemoStore.instance.removeListener(_onDemoStoreChanged);
+    }
     _undoTimer?.cancel();
     _orderPoller?.dispose();
     super.dispose();

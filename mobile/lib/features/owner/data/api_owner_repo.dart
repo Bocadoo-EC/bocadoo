@@ -81,6 +81,7 @@ class ApiOwnerRepository
   final Map<String, String> _consumoIdByPassId = {};
   final Map<String, _SaleUndoKind> _saleUndoById = {};
   final Map<String, _OrderCacheEntry> _ordersByNumber = {};
+  final Map<String, String> _orderDishByNumber = {};
   final Map<String, DeferredCommit> _orderDeliverCommits = {};
   final Set<String> _pendingDeliverOrders = {};
   final Map<String, _TableUndoEntry> _tableUndoByChargeId = {};
@@ -163,6 +164,22 @@ class ApiOwnerRepository
       'PLAN' => 'Plan',
       _ => 'Efectivo',
     };
+  }
+
+  static String _extractPlatosLabel(
+    Map? almuerzo, {
+    Object? platoNombre,
+    String fallback = 'Almuerzo del día',
+  }) {
+    final direct = platoNombre?.toString().trim() ?? '';
+    if (direct.isNotEmpty) return direct;
+    final platos = almuerzo?['platos'] is List ? almuerzo!['platos'] as List : const [];
+    final names = <String>[];
+    for (final p in platos.whereType<Map>()) {
+      final n = (p['nombre'] ?? '').toString().trim();
+      if (n.isNotEmpty) names.add(n);
+    }
+    return names.isNotEmpty ? names.join(' + ') : fallback;
   }
 
   Future<Map<String, dynamic>> _fetchRestaurantMap() async {
@@ -513,6 +530,26 @@ class ApiOwnerRepository
       );
     }
 
+    // Precondición: no validar canje directo por QR si el menú de hoy no está publicado.
+    try {
+      final todayMenu = await getTodayMenu(restaurantId);
+      final menuReady = todayMenu != null &&
+          todayMenu.isPublished &&
+          todayMenu.courses.any((c) => !c.isSoldOut);
+      if (!menuReady) {
+        return const ScanResult(
+          isValid: false,
+          outcome: 'ROJO',
+          title: 'Menú no publicado',
+          supportingLine:
+              'No se puede escanear QR sin haber publicado el menú de hoy',
+          actionRequired: 'NINGUNA',
+        );
+      }
+    } catch (_) {
+      // Si la lectura previa del menú falla por red, el servidor valida autoritativamente.
+    }
+
     // Para pases de plan rotativos, solo bloquea doble lectura accidental (< 5s);
     // la validez y anti-replay de cada ciclo la decide el backend.
     final nowScan = DateTime.now();
@@ -551,6 +588,11 @@ class ApiOwnerRepository
       final planNombre = plan?['nombre']?.toString();
       final creadoEnRaw = consumo?['creadoEn'];
       final redeemedAt = creadoEnRaw != null ? _parseDateTime(creadoEnRaw) : null;
+      final dishLabel = _extractPlatosLabel(
+        null,
+        platoNombre: data['platoNombre'] ?? consumo?['platoNombre'],
+        fallback: 'Almuerzo del día',
+      );
 
       final remaining = _asNullableInt(data['almuerzosRestantes']);
       final daysToExpire = _asNullableInt(data['diasParaVencer']);
@@ -590,14 +632,24 @@ class ApiOwnerRepository
               customerName: clienteNombre ?? 'Comensal',
               type: 'Canje de plan',
               amount: 0,
-              paymentMethod: 'Canje de plan (\$0,00)',
+              paymentMethod: 'Plan',
               timestamp: txTime,
+              detail: 'Canje de plan · $dishLabel (Prepagado)',
             ),
           );
         }
       }
 
       switch (resultado) {
+        case 'MENU_NO_PUBLICADO':
+          return const ScanResult(
+            isValid: false,
+            outcome: 'ROJO',
+            title: 'Menú no publicado',
+            supportingLine:
+                'No se puede escanear QR sin haber publicado el menú de hoy',
+            actionRequired: 'NINGUNA',
+          );
         case 'OK':
           return ScanResult(
             isValid: true,
@@ -725,6 +777,18 @@ class ApiOwnerRepository
             actionRequired: 'SCAN_AGAIN',
           );
       }
+    } on ApiException catch (e) {
+      if (e.code == 'MENU_NO_PUBLICADO') {
+        return const ScanResult(
+          isValid: false,
+          outcome: 'ROJO',
+          title: 'Menú no publicado',
+          supportingLine:
+              'No se puede escanear QR sin haber publicado el menú de hoy',
+          actionRequired: 'NINGUNA',
+        );
+      }
+      rethrow;
     } finally {
       _idempotency.done(intent);
     }
@@ -882,16 +946,22 @@ class ApiOwnerRepository
           .toString();
       final almuerzo = p['almuerzo'] is Map ? p['almuerzo'] as Map : null;
       final paidByPlan = almuerzo?['cubiertoPorPlan'] == true;
+      final isPrepaid = paidByPlan && totalCents == 0;
+      final dishLabel = _extractPlatosLabel(
+        almuerzo,
+        platoNombre: p['platoNombre'] ?? _orderDishByNumber[numero],
+        fallback: 'Almuerzo del día',
+      );
 
       out.add(
         TransactionItem(
           id: (p['id'] ?? '').toString(),
           customerName: 'Pedido #$numero · $name',
-          type: paidByPlan && totalCents == 0 ? 'Canje de plan' : 'Pedido #$numero',
+          type: isPrepaid ? 'Canje de plan' : 'Pedido #$numero',
           amount: Money.fromCents(paidByPlan ? 0 : totalCents),
-          paymentMethod:
-              paidByPlan && totalCents == 0 ? 'Canje de plan (\$0,00)' : 'Efectivo',
+          paymentMethod: isPrepaid ? 'Plan' : 'Efectivo',
           timestamp: _parseDateTime(p['servidoEn'] ?? p['creadoEn']),
+          detail: isPrepaid ? 'Canje de plan · $dishLabel (Prepagado)' : null,
         ),
       );
       ventaOrderRefs.add('Pedido #$numero');
@@ -1790,6 +1860,14 @@ class ApiOwnerRepository
           restaurantId: activeRestaurantId,
         ),
       );
+      final dishParts = <String>[
+        if (order.soup != null && order.soup!.isNotEmpty) order.soup!,
+        if (order.main != null && order.main!.isNotEmpty) order.main!,
+      ];
+      final cachedDish = _orderDishByNumber[order.number];
+      final dishSummary = (cachedDish != null && cachedDish.isNotEmpty)
+          ? cachedDish
+          : (dishParts.isNotEmpty ? dishParts.join(' + ') : 'Almuerzo completo');
       _sessionValidatedTransactions.insert(
         0,
         TransactionItem(
@@ -1797,15 +1875,13 @@ class ApiOwnerRepository
           customerName: 'Pedido #${order.number} · ${order.dinerName}',
           type: order.paidByPlan ? 'Canje de plan' : 'Pedido #${order.number}',
           amount: order.paidByPlan ? 0 : Money.fromCents(order.effectiveTotalCents),
-          paymentMethod: order.paidByPlan ? 'Canje de plan (\$0,00)' : 'Efectivo',
+          paymentMethod: order.paidByPlan ? 'Plan' : 'Efectivo',
           timestamp: DateTime.now(),
+          detail: order.paidByPlan
+              ? 'Canje de plan · $dishSummary (Prepagado)'
+              : null,
         ),
       );
-
-      final dishSummary = [
-        if (order.soup != null && order.soup!.isNotEmpty) order.soup!,
-        if (order.main != null && order.main!.isNotEmpty) order.main!,
-      ].join(' · ');
 
       return ScanResult(
         isValid: true,
@@ -1814,7 +1890,7 @@ class ApiOwnerRepository
             ? 'Preorden #${order.number} canjeada'
             : 'Preorden #${order.number} cobrada',
         supportingLine: order.paidByPlan
-            ? 'Canje de plan (\$0,00) · $dishSummary'
+            ? 'Canje de plan · $dishSummary (Prepagado)'
             : (dishSummary.isNotEmpty ? dishSummary : 'Pedido completado'),
         studentName: order.dinerName,
         passId: ordKey,
@@ -1846,6 +1922,10 @@ class ApiOwnerRepository
               ).then((v) => v ?? <String, dynamic>{}),
         );
         final almuerzo = res['almuerzo'] is Map ? res['almuerzo'] as Map : null;
+        final platoNombre = res['platoNombre']?.toString().trim();
+        if (platoNombre != null && platoNombre.isNotEmpty) {
+          _orderDishByNumber[orderNumber] = platoNombre;
+        }
         final resultado = almuerzo?['resultado']?.toString().toUpperCase();
         final consumoId = almuerzo?['consumoId']?.toString();
         if (consumoId != null && consumoId.isNotEmpty) {

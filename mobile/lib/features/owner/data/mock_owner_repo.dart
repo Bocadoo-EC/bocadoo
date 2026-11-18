@@ -245,7 +245,22 @@ class MockOwnerRepository
       );
     }
 
-    // 4. Bloqueo de doble escaneo por código único ya consumido.
+    // 4. Regla de estado: no validar pase directo si el menú de hoy no está publicado.
+    final menuPublished = DemoStore.instance.menuPublishedByRest[restaurantId] ??
+        DemoStore.instance.menuPublishedByRest[DemoStore.ownerRestaurantId] ??
+        false;
+    if (!menuPublished) {
+      return const ScanResult(
+        isValid: false,
+        outcome: 'ROJO',
+        title: 'Menú no publicado',
+        supportingLine:
+            'No se puede escanear QR sin haber publicado el menú de hoy',
+        actionRequired: 'NINGUNA',
+      );
+    }
+
+    // 5. Bloqueo de doble escaneo por código único ya consumido.
     if (_redeemedCodes.contains(codeKey)) {
       return const ScanResult(
         isValid: false,
@@ -356,8 +371,9 @@ class MockOwnerRepository
         customerName: student.name,
         type: 'Canje de plan',
         amount: 0,
-        paymentMethod: 'Canje de plan (\$0,00)',
+        paymentMethod: 'Plan',
         timestamp: now,
+        detail: 'Canje de plan · Almuerzo del día (Prepagado)',
       ),
     );
 
@@ -987,13 +1003,20 @@ class MockOwnerRepository
         timestamp: now,
       );
       _redemptions.add(r);
+      final dishParts = <String>[
+        if (order.soup != null && order.soup!.isNotEmpty) order.soup!,
+        if (order.main != null && order.main!.isNotEmpty) order.main!,
+      ];
+      final dishLabel =
+          dishParts.isNotEmpty ? dishParts.join(' + ') : 'Almuerzo completo';
       _transactions.add(TransactionItem(
         id: r.id,
         customerName: 'Pedido #${order.number} · ${order.dinerName}',
         type: 'Canje de plan',
         amount: 0,
-        paymentMethod: 'Canje de plan (\$0,00)',
+        paymentMethod: 'Plan',
         timestamp: now,
+        detail: 'Canje de plan · $dishLabel (Prepagado)',
       ));
       order
         ..validated = true
@@ -1005,7 +1028,7 @@ class MockOwnerRepository
         isValid: true,
         outcome: 'VERDE',
         title: 'Preorden #${order.number} canjeada',
-        supportingLine: 'Canje de plan (\$0,00) · -1 almuerzo',
+        supportingLine: 'Canje de plan · $dishLabel (Prepagado)',
         studentName: order.dinerName,
         remainingLunches: plan.remaining,
         redemptionId: r.id,
@@ -1059,13 +1082,20 @@ class MockOwnerRepository
     }
     final r = _Redemption(id: _nextId('red'), userId: student.userId, planId: plan.id, timestamp: now);
     _redemptions.add(r);
+    final dishParts = <String>[
+      if (order.soup != null && order.soup!.isNotEmpty) order.soup!,
+      if (order.main != null && order.main!.isNotEmpty) order.main!,
+    ];
+    final dishLabel =
+        dishParts.isNotEmpty ? dishParts.join(' + ') : 'Almuerzo completo';
     _transactions.add(TransactionItem(
       id: r.id,
       customerName: 'Pedido #$orderNumber · ${order.dinerName}',
       type: 'Canje de plan',
       amount: 0,
-      paymentMethod: 'Canje de plan (\$0,00)',
+      paymentMethod: 'Plan',
       timestamp: now,
+      detail: 'Canje de plan · $dishLabel (Prepagado)',
     ));
     order.validated = true;
     _validatedOrders[orderNumber] = (student.userId, plan.id, r.id);

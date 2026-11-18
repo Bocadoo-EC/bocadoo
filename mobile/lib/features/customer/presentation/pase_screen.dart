@@ -418,7 +418,7 @@ class _WalletDeck extends StatelessWidget {
             ],
           ),
         if (hasAnyCard)
-          _ActiveWalletCard(state: state)
+          _ActiveWalletCard(state: state, controller: controller)
         else
           const _EmptyPlanPrompt(),
       ],
@@ -643,8 +643,12 @@ class _StackedTableTab extends StatelessWidget {
 
 class _ActiveWalletCard extends StatelessWidget {
   final CustomerUiState state;
+  final CustomerController controller;
 
-  const _ActiveWalletCard({required this.state});
+  const _ActiveWalletCard({
+    required this.state,
+    required this.controller,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -847,6 +851,16 @@ class _ActiveWalletCard extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
             child: Builder(
               builder: (context) {
+                final planLockedByMenu = mode == QrMode.plan &&
+                    pass != null &&
+                    !state.hasPublishedTodayMenu(pass.restaurantId);
+                if (planLockedByMenu) {
+                  return _MenuNotPublishedQrBlock(
+                    restaurantId: pass.restaurantId,
+                    onRefresh: () => controller.loadDashboard(silent: true),
+                  );
+                }
+
                 final qrData = AppMode.useMock
                     ? shortCode
                     : (state.qrValue.isNotEmpty ? state.qrValue : shortCode);
@@ -933,6 +947,14 @@ class _ActiveWalletCard extends StatelessWidget {
                         color: colors.onSurfaceVariant,
                       ),
                     ),
+                    if (mode == QrMode.plan && pass != null) ...[
+                      const SizedBox(height: 4),
+                      TextButton(
+                        onPressed: () => context
+                            .push('/customer/restaurants/${pass.restaurantId}'),
+                        child: const Text('Ver menú de hoy y elegir platos'),
+                      ),
+                    ],
                     if (mode == QrMode.preorden && order != null) ...[
                       const SizedBox(height: 4),
                       TextButton(
@@ -952,6 +974,97 @@ class _ActiveWalletCard extends StatelessWidget {
                 );
               },
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MenuNotPublishedQrBlock extends StatelessWidget {
+  final String restaurantId;
+  final VoidCallback onRefresh;
+
+  const _MenuNotPublishedQrBlock({
+    required this.restaurantId,
+    required this.onRefresh,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    final b = context.bocadooColors;
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: colors.secondaryContainer.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: colors.outlineVariant),
+      ),
+      child: Column(
+        children: [
+          Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              color: b.walletAccent.withValues(alpha: 0.28),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              Icons.schedule_rounded,
+              size: 28,
+              color: b.onWalletAccent,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            '⏳ Menú de hoy aún no disponible',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w900,
+              color: colors.onSurface,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'El restaurante todavía no ha publicado el menú del día. Tu QR se activará automáticamente en cuanto lo publiquen.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              height: 1.35,
+              color: colors.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: onRefresh,
+                  icon: const Icon(Icons.refresh_rounded, size: 18),
+                  label: const Text(
+                    'Actualizar',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: TextButton.icon(
+                  onPressed: () =>
+                      context.push('/customer/restaurants/$restaurantId'),
+                  icon: const Icon(Icons.storefront_outlined, size: 18),
+                  label: const Text(
+                    'Ver local',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),

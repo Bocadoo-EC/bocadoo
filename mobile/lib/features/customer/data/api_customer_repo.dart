@@ -38,6 +38,7 @@ class ApiCustomerRepository implements ICustomerRepository {
   final IdempotencyStore _idempotency = IdempotencyStore();
 
   final Map<String, Restaurant> _restaurantCache = {};
+  final Map<String, bool> _todayMenuPublishedByRest = {};
   final Map<String, String> _slugById = {};
   final Map<String, String> _restaurantByPassId = {};
   final Map<String, List<PlanTemplate>> _plansByRestaurantCache = {};
@@ -45,6 +46,10 @@ class ApiCustomerRepository implements ICustomerRepository {
   final Map<String, List<String>> _planIncludesByName = {};
   final Map<String, String> _orderIdByNumber = {};
   final Map<String, String> _estimatedArrivalByOrderNumber = {};
+
+  /// Último estado conocido de publicación del menú de hoy por `restaurantId`.
+  bool? cachedTodayMenuPublished(String restaurantId) =>
+      _todayMenuPublishedByRest[restaurantId];
 
   List<Map<String, dynamic>>? _sellosCache;
   DateTime? _sellosCacheAt;
@@ -76,6 +81,9 @@ class ApiCustomerRepository implements ICustomerRepository {
       final slug = (rest['slug'] ?? '').toString();
       if (restId.isNotEmpty && slug.isNotEmpty) {
         _slugById[restId] = slug;
+      }
+      if (restId.isNotEmpty && local['menuHoyPublicado'] is bool) {
+        _todayMenuPublishedByRest[restId] = local['menuHoyPublicado'] as bool;
       }
 
       final planes = _asListOfMaps(local['planes']);
@@ -1395,6 +1403,8 @@ class ApiCustomerRepository implements ICustomerRepository {
       longitude: base.longitude,
     );
 
+    _todayMenuPublishedByRest[base.id] =
+        published && menuItems.any((m) => !m.isSoldOut);
     _restaurantCache[base.id] = detailed;
     return detailed;
   }

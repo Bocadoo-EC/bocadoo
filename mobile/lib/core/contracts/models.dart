@@ -789,6 +789,7 @@ class TransactionItem {
   final double amount;
   final String paymentMethod; // Efectivo, Transferencia, Plan
   final DateTime timestamp;
+  final String? detail;
 
   const TransactionItem({
     required this.id,
@@ -797,6 +798,7 @@ class TransactionItem {
     required this.amount,
     required this.paymentMethod,
     required this.timestamp,
+    this.detail,
   });
 
   TransactionItem copyWith({
@@ -806,6 +808,7 @@ class TransactionItem {
     double? amount,
     String? paymentMethod,
     DateTime? timestamp,
+    String? detail,
   }) {
     return TransactionItem(
       id: id ?? this.id,
@@ -814,6 +817,7 @@ class TransactionItem {
       amount: amount ?? this.amount,
       paymentMethod: paymentMethod ?? this.paymentMethod,
       timestamp: timestamp ?? this.timestamp,
+      detail: detail ?? this.detail,
     );
   }
 }

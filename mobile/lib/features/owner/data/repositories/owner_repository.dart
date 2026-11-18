@@ -1,5 +1,6 @@
 import '../../../../core/contracts/models.dart';
 import '../../../../core/contracts/repositories.dart';
+import '../../../../core/demo/demo_store.dart';
 import '../../domain/models/daily_menu.dart';
 import '../../domain/models/menu_models.dart';
 import '../../domain/repositories/i_owner_repository.dart';
@@ -94,6 +95,19 @@ class OwnerRepository implements IOwnerRepository, IOwnerMenuRepository, IOwnerC
 
   // ── IOwnerMenuRepository ───────────────────────────────────────────────────
 
+  void _syncDemoMenuPublished(DailyMenu? menu, {String? restaurantId}) {
+    final published = menu != null &&
+        menu.isPublished &&
+        menu.courses.any((c) => !c.isSoldOut);
+    DemoStore.instance.menuPublishedByRest[DemoStore.ownerRestaurantId] =
+        published;
+    final rid = menu?.restaurantId ?? restaurantId ?? '';
+    if (rid.isNotEmpty) {
+      DemoStore.instance.menuPublishedByRest[rid] = published;
+    }
+    DemoStore.instance.changed();
+  }
+
   @override
   Future<DailyMenu?> getTodayMenu(String restaurantId) async {
     await Future<void>.delayed(const Duration(milliseconds: 150));
@@ -110,6 +124,7 @@ class OwnerRepository implements IOwnerRepository, IOwnerMenuRepository, IOwnerC
   Future<bool> publishMenu(DailyMenu menu) async {
     await Future<void>.delayed(const Duration(milliseconds: 200));
     _todayMenu = menu.copyWith(isPublished: true);
+    _syncDemoMenuPublished(_todayMenu);
     return true;
   }
 
@@ -119,6 +134,7 @@ class OwnerRepository implements IOwnerRepository, IOwnerMenuRepository, IOwnerC
     final menu = _todayMenu;
     if (menu == null) return false;
     _todayMenu = menu.copyWith(isPublished: false);
+    _syncDemoMenuPublished(_todayMenu, restaurantId: restaurantId);
     return true;
   }
 
@@ -130,6 +146,7 @@ class OwnerRepository implements IOwnerRepository, IOwnerMenuRepository, IOwnerC
     _todayMenu = menu.copyWith(courses: [
       for (final c in menu.courses) c.name == courseName ? c.copyWith(isSoldOut: soldOut) : c,
     ]);
+    _syncDemoMenuPublished(_todayMenu, restaurantId: restaurantId);
     return true;
   }
 

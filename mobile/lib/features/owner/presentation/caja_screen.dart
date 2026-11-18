@@ -33,6 +33,7 @@ class _CajaScreenState extends ConsumerState<CajaScreen> {
       if (!mounted) return;
       ref.invalidate(planRequestsProvider);
       ref.invalidate(ordersOnTheWayProvider);
+      ref.invalidate(posMenuProvider);
       setState(() {});
     });
   }
@@ -197,6 +198,9 @@ class _CajaBody extends ConsumerWidget {
     final tables = ref.watch(pendingTablesProvider).value ?? const <PendingTable>[];
     final planRequests =
         ref.watch(planRequestsProvider).value ?? const <OwnerPlanRequest>[];
+    final posMenuAsync = ref.watch(posMenuProvider);
+    final isMenuPublished = ref.watch(isTodayMenuPublishedProvider);
+    final scanLocked = posMenuAsync.hasValue && !isMenuPublished;
     final isOwner = ref.watch(ownerRoleProvider) == OwnerRole.owner;
     final charges = summary.transactions.take(20).toList();
     final total = summary.transactions.fold<double>(0, (sum, t) => sum + t.amount);
@@ -219,7 +223,16 @@ class _CajaBody extends ConsumerWidget {
           ),
           const SizedBox(height: 10),
         ],
-        _ScanCard(onTap: () => openScannerFlow(context, ref)),
+        if (scanLocked) ...[
+          _PublishMenuWarningBanner(
+            onPublishTap: () => context.go('/owner/menu'),
+          ),
+          const SizedBox(height: 12),
+        ],
+        _ScanCard(
+          enabled: !scanLocked,
+          onTap: scanLocked ? null : () => openScannerFlow(context, ref),
+        ),
         if (offer != null) ...[
           const SizedBox(height: 12),
           _OfferBanner(
@@ -332,40 +345,130 @@ class _TableBanner extends StatelessWidget {
   }
 }
 
-class _ScanCard extends StatelessWidget {
-  const _ScanCard({required this.onTap});
+class _PublishMenuWarningBanner extends StatelessWidget {
+  const _PublishMenuWarningBanner({required this.onPublishTap});
 
-  final VoidCallback onTap;
+  final VoidCallback onPublishTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final b = context.bocadooColors;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: b.walletAccent,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.warning_amber_rounded, size: 22, color: b.onWalletAccent),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  '⚠️ Publica el Menú de hoy para habilitar el escaneo de QR',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w900,
+                    height: 1.25,
+                    color: b.onWalletAccent,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerRight,
+            child: FilledButton(
+              onPressed: onPublishTap,
+              style: FilledButton.styleFrom(
+                backgroundColor: b.onWalletAccent,
+                foregroundColor: b.walletAccent,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                minimumSize: const Size(0, 38),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+                ),
+              ),
+              child: const Text(
+                'Ir a publicar menú →',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ScanCard extends StatelessWidget {
+  const _ScanCard({required this.onTap, this.enabled = true});
+
+  final VoidCallback? onTap;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     return Semantics(
-      button: true,
-      label: 'Escanear pase de comensal',
-      child: DashedBorderBox(
-        color: colors.primary,
-        fill: Theme.of(context).scaffoldBackgroundColor,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-          onTap: onTap,
-          child: SizedBox(
-            height: 230,
-            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Container(
-                width: 72,
-                height: 72,
-                decoration: BoxDecoration(color: colors.primary, borderRadius: BorderRadius.circular(18)),
-                child: Icon(Icons.qr_code_2_rounded, size: 40, color: colors.onPrimary),
-              ),
-              const SizedBox(height: 12),
-              Text('Escanear QR',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: colors.onSurface)),
-              const SizedBox(height: 2),
-              Text('Plan, preorden o mesa: se reconoce solo',
+      button: enabled,
+      enabled: enabled,
+      label: enabled
+          ? 'Escanear pase de comensal'
+          : 'Escáner bloqueado hasta publicar el menú de hoy',
+      child: Opacity(
+        opacity: enabled ? 1.0 : 0.6,
+        child: DashedBorderBox(
+          color: enabled ? colors.primary : colors.outlineVariant,
+          fill: enabled
+              ? Theme.of(context).scaffoldBackgroundColor
+              : colors.secondaryContainer.withValues(alpha: 0.35),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+            onTap: enabled ? onTap : null,
+            child: SizedBox(
+              height: 230,
+              child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                Container(
+                  width: 72,
+                  height: 72,
+                  decoration: BoxDecoration(
+                    color: enabled ? colors.primary : colors.outlineVariant,
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  child: Icon(
+                    enabled ? Icons.qr_code_2_rounded : Icons.lock_clock_rounded,
+                    size: 40,
+                    color: enabled ? colors.onPrimary : colors.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Escanear QR',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                    color: enabled ? colors.onSurface : colors.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  enabled
+                      ? 'Plan, preorden o mesa: se reconoce solo'
+                      : 'Publica el Menú de hoy para activar el escáner',
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant)),
-            ]),
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: colors.onSurfaceVariant,
+                  ),
+                ),
+              ]),
+            ),
           ),
         ),
       ),
@@ -505,31 +608,106 @@ class _ChargeRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
+    final isPlanRedemption = item.amount <= 0 &&
+        (item.type == 'Canje de plan' ||
+            item.type == 'Validado' ||
+            item.paymentMethod == 'Plan' ||
+            item.paymentMethod.contains('Canje'));
+    final planDetail = (item.detail != null && item.detail!.trim().isNotEmpty)
+        ? item.detail!.trim()
+        : 'Canje de plan · Almuerzo del día (Prepagado)';
+
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: colors.surface,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: colors.outlineVariant),
       ),
-      child: Row(children: [
-        Expanded(
-          child: Text(
-            item.amount > 0
-                ? '${item.customerName} · ${item.paymentMethod}'
-                : item.customerName,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: colors.onSurface),
+      child: Row(
+        children: [
+          Expanded(
+            child: isPlanRedemption
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        item.customerName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                          color: colors.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        planDetail,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: colors.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  )
+                : Text(
+                    '${item.customerName} · ${item.paymentMethod}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: colors.onSurface,
+                    ),
+                  ),
           ),
-        ),
-        const SizedBox(width: 8),
-        Text(
-          item.amount > 0 ? OwnerFormat.money(item.amount) : 'Canje de plan (\$0,00)',
-          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: colors.onSurface),
-        ),
-      ]),
+          const SizedBox(width: 8),
+          if (isPlanRedemption)
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: colors.secondaryContainer,
+                    borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+                  ),
+                  child: Text(
+                    'Prepagado',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900,
+                      color: colors.onSecondaryContainer,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '\$0,00 (Plan)',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: colors.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            )
+          else
+            Text(
+              OwnerFormat.money(item.amount),
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w900,
+                color: colors.onSurface,
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

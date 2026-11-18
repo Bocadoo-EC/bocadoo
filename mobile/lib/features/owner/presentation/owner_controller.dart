@@ -247,6 +247,14 @@ final posMenuProvider = FutureProvider.autoDispose<DailyMenu?>((ref) {
   return ref.read(ownerMenuRepositoryProvider).getTodayMenu(ref.read(ownerRestaurantIdProvider));
 });
 
+/// `true` cuando el menú de hoy está publicado y tiene al menos un plato disponible.
+final isTodayMenuPublishedProvider = Provider.autoDispose<bool>((ref) {
+  final menu = ref.watch(posMenuProvider).value;
+  return menu != null &&
+      menu.isPublished &&
+      menu.courses.any((c) => !c.isSoldOut);
+});
+
 final activeOfferProvider = FutureProvider.autoDispose<FlashOffer?>((ref) {
   return ref.read(ownerCashRepositoryProvider).getActiveOffer(ref.read(ownerRestaurantIdProvider));
 });
@@ -390,7 +398,19 @@ class OwnerController extends Notifier<OwnerState> {
           ? OwnerSuccess(result, redeemed: true)
           : OwnerError('No se pudo registrar el almuerzo.', result: result);
     } on ApiException catch (e) {
-      state = OwnerError(e.userMessage);
+      if (e.code == 'MENU_NO_PUBLICADO') {
+        const result = ScanResult(
+          isValid: false,
+          outcome: 'ROJO',
+          title: 'Menú no publicado',
+          supportingLine:
+              'No se puede escanear QR sin haber publicado el menú de hoy',
+          actionRequired: 'NINGUNA',
+        );
+        state = OwnerError(result.supportingLine, result: result);
+      } else {
+        state = OwnerError(e.userMessage);
+      }
     } catch (e) {
       state = OwnerError('No se pudo validar el código: $e');
     } finally {

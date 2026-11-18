@@ -123,6 +123,13 @@ class DemoStore extends ChangeNotifier {
   final List<DemoFeedback> feedback = [];
   final Map<String, String> occupancyOverrides = {};
   final Map<String, int> remainingLunchesByRest = {'r1': 14, 'r2': 6};
+  final Map<String, bool> menuPublishedByRest = {
+    'r1': false,
+    'r2': true,
+    'r3': true,
+    'r4': true,
+    'r5': false,
+  };
 
   int _orderSeq = 43;
   int _tableSeq = 1235;

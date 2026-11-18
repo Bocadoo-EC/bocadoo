@@ -108,8 +108,13 @@ class MockCustomerRepository implements ICustomerRepository {
 
   Restaurant _withLiveGeoAndOccupancy(Restaurant r, LatLng userPos) {
     final overrideOcc = _store.occupancyOverrides[r.id];
+    final menuPublished = _store.menuPublishedByRest[r.id] ?? r.hasMenu;
+    final visibleMenu = menuPublished ? r.todayMenu : const <MenuItem>[];
     if (!r.hasLocation) {
-      return overrideOcc == null ? r : r.copyWith(occupancy: overrideOcc);
+      return r.copyWith(
+        occupancy: overrideOcc ?? r.occupancy,
+        todayMenu: visibleMenu,
+      );
     }
     final meters = LocationService.meters(userPos, LatLng(r.latitude!, r.longitude!));
     final km = (meters / 100.0).round() / 10.0;
@@ -117,6 +122,7 @@ class MockCustomerRepository implements ICustomerRepository {
       distanceMeters: meters,
       distanceKm: km,
       occupancy: overrideOcc ?? r.occupancy,
+      todayMenu: visibleMenu,
     );
   }
 
