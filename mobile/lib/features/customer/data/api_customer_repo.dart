@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/analytics/events_service.dart';
 import '../../../core/config/support_config.dart';
 import '../../../core/contracts/models.dart';
+import '../../../core/contracts/qr_parser.dart';
 import '../../../core/contracts/repositories.dart';
 import '../../../core/location/location_service.dart';
 import '../../../core/network/api_client.dart';
@@ -113,7 +114,10 @@ class ApiCustomerRepository implements ICustomerRepository {
             remainingLunches: remaining,
             expiresAt: expiresAt,
             status: status,
-            qrToken: qrToken,
+            qrToken: BocadooQrParser.generatePlanCode(
+              qrToken.isNotEmpty ? qrToken : passId,
+              restaurantId: restId,
+            ),
             restaurantId: restId,
             restaurantName: restName,
             avatarUrl: rest['logoUrl']?.toString(),
@@ -151,7 +155,10 @@ class ApiCustomerRepository implements ICustomerRepository {
           remainingLunches: remaining,
           expiresAt: expiresAt,
           status: status,
-          qrToken: qrToken,
+          qrToken: BocadooQrParser.generatePlanCode(
+            qrToken.isNotEmpty ? qrToken : passId,
+            restaurantId: restId,
+          ),
           restaurantId: restId,
           restaurantName: restName,
           avatarUrl: rest['logoUrl']?.toString(),
@@ -186,14 +193,29 @@ class ApiCustomerRepository implements ICustomerRepository {
       ),
     );
     eventsService.track('comensal.qr_generado', restaurantId: restId);
-    return (data['codigo'] ?? '').toString();
+    final raw = (data['codigo'] ?? '').toString();
+    return BocadooQrParser.generatePlanCode(
+      raw.isNotEmpty ? raw : passId,
+      restaurantId: restId,
+    );
   }
 
   @override
-  Future<CustomerPass?> getCachedPass() => _passCache.getPass();
+  Future<CustomerPass?> getCachedPass() async {
+    final pass = await _passCache.getPass();
+    if (pass != null && pass.id.isNotEmpty && pass.restaurantId.isNotEmpty) {
+      _restaurantByPassId[pass.id] = pass.restaurantId;
+    }
+    return pass;
+  }
 
   @override
-  Future<void> saveCachedPass(CustomerPass pass) => _passCache.savePass(pass);
+  Future<void> saveCachedPass(CustomerPass pass) {
+    if (pass.id.isNotEmpty && pass.restaurantId.isNotEmpty) {
+      _restaurantByPassId[pass.id] = pass.restaurantId;
+    }
+    return _passCache.savePass(pass);
+  }
 
   // ---------------------------------------------------------------------------
   // C1 · Sellos y mesa activa

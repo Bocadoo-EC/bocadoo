@@ -114,19 +114,56 @@ class BocadooQrParser {
   /// Quita el prefijo `PLN-` si está presente.
   static String stripPlanPrefix(String raw) {
     final trimmed = raw.trim();
+    final pipeIdx = trimmed.indexOf('|');
+    if (pipeIdx >= 0) {
+      return trimmed.substring(pipeIdx + 1).trim();
+    }
     if (trimmed.toUpperCase().startsWith(planPrefix)) {
       return trimmed.substring(planPrefix.length).trim();
     }
     return trimmed;
   }
 
+  /// Extrae el token real del backend desde un payload `PLN-XXXXXX|<token>` o código directo.
+  static String extractPlanBackendToken(String raw) {
+    final trimmed = raw.trim();
+    final pipeIdx = trimmed.indexOf('|');
+    if (pipeIdx >= 0 && pipeIdx + 1 < trimmed.length) {
+      return trimmed.substring(pipeIdx + 1).trim();
+    }
+    return resolveRawPayload(trimmed) ?? stripPlanPrefix(trimmed);
+  }
+
+  /// Devuelve la etiqueta corta visible (`PLN-XXXXXX`) para mostrar bajo el QR.
+  static String displayPlanCode(String raw, {String? restaurantId}) {
+    final trimmed = raw.trim();
+    final pipeIdx = trimmed.indexOf('|');
+    final head = pipeIdx >= 0 ? trimmed.substring(0, pipeIdx).trim() : trimmed;
+    final upperHead = head.toUpperCase();
+    if (upperHead.startsWith(planPrefix) &&
+        sanitizeManualInput(upperHead).length == shortCodeLength) {
+      return upperHead;
+    }
+    return '$planPrefix${toShortCode(trimmed, restaurantId: restaurantId)}';
+  }
+
   /// Limpia un texto ingresado por teclado dejándolo en mayúsculas sin espacios ni puntos.
+  /// Nunca trunca tokens largos del backend (`BCD1.…`, JWT o payloads con `|`).
   static String sanitizeManualInput(String raw) {
     var upper = raw.trim().toUpperCase();
+    final pipeIdx = upper.indexOf('|');
+    if (pipeIdx >= 0) {
+      upper = upper.substring(0, pipeIdx).trim();
+    }
+    if (upper.startsWith('BCD1.') || upper.startsWith('BCD-')) {
+      return '';
+    }
     if (upper.startsWith(planPrefix)) {
       upper = upper.substring(planPrefix.length);
     } else if (upper.startsWith(orderPrefix)) {
       upper = upper.substring(orderPrefix.length);
+    } else if (upper.contains('.') || upper.length > 10) {
+      return '';
     }
     final cleaned = upper.replaceAll(RegExp(r'[^A-Z0-9]'), '');
     return cleaned.length > 6 ? cleaned.substring(0, 6) : cleaned;
@@ -162,9 +199,15 @@ class BocadooQrParser {
     return code;
   }
 
-  /// Genera el código de pase de plan en formato estricto `PLN-XXXXXX`.
+  /// Genera el código de pase de plan en formato estricto `PLN-XXXXXX`
+  /// (conservando el token real tras `|` si es un payload largo del backend).
   static String generatePlanCode(String rawSeed, {String? restaurantId}) {
-    final code = toShortCode(rawSeed, restaurantId: restaurantId);
+    final trimmed = rawSeed.trim();
+    if (trimmed.contains('|')) return trimmed;
+    final code = toShortCode(trimmed, restaurantId: restaurantId);
+    if (trimmed.contains('.') || trimmed.length > 10) {
+      return '$planPrefix$code|$trimmed';
+    }
     return '$planPrefix$code';
   }
 
@@ -296,9 +339,10 @@ class BocadooQrParser {
     final currentStep = getCurrentTimeStep(now);
 
     // 1. Validación directa de código corto de 6 caracteres (o PLN-XXXXXX)
-    final normalizedShort = upper.startsWith(planPrefix)
-        ? upper.substring(planPrefix.length)
-        : upper;
+    final head = upper.contains('|') ? upper.substring(0, upper.indexOf('|')).trim() : upper;
+    final normalizedShort = head.startsWith(planPrefix)
+        ? head.substring(planPrefix.length)
+        : head;
     if (_shortCodeRegex.hasMatch(normalizedShort)) {
       // Ventana vigente (±1 paso de 30s)
       for (final delta in const [0, -1, 1]) {

@@ -688,10 +688,15 @@ class _ActiveWalletCard extends StatelessWidget {
       shortRestaurantId = null;
     }
 
-    final shortCode = BocadooQrParser.toShortCode(
-      state.qrValue,
-      restaurantId: shortRestaurantId,
-    );
+    final shortCode = mode == QrMode.plan
+        ? BocadooQrParser.displayPlanCode(
+            state.qrValue,
+            restaurantId: shortRestaurantId,
+          )
+        : BocadooQrParser.toShortCode(
+            state.qrValue,
+            restaurantId: shortRestaurantId,
+          );
 
     return Container(
       decoration: BoxDecoration(

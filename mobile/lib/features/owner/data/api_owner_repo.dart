@@ -409,10 +409,11 @@ class ApiOwnerRepository
   Future<ScanResult> validateQrCode(String rawPayload) async {
     _lastError = null;
     final restaurantId = _session.activeRestaurantId ?? '';
+    final backendCode = BocadooQrParser.extractPlanBackendToken(rawPayload);
     final cleaned = BocadooQrParser.sanitizeManualInput(rawPayload);
     final codeKey = cleaned.length == BocadooQrParser.shortCodeLength
         ? cleaned
-        : rawPayload.trim().toUpperCase();
+        : backendCode.trim().toUpperCase();
 
     // Regla 5.1: Validación de pertenencia al local.
     final codeRestId = BocadooQrParser.restaurantForCode(rawPayload);
@@ -425,17 +426,6 @@ class ApiOwnerRepository
         outcome: 'ROJO',
         title: 'Es de otro local',
         supportingLine: 'Este código pertenece a otro restaurante',
-        actionRequired: 'NINGUNA',
-      );
-    }
-
-    // Regla 5.4: Bloqueo inmediato de doble escaneo (Idempotencia).
-    if (_redeemedCodes.contains(codeKey)) {
-      return const ScanResult(
-        isValid: false,
-        outcome: 'ROJO',
-        title: 'Ya canjeado',
-        supportingLine: 'Este código ya fue canjeado anteriormente',
         actionRequired: 'NINGUNA',
       );
     }
@@ -523,8 +513,8 @@ class ApiOwnerRepository
       );
     }
 
-    final backendCode = BocadooQrParser.resolveRawPayload(rawPayload) ??
-        BocadooQrParser.stripPlanPrefix(rawPayload);
+    // Para pases de plan rotativos, solo bloquea doble lectura accidental (< 5s);
+    // la validez y anti-replay de cada ciclo la decide el backend.
     final nowScan = DateTime.now();
     final lastAt = _recentRedeemAt[codeKey];
     if (lastAt != null && nowScan.difference(lastAt).inSeconds < 5) {
@@ -583,7 +573,6 @@ class ApiOwnerRepository
 
       if (resultado == 'OK' || resultado == 'OK_ADVERTENCIA') {
         final now = DateTime.now();
-        _redeemedCodes.add(codeKey);
         _recentRedeemAt[codeKey] = now;
         final txTime = redeemedAt ?? now;
         final isDup = _sessionValidatedTransactions.any(
