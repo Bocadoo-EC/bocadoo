@@ -358,6 +358,9 @@ class ApiOwnerRepository
     if (trimmed.startsWith('#') && trimmed.length > 1) {
       return resolveOrderByNumber(trimmed.substring(1).trim());
     }
+    if (RegExp(r'^\d+$').hasMatch(trimmed)) {
+      return resolveOrderByNumber(trimmed);
+    }
     if (_uuidRegex.hasMatch(trimmed)) {
       return resolveOrderById(trimmed);
     }

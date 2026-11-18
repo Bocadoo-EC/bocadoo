@@ -7,6 +7,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../../core/config/api_capabilities.dart';
 import '../../../core/config/app_mode.dart';
+import '../../../core/config/app_mode.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/contracts/qr_parser.dart';
 import '../../../core/network/api_exception.dart';
@@ -418,12 +419,16 @@ class _QrCard extends StatelessWidget {
           ),
           child: Column(children: [
             SocialQr(
-              value: BocadooQrParser.generateTableCode(table.id, restaurantId: table.restaurantId),
+              value: AppMode.useMock
+                  ? BocadooQrParser.generateTableCode(table.id, restaurantId: table.restaurantId)
+                  : table.qrPayload,
               size: 150,
             ),
             const SizedBox(height: 8),
             SocialBadge(
-              label: BocadooQrParser.generateTableCode(table.id, restaurantId: table.restaurantId),
+              label: AppMode.useMock
+                  ? BocadooQrParser.generateTableCode(table.id, restaurantId: table.restaurantId)
+                  : 'Mesa ${table.id}',
               background: colors.primaryContainer,
               foreground: colors.primary,
             ),

@@ -1,5 +1,4 @@
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:go_router/go_router.dart';
@@ -437,22 +436,6 @@ class _SimulatorSheet extends StatelessWidget {
   }
 }
 
-class _UpperCaseSixCharFormatter extends TextInputFormatter {
-  const _UpperCaseSixCharFormatter();
-
-  @override
-  TextEditingValue formatEditUpdate(
-    TextEditingValue oldValue,
-    TextEditingValue newValue,
-  ) {
-    final cleaned = BocadooQrParser.sanitizeManualInput(newValue.text);
-    return TextEditingValue(
-      text: cleaned,
-      selection: TextSelection.collapsed(offset: cleaned.length),
-    );
-  }
-}
-
 /// Diálogo para escribir el token a mano si falla la cámara.
 class _ManualEntryDialog extends StatefulWidget {
   const _ManualEntryDialog();
@@ -472,16 +455,21 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
   }
 
   void _accept() {
-    final value = BocadooQrParser.sanitizeManualInput(_text.text);
-    if (value.isEmpty) {
-      setState(() => _error = 'Escribe el código de 6 caracteres.');
+    final raw = _text.text.trim();
+    if (raw.isEmpty) {
+      setState(() => _error = 'Escribe el código o # de pedido.');
       return;
     }
-    if (value.length < 6) {
-      setState(() => _error = 'El código debe tener 6 caracteres.');
+    if (raw.startsWith('#') || RegExp(r'^\d+$').hasMatch(raw) || raw.contains('.')) {
+      Navigator.pop(context, raw);
       return;
     }
-    Navigator.pop(context, value);
+    final cleaned = BocadooQrParser.sanitizeManualInput(raw);
+    if (cleaned.length < 6) {
+      setState(() => _error = 'Escribe el código de 6 caracteres o #pedido.');
+      return;
+    }
+    Navigator.pop(context, cleaned);
   }
 
   @override
@@ -496,18 +484,15 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Escribe el código de 6 caracteres bajo el QR del comensal.'),
+              const Text('Escribe el código bajo el QR o el # de pedido (ej. #7).'),
               const SizedBox(height: 16),
               TextField(
                 controller: _text,
                 autofocus: true,
-                maxLength: 6,
                 textInputAction: TextInputAction.done,
                 textCapitalization: TextCapitalization.characters,
-                inputFormatters: const [_UpperCaseSixCharFormatter()],
                 decoration: InputDecoration(
-                  hintText: 'Ej: A7K9P2',
-                  counterText: '',
+                  hintText: 'Ej: A7K9P2 o #7',
                   errorText: _error,
                 ),
                 onChanged: (_) {

@@ -4,7 +4,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/analytics/events_service.dart';
 import '../../../core/config/support_config.dart';
 import '../../../core/contracts/models.dart';
-import '../../../core/contracts/qr_parser.dart';
 import '../../../core/contracts/repositories.dart';
 import '../../../core/location/location_service.dart';
 import '../../../core/network/api_client.dart';
@@ -80,43 +79,84 @@ class ApiCustomerRepository implements ICustomerRepository {
 
       final planes = _asListOfMaps(local['planes']);
       if (planes.isEmpty) continue;
-      final first = planes.first;
-      final passId = (first['id'] ?? '').toString();
-      if (passId.isNotEmpty && restId.isNotEmpty) {
-        _restaurantByPassId[passId] = restId;
-      }
 
-      final remaining = _asInt(local['almuerzosDisponibles']) ??
-          _asInt(first['almuerzosRestantes']) ??
-          0;
-      final total = _asInt(first['almuerzosTotales']) ?? remaining;
-      final daysLeft = _asInt(first['diasParaVencer']);
-      final expiresAt = _parseEndOfDayEcuador(first['venceEl']?.toString()) ??
-          DateTime.now().add(Duration(days: daysLeft ?? 0));
+      final localRemaining = _asInt(local['almuerzosDisponibles']);
+      final hasPerPlanRemaining =
+          planes.any((p) => p['almuerzosRestantes'] != null);
 
-      final status = _computePassStatus(
-        remaining: remaining,
-        daysLeft: daysLeft,
-        expiresAt: expiresAt,
-      );
+      if (hasPerPlanRemaining) {
+        for (final plan in planes) {
+          final passId = (plan['id'] ?? '').toString();
+          if (passId.isNotEmpty && restId.isNotEmpty) {
+            _restaurantByPassId[passId] = restId;
+          }
+          final remaining = _asInt(plan['almuerzosRestantes']) ?? 0;
+          final rawTotal = _asInt(plan['almuerzosTotales']) ?? remaining;
+          final safeTotal = rawTotal >= remaining ? rawTotal : remaining;
+          final daysLeft = _asInt(plan['diasParaVencer']);
+          final expiresAt =
+              _parseEndOfDayEcuador(plan['venceEl']?.toString()) ??
+                  DateTime.now().add(Duration(days: daysLeft ?? 0));
 
-      passes.add(CustomerPass(
-        id: passId,
-        userId: uid,
-        studentName: studentName,
-        planName: (first['nombre'] ?? 'Plan de almuerzos').toString(),
-        totalLunches: total > 0 ? total : remaining,
-        remainingLunches: remaining,
-        expiresAt: expiresAt,
-        status: status,
-        qrToken: BocadooQrParser.generatePlanCode(
-          qrToken.isNotEmpty ? qrToken : passId,
+          final status = _computePassStatus(
+            remaining: remaining,
+            daysLeft: daysLeft,
+            expiresAt: expiresAt,
+          );
+
+          passes.add(CustomerPass(
+            id: passId,
+            userId: uid,
+            studentName: studentName,
+            planName: (plan['nombre'] ?? 'Plan de almuerzos').toString(),
+            totalLunches: safeTotal > 0 ? safeTotal : remaining,
+            remainingLunches: remaining,
+            expiresAt: expiresAt,
+            status: status,
+            qrToken: qrToken,
+            restaurantId: restId,
+            restaurantName: restName,
+            avatarUrl: rest['logoUrl']?.toString(),
+          ));
+        }
+      } else {
+        final first = planes.first;
+        final passId = (first['id'] ?? '').toString();
+        if (passId.isNotEmpty && restId.isNotEmpty) {
+          _restaurantByPassId[passId] = restId;
+        }
+        final remaining = localRemaining ?? 0;
+        final sumTotals = planes.fold<int>(
+          0,
+          (sum, p) => sum + (_asInt(p['almuerzosTotales']) ?? 0),
+        );
+        final safeTotal = sumTotals >= remaining ? sumTotals : remaining;
+        final daysLeft = _asInt(first['diasParaVencer']);
+        final expiresAt =
+            _parseEndOfDayEcuador(first['venceEl']?.toString()) ??
+                DateTime.now().add(Duration(days: daysLeft ?? 0));
+
+        final status = _computePassStatus(
+          remaining: remaining,
+          daysLeft: daysLeft,
+          expiresAt: expiresAt,
+        );
+
+        passes.add(CustomerPass(
+          id: passId,
+          userId: uid,
+          studentName: studentName,
+          planName: (first['nombre'] ?? 'Plan de almuerzos').toString(),
+          totalLunches: safeTotal > 0 ? safeTotal : remaining,
+          remainingLunches: remaining,
+          expiresAt: expiresAt,
+          status: status,
+          qrToken: qrToken,
           restaurantId: restId,
-        ),
-        restaurantId: restId,
-        restaurantName: restName,
-        avatarUrl: rest['logoUrl']?.toString(),
-      ));
+          restaurantName: restName,
+          avatarUrl: rest['logoUrl']?.toString(),
+        ));
+      }
     }
 
     if (passes.isNotEmpty) {
@@ -146,8 +186,7 @@ class ApiCustomerRepository implements ICustomerRepository {
       ),
     );
     eventsService.track('comensal.qr_generado', restaurantId: restId);
-    final raw = (data['codigo'] ?? '').toString();
-    return BocadooQrParser.generatePlanCode(raw, restaurantId: restId);
+    return (data['codigo'] ?? '').toString();
   }
 
   @override
@@ -1053,7 +1092,7 @@ class ApiCustomerRepository implements ICustomerRepository {
       restaurantName: restaurantName,
       hostName: hostName,
       time: time,
-      qrPayload: BocadooQrParser.generateTableCode(id, restaurantId: restaurantId),
+      qrPayload: 'BCD-MESA-$id',
       shareUrl: 'bocadoo://mesa/$invitacion',
       mode: mode,
       members: members,
@@ -1409,11 +1448,7 @@ class ApiCustomerRepository implements ICustomerRepository {
       orderNumber: orderNum,
       status: status,
       restaurantName: (rest['nombre'] ?? '').toString(),
-      qrPayload: BocadooQrParser.generateOrderCode(
-        orderNum,
-        orderId: id.isEmpty ? null : id,
-        restaurantId: restId,
-      ),
+      qrPayload: (json['qr'] ?? id).toString(),
       detail: parts.join(' · '),
       soup: soup,
       main: main,

@@ -6,6 +6,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../../core/config/api_capabilities.dart';
+import '../../../core/config/app_mode.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/contracts/qr_parser.dart';
 import '../../../core/theme/app_theme.dart';
@@ -125,9 +126,17 @@ class _PaseScreenState extends ConsumerState<PaseScreen> {
   }
 }
 
-void _showZoomedQr(BuildContext context, String value, String label, {String? restaurantId}) {
+void _showZoomedQr(
+  BuildContext context,
+  String value,
+  String label, {
+  String? restaurantId,
+  String? badgeOverride,
+}) {
   final colors = context.colorScheme;
   final shortCode = BocadooQrParser.toShortCode(value, restaurantId: restaurantId);
+  final qrData = AppMode.useMock ? shortCode : (value.isNotEmpty ? value : shortCode);
+  final displayCode = badgeOverride ?? shortCode;
   showGeneralDialog<void>(
     context: context,
     barrierDismissible: true,
@@ -160,7 +169,7 @@ void _showZoomedQr(BuildContext context, String value, String label, {String? re
                         borderRadius: BorderRadius.circular(28),
                         border: Border.all(color: colors.outlineVariant),
                       ),
-                      child: _Qr(value: shortCode, size: 280),
+                      child: _Qr(value: qrData, size: 280),
                     ),
                     const SizedBox(height: 12),
                     Container(
@@ -173,7 +182,7 @@ void _showZoomedQr(BuildContext context, String value, String label, {String? re
                         borderRadius: BorderRadius.circular(999),
                       ),
                       child: Text(
-                        shortCode,
+                        displayCode,
                         style: TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.w900,
@@ -831,99 +840,112 @@ class _ActiveWalletCard extends StatelessWidget {
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
-            child: Column(
-              children: [
-                GestureDetector(
-                  onTap: () => _showZoomedQr(
-                    context,
-                    state.qrValue,
-                    title,
-                    restaurantId: shortRestaurantId,
-                  ),
-                  child: Container(
-                    width: 212,
-                    height: 212,
-                    padding: const EdgeInsets.all(14),
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: b.qrBackground,
-                      borderRadius: BorderRadius.circular(24),
-                      border: Border.all(color: colors.outlineVariant),
-                    ),
-                    child: Stack(
-                      clipBehavior: Clip.none,
-                      children: [
-                        _Qr(value: shortCode, size: 176),
-                        Positioned(
-                          right: -14,
-                          bottom: -14,
-                          child: Container(
-                            padding: const EdgeInsets.all(5),
-                            decoration: BoxDecoration(
-                              color: colors.primary,
-                              shape: BoxShape.circle,
-                            ),
-                            child: Icon(
-                              Icons.open_in_full_rounded,
-                              size: 14,
-                              color: colors.onPrimary,
-                            ),
-                          ),
+            child: Builder(
+              builder: (context) {
+                final qrData = AppMode.useMock
+                    ? shortCode
+                    : (state.qrValue.isNotEmpty ? state.qrValue : shortCode);
+                final displayCode = (!AppMode.useMock &&
+                        mode == QrMode.preorden &&
+                        order != null)
+                    ? '#${order.orderNumber}'
+                    : shortCode;
+                return Column(
+                  children: [
+                    GestureDetector(
+                      onTap: () => _showZoomedQr(
+                        context,
+                        state.qrValue,
+                        title,
+                        restaurantId: shortRestaurantId,
+                        badgeOverride: displayCode,
+                      ),
+                      child: Container(
+                        width: 212,
+                        height: 212,
+                        padding: const EdgeInsets.all(14),
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: b.qrBackground,
+                          borderRadius: BorderRadius.circular(24),
+                          border: Border.all(color: colors.outlineVariant),
                         ),
-                      ],
+                        child: Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            _Qr(value: qrData, size: 176),
+                            Positioned(
+                              right: -14,
+                              bottom: -14,
+                              child: Container(
+                                padding: const EdgeInsets.all(5),
+                                decoration: BoxDecoration(
+                                  color: colors.primary,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Icon(
+                                  Icons.open_in_full_rounded,
+                                  size: 14,
+                                  color: colors.onPrimary,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 18,
-                    vertical: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    color: colors.primaryContainer,
-                    borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-                  ),
-                  child: Text(
-                    shortCode,
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 2.5,
-                      color: colors.onPrimaryContainer,
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 18,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: colors.primaryContainer,
+                        borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+                      ),
+                      child: Text(
+                        displayCode,
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 2.5,
+                          color: colors.onPrimaryContainer,
+                        ),
+                      ),
                     ),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  mode == QrMode.preorden
-                      ? (order?.hasPlan == true
-                          ? 'Presenta este QR o dicta el código para descontar de tu plan'
-                          : 'Presenta este QR o dicta el código en caja para confirmar y pagar')
-                      : 'Muestra este QR o dicta el código de 6 caracteres en caja',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: colors.onSurfaceVariant,
-                  ),
-                ),
-                if (mode == QrMode.preorden && order != null) ...[
-                  const SizedBox(height: 4),
-                  TextButton(
-                    onPressed: () =>
-                        context.push('/customer/pedido/${order.orderNumber}'),
-                    child: const Text('Ver estado del pedido'),
-                  ),
-                ],
-                if (mode == QrMode.mesa && table != null) ...[
-                  const SizedBox(height: 4),
-                  TextButton(
-                    onPressed: () => context.push('/customer/mesa'),
-                    child: const Text('Ver mesa y compartir'),
-                  ),
-                ],
-              ],
+                    const SizedBox(height: 8),
+                    Text(
+                      mode == QrMode.preorden
+                          ? (order?.hasPlan == true
+                              ? 'Presenta este QR en caja para descontar de tu plan'
+                              : 'Presenta este QR en caja para confirmar y pagar')
+                          : 'Muestra este QR en caja para validar tu almuerzo',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: colors.onSurfaceVariant,
+                      ),
+                    ),
+                    if (mode == QrMode.preorden && order != null) ...[
+                      const SizedBox(height: 4),
+                      TextButton(
+                        onPressed: () =>
+                            context.push('/customer/pedido/${order.orderNumber}'),
+                        child: const Text('Ver estado del pedido'),
+                      ),
+                    ],
+                    if (mode == QrMode.mesa && table != null) ...[
+                      const SizedBox(height: 4),
+                      TextButton(
+                        onPressed: () => context.push('/customer/mesa'),
+                        child: const Text('Ver mesa y compartir'),
+                      ),
+                    ],
+                  ],
+                );
+              },
             ),
           ),
         ],

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/config/app_mode.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/contracts/qr_parser.dart';
 import '../../../core/theme/app_theme.dart';
@@ -176,13 +177,17 @@ class _OrderStatusSheetState extends ConsumerState<OrderStatusSheet> {
               border: Border.all(color: colors.outlineVariant),
             ),
             child: SocialQr(
-              value: BocadooQrParser.generateOrderCode(order.orderNumber, orderId: order.id),
+              value: AppMode.useMock
+                  ? BocadooQrParser.generateOrderCode(order.orderNumber, orderId: order.id)
+                  : order.qrPayload,
               size: 150,
             ),
           ),
           const SizedBox(height: 10),
           SocialBadge(
-            label: BocadooQrParser.generateOrderCode(order.orderNumber, orderId: order.id),
+            label: AppMode.useMock
+                ? BocadooQrParser.generateOrderCode(order.orderNumber, orderId: order.id)
+                : '#${order.orderNumber}',
             background: colors.primaryContainer,
             foreground: colors.primary,
           ),
