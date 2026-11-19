@@ -1088,6 +1088,17 @@ class ApiCustomerRepository implements ICustomerRepository {
     }
   }
 
+  /// Cancela una mesa compartida abierta (solo anfitrión, antes de validar en caja).
+  Future<void> cancelSharedTable(String tableId) async {
+    await guard(
+      () => _api.send<Map<String, dynamic>>(
+        'POST',
+        '${ApiConfig.v1}/mis/mesas/$tableId/cancelar',
+      ),
+    );
+    eventsService.track('comensal.mesa_cancelada');
+  }
+
   Future<SharedTable> _mapMesaResponseToSharedTable(
     Map<String, dynamic> json,
   ) async {

@@ -193,6 +193,59 @@ class _TableSheetState extends ConsumerState<TableSheet> {
     }
   }
 
+  Future<void> _cancelTable(SharedTable t) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('¿Cancelar mesa?'),
+        content: const Text(
+          'Se cerrará esta mesa compartida y tus amigos ya no podrán unirse.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Seguir en la mesa'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text(
+              'Cancelar mesa',
+              style: TextStyle(color: ctx.colorScheme.error),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+    setState(() => _busy = true);
+    final controller = ref.read(customerControllerProvider);
+    final messenger = ScaffoldMessenger.of(context);
+    final ok = await controller.cancelSharedTable(t.id);
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (!ok) {
+      messenger.showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text(
+            controller.lastActionError ?? 'No pudimos cancelar la mesa.',
+          ),
+        ),
+      );
+      return;
+    }
+    _poller?.stop();
+    messenger.showSnackBar(
+      const SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text('Mesa cancelada'),
+      ),
+    );
+    if (Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
+  }
+
   void _invite(SharedTable t) {
     final text = '¡Vamos a almorzar juntos en ${t.restaurantName} a las ${t.time}! '
         'Únete a nuestra mesa: ${t.shareUrl} (código: ${t.id})';
@@ -336,6 +389,16 @@ class _TableSheetState extends ConsumerState<TableSheet> {
                       ),
                       Divider(height: 24, color: colors.outlineVariant),
                       _Members(table: t),
+                      const SizedBox(height: 14),
+                      OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: colors.error,
+                          side: BorderSide(color: colors.error.withValues(alpha: 0.45)),
+                        ),
+                        onPressed: _busy ? null : () => _cancelTable(t),
+                        icon: const Icon(Icons.close_rounded, size: 18),
+                        label: const Text('Cancelar mesa'),
+                      ),
                       if (ApiCapabilities.sharedTableNotifyKitchen && !t.onTheWay) ...[
                         const SizedBox(height: 18),
                         ElevatedButton(

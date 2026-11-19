@@ -1219,6 +1219,30 @@ class CustomerController extends ChangeNotifier {
     _syncOrderPolling(_state.activeOrder, table: activeTable);
   }
 
+  Future<bool> cancelSharedTable(String tableId) async {
+    lastActionError = null;
+    try {
+      final repo = _repository;
+      if (repo is ApiCustomerRepository) {
+        await repo.cancelSharedTable(tableId);
+      }
+      _emit(_state.copyWith(clearActiveTable: true));
+      _syncOrderPolling(
+        _state.activeOrder,
+        table: null,
+        passes: _state.passes,
+        menuPublishedByRest: _state.todayMenuPublishedByRest,
+      );
+      return true;
+    } on ApiException catch (e) {
+      lastActionError = e.userMessage;
+      return false;
+    } catch (_) {
+      lastActionError = 'No pudimos cancelar la mesa. Inténtalo de nuevo.';
+      return false;
+    }
+  }
+
   /// C10: una etiqueta de un toque. La tarjeta se oculta al enviar.
   Future<bool> submitFeedback(String tag) async {
     final f = _state.pendingFeedback;
