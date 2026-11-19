@@ -14,7 +14,6 @@ import '../../../core/utils/external_links.dart';
 import '../../../core/widgets/appearance_selector.dart';
 import '../../../core/widgets/bocadoo_logo.dart';
 import '../../../core/widgets/location_picker_map.dart';
-import '../data/api_owner_repo.dart';
 import '../domain/models/extras_models.dart';
 import '../domain/models/metrics_models.dart';
 import 'owner_controller.dart';
@@ -449,23 +448,17 @@ class _StoreOpenCard extends ConsumerWidget {
 
     Future<void> toggle(bool value) async {
       final messenger = ScaffoldMessenger.of(context);
-      final repo = ref.read(ownerMenuRepositoryProvider);
-      final rid = ref.read(ownerRestaurantIdProvider);
       ref.read(_storeOpenProvider.notifier).set(value);
-      final ok = await repo.setStoreOpen(rid, isOpen: value);
+      final err = await ref.read(manualOccupancyProvider.notifier).setStatus(
+            value ? ManualOccupancyStatus.libre : ManualOccupancyStatus.cerrado,
+          );
       if (!context.mounted) return;
-      if (!ok) {
+      if (err != null && err.isNotEmpty) {
         ref.read(_storeOpenProvider.notifier).set(!value);
-        final err = repo is ApiOwnerRepository
-            ? (repo.consumeLastError() ?? 'No se pudo cambiar el estado del local.')
-            : 'No se pudo cambiar el estado del local.';
         showInfoSnackBar(messenger, err);
         return;
       }
       ref.invalidate(posMenuProvider);
-      ref.read(manualOccupancyProvider.notifier).setStatus(
-            value ? ManualOccupancyStatus.libre : ManualOccupancyStatus.cerrado,
-          );
       showInfoSnackBar(messenger, value ? 'Local abierto' : 'Local cerrado');
     }
 

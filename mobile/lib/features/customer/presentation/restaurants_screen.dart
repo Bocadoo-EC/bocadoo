@@ -23,9 +23,21 @@ class RestaurantsScreen extends ConsumerStatefulWidget {
 class _RestaurantsScreenState extends ConsumerState<RestaurantsScreen> {
   late final TextEditingController _search =
       TextEditingController(text: ref.read(customerControllerProvider).state.searchQuery);
+  CustomerController? _controllerRef;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _controllerRef = ref.read(customerControllerProvider);
+      _controllerRef?.setRestaurantsVisible(true);
+    });
+  }
 
   @override
   void dispose() {
+    _controllerRef?.setRestaurantsVisible(false);
     _search.dispose();
     super.dispose();
   }
@@ -95,7 +107,7 @@ class _RestaurantsScreenState extends ConsumerState<RestaurantsScreen> {
     ];
 
     return RefreshIndicator(
-      onRefresh: () => controller.loadDashboard(silent: true),
+      onRefresh: () => controller.refreshRestaurants(forceHydrate: true),
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
         children: [

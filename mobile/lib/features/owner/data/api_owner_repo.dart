@@ -1980,21 +1980,14 @@ class ApiOwnerRepository
     _lastError = null;
     final busy = status == ManualOccupancyStatus.lleno;
     final isClosed = status == ManualOccupancyStatus.cerrado;
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(
-        '$_manualOccupancyPrefPrefix$restaurantId',
-        switch (status) {
-          ManualOccupancyStatus.cerrado => 'CERRADO',
-          ManualOccupancyStatus.concurrido => 'CONCURRIDO',
-          _ => 'LIBRE',
-        },
-      );
-    } catch (_) {}
 
     try {
       if (isClosed) {
         final paused = await setStoreOpen(restaurantId, isOpen: false);
+        if (!paused) {
+          _lastError ??= 'No se pudo cerrar el local en el servidor.';
+          return null;
+        }
         try {
           await guard(
             () => _api.send<Map<String, dynamic>>(
@@ -2005,21 +1998,31 @@ class ApiOwnerRepository
                 ).then((v) => v ?? <String, dynamic>{}),
           );
         } catch (_) {}
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString(
+            '$_manualOccupancyPrefPrefix$restaurantId',
+            'CERRADO',
+          );
+        } catch (_) {}
         eventsService.track(
           'dueno.aforo_cambiado',
           restaurantId: restaurantId,
-          props: {'lleno': false, 'estado': status.name, 'cerrado': paused},
+          props: {'lleno': false, 'estado': status.name, 'cerrado': true},
         );
         return null;
       }
 
-      // Si el local estaba cerrado/pausado y vuelve a Libre/Concurrido/Lleno, reactivarlo.
-      try {
-        final currentOpen = await fetchStoreOpen();
-        if (!currentOpen) {
-          await setStoreOpen(restaurantId, isOpen: true);
+      // Al pasar a Libre / Concurrido / Lleno, verificar/reactivar el local en el servidor primero.
+      final currentOpen = await fetchStoreOpen();
+      if (!currentOpen) {
+        final activated = await setStoreOpen(restaurantId, isOpen: true);
+        if (!activated) {
+          _lastError ??=
+              'No se pudo reactivar el local. Verifica tus horarios y precio suelto.';
+          return null;
         }
-      } catch (_) {}
+      }
 
       final res = await guard(
         () => _api.send<Map<String, dynamic>>(
@@ -2029,6 +2032,20 @@ class ApiOwnerRepository
               restaurant: true,
             ).then((v) => v ?? <String, dynamic>{}),
       );
+
+      // Solo limpiar/persistir en SharedPreferences después de confirmación 200 OK del servidor.
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        if (status == ManualOccupancyStatus.concurrido) {
+          await prefs.setString(
+            '$_manualOccupancyPrefPrefix$restaurantId',
+            'CONCURRIDO',
+          );
+        } else {
+          await prefs.remove('$_manualOccupancyPrefPrefix$restaurantId');
+        }
+      } catch (_) {}
+
       eventsService.track(
         'dueno.aforo_cambiado',
         restaurantId: restaurantId,
@@ -2039,7 +2056,6 @@ class ApiOwnerRepository
       if (serverRaw != null && serverRaw.isNotEmpty) {
         final serverDt = DateTime.tryParse(serverRaw)?.toLocal();
         if (serverDt != null && serverDt.isAfter(DateTime.now())) {
-          // Si el usuario extendió manualmente (`+ 15 min`), respetar el límite mayor.
           if (fullUntil != null && fullUntil.isAfter(serverDt)) {
             return fullUntil;
           }
@@ -2053,6 +2069,9 @@ class ApiOwnerRepository
           ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
               ? detail
               : e.userMessage;
+      return null;
+    } catch (_) {
+      _lastError = 'Error de red al actualizar la disponibilidad del local.';
       return null;
     }
   }
@@ -3241,7 +3260,7 @@ class ApiOwnerRepository
         populateSoldOutMap: true,
       );
 
-      // Si el local estaba cerrado/pausado y vuelve a publicar menú, reabrirlo y pasar a Libre.
+      // Si el local estaba cerrado/pausado y vuelve a publicar menú, reabrirlo y limpiar estado cerrado.
       await _activateIfDraft(menu, dishes);
       if (menu.availabilityState != MenuAvailabilityState.agotadoTotal) {
         try {
@@ -3249,11 +3268,16 @@ class ApiOwnerRepository
           if (!isOpen) {
             await setStoreOpen(menu.restaurantId, isOpen: true);
           }
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setString(
-            '$_manualOccupancyPrefPrefix${menu.restaurantId}',
-            'LIBRE',
+          await guard(
+            () => _api.send<Map<String, dynamic>>(
+                  'POST',
+                  '${ApiConfig.v1}/restaurante/lleno',
+                  body: const {'lleno': false},
+                  restaurant: true,
+                ).then((v) => v ?? <String, dynamic>{}),
           );
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.remove('$_manualOccupancyPrefPrefix${menu.restaurantId}');
         } catch (_) {}
       }
 

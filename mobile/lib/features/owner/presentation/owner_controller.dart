@@ -540,6 +540,13 @@ class ManualOccupancyNotifier extends Notifier<ManualOccupancyState> {
     }
   }
 
+  Future<void> refreshFromServer() async {
+    if (AppMode.useMock || _disposed) return;
+    try {
+      await _loadInitial();
+    } catch (_) {}
+  }
+
   void _startTimer() {
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 15), (_) {
@@ -564,77 +571,89 @@ class ManualOccupancyNotifier extends Notifier<ManualOccupancyState> {
     });
   }
 
-  Future<void> setStatus(ManualOccupancyStatus next) async {
+  Future<String?> setStatus(ManualOccupancyStatus next) async {
     final prev = state;
     final rid = ref.read(ownerRestaurantIdProvider);
+    final cashRepo = ref.read(ownerCashRepositoryProvider);
+
     if (next == ManualOccupancyStatus.lleno) {
       final until = DateTime.now().add(busyDuration);
+      final syncedUntil = await cashRepo.setManualOccupancy(
+        rid,
+        status: ManualOccupancyStatus.lleno,
+        fullUntil: until,
+      );
+      if (_disposed) return null;
+      final apiErr = !AppMode.useMock && cashRepo is ApiOwnerRepository
+          ? cashRepo.consumeLastError()
+          : null;
+      if (syncedUntil == null || (apiErr != null && apiErr.isNotEmpty)) {
+        state = prev;
+        return (apiErr != null && apiErr.isNotEmpty)
+            ? apiErr
+            : 'No se pudo marcar como Lleno en el servidor.';
+      }
+      final confirmedUntil =
+          syncedUntil.isAfter(DateTime.now()) ? syncedUntil : until;
       state = ManualOccupancyState(
         manual: ManualOccupancyStatus.lleno,
-        fullUntil: until,
+        fullUntil: confirmedUntil,
         tick: prev.tick + 1,
       );
       _startTimer();
-      final syncedUntil =
-          await ref.read(ownerCashRepositoryProvider).setManualOccupancy(
-                rid,
-                status: ManualOccupancyStatus.lleno,
-                fullUntil: until,
-              );
-      if (_disposed) return;
-      if (syncedUntil == null) {
-        state = prev;
-        if (prev.manual != ManualOccupancyStatus.lleno) {
-          _timer?.cancel();
-          _timer = null;
-        }
-        return;
-      }
-      if (syncedUntil.isAfter(DateTime.now())) {
-        state = ManualOccupancyState(
-          manual: ManualOccupancyStatus.lleno,
-          fullUntil: syncedUntil,
-          tick: state.tick + 1,
-        );
-      }
-      return;
+      return null;
     }
 
+    await cashRepo.setManualOccupancy(
+      rid,
+      status: next,
+    );
+    if (_disposed) return null;
+    final apiErr = !AppMode.useMock && cashRepo is ApiOwnerRepository
+        ? cashRepo.consumeLastError()
+        : null;
+    if (apiErr != null && apiErr.isNotEmpty) {
+      state = prev;
+      return apiErr;
+    }
     _timer?.cancel();
     _timer = null;
     state = ManualOccupancyState(manual: next, tick: prev.tick + 1);
-    await ref.read(ownerCashRepositoryProvider).setManualOccupancy(
-          rid,
-          status: next,
-        );
+    return null;
   }
 
-  Future<void> extendFull15Min() async {
+  Future<String?> extendFull15Min() async {
     final prev = state;
     final rid = ref.read(ownerRestaurantIdProvider);
+    final cashRepo = ref.read(ownerCashRepositoryProvider);
     final base = (prev.fullUntil != null && prev.fullUntil!.isAfter(DateTime.now()))
         ? prev.fullUntil!
         : DateTime.now();
     final extendedUntil = base.add(extendDuration);
+    final synced = await cashRepo.setManualOccupancy(
+      rid,
+      status: ManualOccupancyStatus.lleno,
+      fullUntil: extendedUntil,
+    );
+    if (_disposed) return null;
+    final apiErr = !AppMode.useMock && cashRepo is ApiOwnerRepository
+        ? cashRepo.consumeLastError()
+        : null;
+    if (synced == null || (apiErr != null && apiErr.isNotEmpty)) {
+      state = prev;
+      return (apiErr != null && apiErr.isNotEmpty)
+          ? apiErr
+          : 'No se pudo extender el tiempo de Lleno.';
+    }
+    final confirmedUntil =
+        synced.isAfter(DateTime.now()) ? synced : extendedUntil;
     state = ManualOccupancyState(
       manual: ManualOccupancyStatus.lleno,
-      fullUntil: extendedUntil,
+      fullUntil: confirmedUntil,
       tick: prev.tick + 1,
     );
     _startTimer();
-    final synced = await ref.read(ownerCashRepositoryProvider).setManualOccupancy(
-          rid,
-          status: ManualOccupancyStatus.lleno,
-          fullUntil: extendedUntil,
-        );
-    if (_disposed) return;
-    if (synced != null && synced.isAfter(DateTime.now())) {
-      state = ManualOccupancyState(
-        manual: ManualOccupancyStatus.lleno,
-        fullUntil: synced,
-        tick: state.tick + 1,
-      );
-    }
+    return null;
   }
 }
 

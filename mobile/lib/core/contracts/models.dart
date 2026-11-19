@@ -91,10 +91,11 @@ RestaurantPublicStatus resolveRestaurantPublicStatus({
   bool isOpen = true,
   DateTime? fullUntil,
   DateTime? now,
+  bool ignoreClock = false,
 }) {
   final clock = now ?? DateTime.now();
   final fullActive = manual == ManualOccupancyStatus.lleno &&
-      (fullUntil == null || fullUntil.isAfter(clock));
+      (ignoreClock || fullUntil == null || fullUntil.isAfter(clock));
   final effectiveManual = !isOpen
       ? ManualOccupancyStatus.cerrado
       : (manual == ManualOccupancyStatus.lleno && !fullActive)

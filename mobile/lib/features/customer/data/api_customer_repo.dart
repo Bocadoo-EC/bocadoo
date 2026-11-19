@@ -1394,6 +1394,15 @@ class ApiCustomerRepository implements ICustomerRepository {
     final logoUrl = json['logoUrl']?.toString();
     final desc = (json['descripcionCorta'] ?? '').toString().trim();
     final ocupacion = _asMap(json['ocupacion']);
+    final nivelRaw = ocupacion['nivel']?.toString().toUpperCase();
+    final estadoRaw = json['estado']?.toString().toUpperCase();
+    final isOpenFromServer = json['abiertoAhora'] != false &&
+        estadoRaw != 'PAUSADO' &&
+        estadoRaw != 'CERRADO' &&
+        nivelRaw != 'CERRADO';
+    final mappedOccupancy = !isOpenFromServer
+        ? 'CERRADO'
+        : (ocupacion['lleno'] == true ? 'LLENO' : _mapOccupancy(nivelRaw));
     final fullRaw = ocupacion['llenoHasta'] ??
         ocupacion['hasta'] ??
         json['llenoManualHasta'];
@@ -1418,8 +1427,8 @@ class ApiCustomerRepository implements ICustomerRepository {
       logoUrl: logoUrl,
       singleLunchPrice: singlePrice,
       planLunchPrice: prev?.planLunchPrice,
-      occupancy: _mapOccupancy(ocupacion['nivel']?.toString()),
-      isOpen: json['abiertoAhora'] == true,
+      occupancy: mappedOccupancy,
+      isOpen: isOpenFromServer,
       categories: categories,
       todayMenu: prev?.todayMenu ?? const [],
       featuredDish: (prev != null && prev.featuredDish.isNotEmpty)
@@ -1752,9 +1761,10 @@ class ApiCustomerRepository implements ICustomerRepository {
     return LocationService.meters(origin, LatLng(lat!, lng!));
   }
 
-  String _mapOccupancy(String? nivel) => switch (nivel) {
+  String _mapOccupancy(String? nivel) => switch (nivel?.toUpperCase()) {
+        'CERRADO' => 'CERRADO',
         'LLENO' => 'LLENO',
-        'MODERADO' || 'MOVIDO' => 'MOVIDO',
+        'MODERADO' || 'MOVIDO' || 'CONCURRIDO' => 'MOVIDO',
         _ => 'LIBRE',
       };
 

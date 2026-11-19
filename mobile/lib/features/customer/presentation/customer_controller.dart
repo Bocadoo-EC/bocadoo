@@ -171,6 +171,7 @@ class CustomerUiState {
           manual: parseManualOccupancy(r.occupancy),
           isOpen: r.isOpen,
           fullUntil: r.fullUntil,
+          ignoreClock: true,
         ).effective;
         if (effective != RestaurantEffectiveStatus.libre) {
           return false;
@@ -277,11 +278,13 @@ class CustomerController extends ChangeNotifier {
   final ICustomerRepository _repository;
   CustomerUiState _state = const CustomerUiState();
   Timer? _undoTimer;
-  Timer? _occupancyExpiryTimer;
   Future<void> Function()? _undoAction;
   LifecyclePollingController? _orderPoller;
+  LifecyclePollingController? _restaurantsPoller;
   bool _disposed = false;
   bool _paseVisible = false;
+  bool _restaurantsVisible = false;
+  bool _refreshingRestaurants = false;
   bool _ssePausedByReplacement = false;
   CancelToken? _sseCancelToken;
   StreamSubscription<PaseSseEvent>? _sseSub;
@@ -304,29 +307,79 @@ class CustomerController extends ChangeNotifier {
   void _emit(CustomerUiState next) {
     if (_disposed) return;
     _state = next;
-    _scheduleOccupancyExpiry(next.restaurants);
     notifyListeners();
   }
 
-  void _scheduleOccupancyExpiry(List<Restaurant> restaurants) {
-    _occupancyExpiryTimer?.cancel();
-    _occupancyExpiryTimer = null;
-    final now = DateTime.now();
-    DateTime? soonest;
-    for (final r in restaurants) {
-      final until = r.fullUntil;
-      if (r.occupancy == 'LLENO' && until != null && until.isAfter(now)) {
-        if (soonest == null || until.isBefore(soonest)) {
-          soonest = until;
+  /// Activa o pausa la sincronización asíncrona cada 10 s y al volver de
+  /// segundo plano mientras la pestaña **Restaurantes** está visible.
+  void setRestaurantsVisible(bool visible) {
+    _restaurantsVisible = visible;
+    if (visible) {
+      _restaurantsPoller ??= LifecyclePollingController(
+        interval: const Duration(seconds: 10),
+        onTick: refreshRestaurants,
+      );
+      if (!_restaurantsPoller!.isRunning) {
+        try {
+          _restaurantsPoller!.start();
+        } catch (_) {}
+      }
+      if (_state.status == CustomerStatus.success) {
+        unawaited(refreshRestaurants());
+      }
+    } else {
+      _restaurantsPoller?.stop();
+    }
+  }
+
+  /// Refresco silencioso en segundo plano para `GET /v1/restaurantes` + menú
+  /// sin mostrar loaders bloqueantes ni perder scroll o filtros activos.
+  Future<void> refreshRestaurants({bool forceHydrate = false}) async {
+    if (_disposed || _refreshingRestaurants) return;
+    _refreshingRestaurants = true;
+    try {
+      final freshCards = await _repository.getRestaurants();
+      if (_disposed) return;
+      final prevById = {for (final r in _state.restaurants) r.id: r};
+      final merged = <Restaurant>[
+        for (final card in freshCards)
+          () {
+            final prev = prevById[card.id];
+            if (prev == null) return card;
+            return card.copyWith(
+              planLunchPrice: card.planLunchPrice ?? prev.planLunchPrice,
+              todayMenu: card.todayMenu.isNotEmpty ? card.todayMenu : prev.todayMenu,
+              offers: card.offers.isNotEmpty ? card.offers : prev.offers,
+            );
+          }(),
+      ];
+
+      final nextAvail = Map<String, MenuAvailabilityState>.from(
+        _state.todayMenuAvailabilityByRest,
+      );
+      final nextPub = Map<String, bool>.from(_state.todayMenuPublishedByRest);
+      for (final r in merged) {
+        if (r.todayMenu.isNotEmpty) {
+          final avail = r.menuAvailabilityState;
+          nextAvail[r.id] = avail;
+          nextPub[r.id] = avail == MenuAvailabilityState.disponible;
         }
       }
+
+      _emit(_state.copyWith(
+        restaurants: merged,
+        isOffline: false,
+        todayMenuAvailabilityByRest: nextAvail,
+        todayMenuPublishedByRest: nextPub,
+      ));
+      if (!AppMode.useMock && (_restaurantsVisible || forceHydrate)) {
+        unawaited(_hydrateRestaurants(merged, force: true));
+      }
+    } catch (_) {
+      // Mantiene el último estado mostrado y reintenta en el siguiente ciclo.
+    } finally {
+      _refreshingRestaurants = false;
     }
-    if (soonest == null) return;
-    final delay = soonest.difference(now) + const Duration(seconds: 1);
-    _occupancyExpiryTimer = Timer(delay, () {
-      if (_disposed) return;
-      notifyListeners();
-    });
   }
 
   void _onDemoStoreChanged() {
@@ -1330,21 +1383,21 @@ class CustomerController extends ChangeNotifier {
     bool force = false,
   }) async {
     if (base.isEmpty) return;
-    final updated = List<Restaurant>.from(base);
+    final byId = <String, Restaurant>{};
     final nextMenuMap = Map<String, bool>.from(_state.todayMenuPublishedByRest);
     final nextAvailMap = Map<String, MenuAvailabilityState>.from(
       _state.todayMenuAvailabilityByRest,
     );
     var changed = false;
     var fetched = 0;
-    for (var i = 0; i < updated.length && fetched < 8; i++) {
+    for (var i = 0; i < base.length && fetched < 8; i++) {
       if (_disposed) return;
-      if (!force && updated[i].hasMenu) continue;
+      if (!force && base[i].hasMenu) continue;
       fetched++;
       try {
-        final detail = await _repository.getRestaurantById(updated[i].id);
+        final detail = await _repository.getRestaurantById(base[i].id);
         if (detail != null && !_disposed) {
-          updated[i] = detail;
+          byId[detail.id] = detail;
           final avail = detail.menuAvailabilityState;
           nextAvailMap[detail.id] = avail;
           nextMenuMap[detail.id] = avail == MenuAvailabilityState.disponible;
@@ -1353,8 +1406,11 @@ class CustomerController extends ChangeNotifier {
       } catch (_) {}
     }
     if (changed && !_disposed) {
+      final merged = [
+        for (final r in _state.restaurants) byId[r.id] ?? r,
+      ];
       _emit(_state.copyWith(
-        restaurants: updated,
+        restaurants: merged,
         todayMenuPublishedByRest: nextMenuMap,
         todayMenuAvailabilityByRest: nextAvailMap,
       ));
@@ -1368,8 +1424,8 @@ class CustomerController extends ChangeNotifier {
       DemoStore.instance.removeListener(_onDemoStoreChanged);
     }
     _undoTimer?.cancel();
-    _occupancyExpiryTimer?.cancel();
     _orderPoller?.dispose();
+    _restaurantsPoller?.dispose();
     _disconnectPaseSse(keepFallback: false);
     super.dispose();
   }
@@ -1417,6 +1473,7 @@ final restaurantPublicStatusProvider =
     manual: parseManualOccupancy(fromList?.occupancy),
     isOpen: fromList?.isOpen ?? true,
     fullUntil: fromList?.fullUntil,
+    ignoreClock: true,
   );
 });
 

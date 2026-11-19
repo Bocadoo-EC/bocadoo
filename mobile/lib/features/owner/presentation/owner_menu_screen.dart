@@ -195,9 +195,13 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
     container.invalidate(posMenuProvider);
     container.invalidate(activeOfferProvider);
     if (menu.availabilityState != MenuAvailabilityState.agotadoTotal) {
-      unawaited(
-        ref.read(manualOccupancyProvider.notifier).setStatus(ManualOccupancyStatus.libre),
-      );
+      final occupancyErr = await ref
+          .read(manualOccupancyProvider.notifier)
+          .setStatus(ManualOccupancyStatus.libre);
+      if (!mounted) return;
+      if (occupancyErr != null && occupancyErr.isNotEmpty) {
+        showInfoSnackBar(messenger, occupancyErr);
+      }
     }
     final publishMsg = menu.availabilityState == MenuAvailabilityState.agotadoTotal
         ? 'Menú marcado como Agotado hoy (ofertas flash pausadas)'

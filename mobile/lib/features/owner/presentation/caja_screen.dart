@@ -170,6 +170,15 @@ class _PublicStatusSheet extends ConsumerWidget {
     final notifier = ref.read(manualOccupancyProvider.notifier);
     final isFullActive = status.manual == ManualOccupancyStatus.lleno &&
         status.remainingFullMinutes > 0;
+    final messenger = ScaffoldMessenger.of(context);
+
+    Future<void> selectStatus(Future<String?> Function() action) async {
+      Navigator.of(context).pop();
+      final err = await action();
+      if (err != null && err.isNotEmpty) {
+        showInfoSnackBar(messenger, err);
+      }
+    }
 
     Widget optionTile({
       required String title,
@@ -294,10 +303,9 @@ class _PublicStatusSheet extends ConsumerWidget {
               subtitle: 'Hay mesas disponibles sin espera.',
               dotColor: b.statusLibreDot,
               selected: status.manual == ManualOccupancyStatus.libre,
-              onTap: () {
-                Navigator.of(context).pop();
-                unawaited(notifier.setStatus(ManualOccupancyStatus.libre));
-              },
+              onTap: () => unawaited(
+                selectStatus(() => notifier.setStatus(ManualOccupancyStatus.libre)),
+              ),
             ),
             const SizedBox(height: 8),
             optionTile(
@@ -305,10 +313,11 @@ class _PublicStatusSheet extends ConsumerWidget {
               subtitle: 'Pocas mesas disponibles o ligera espera.',
               dotColor: b.statusConcurridoDot,
               selected: status.manual == ManualOccupancyStatus.concurrido,
-              onTap: () {
-                Navigator.of(context).pop();
-                unawaited(notifier.setStatus(ManualOccupancyStatus.concurrido));
-              },
+              onTap: () => unawaited(
+                selectStatus(
+                  () => notifier.setStatus(ManualOccupancyStatus.concurrido),
+                ),
+              ),
             ),
             const SizedBox(height: 8),
             optionTile(
@@ -318,20 +327,18 @@ class _PublicStatusSheet extends ConsumerWidget {
               subtitle: 'Sin mesas (solo pedidos para llevar; vuelve a Libre en 20 min).',
               dotColor: b.statusLlenoDot,
               selected: status.manual == ManualOccupancyStatus.lleno,
-              onTap: () {
-                Navigator.of(context).pop();
-                unawaited(notifier.setStatus(ManualOccupancyStatus.lleno));
-              },
+              onTap: () => unawaited(
+                selectStatus(() => notifier.setStatus(ManualOccupancyStatus.lleno)),
+              ),
               trailing: isFullActive
                   ? FilledButton.tonal(
                       style: FilledButton.styleFrom(
                         visualDensity: VisualDensity.compact,
                         padding: const EdgeInsets.symmetric(horizontal: 10),
                       ),
-                      onPressed: () {
-                        Navigator.of(context).pop();
-                        unawaited(notifier.extendFull15Min());
-                      },
+                      onPressed: () => unawaited(
+                        selectStatus(notifier.extendFull15Min),
+                      ),
                       child: const Text(
                         '+ 15 min',
                         style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
@@ -370,8 +377,9 @@ class _PublicStatusSheet extends ConsumerWidget {
                   ),
                 );
                 if (confirm != true || !context.mounted) return;
-                Navigator.of(context).pop();
-                unawaited(notifier.setStatus(ManualOccupancyStatus.cerrado));
+                await selectStatus(
+                  () => notifier.setStatus(ManualOccupancyStatus.cerrado),
+                );
               },
             ),
           ],
@@ -487,7 +495,10 @@ class _CajaBody extends ConsumerWidget {
         ref.invalidate(ordersOnTheWayProvider);
         ref.invalidate(pendingTablesProvider);
         ref.invalidate(posMenuProvider);
-        await movementsNotifier.refresh();
+        await Future.wait([
+          movementsNotifier.refresh(),
+          ref.read(manualOccupancyProvider.notifier).refreshFromServer(),
+        ]);
       },
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
