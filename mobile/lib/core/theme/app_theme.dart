@@ -89,6 +89,12 @@ class AppColors {
   // Texto sobre fotos y degradados del hero (igual en ambos temas)
   static const Color imageForeground = Color(0xFFFFFFFF);
 
+  // Puntos del semáforo de disponibilidad del local
+  static const Color statusLibreDot = Color(0xFF16A34A);
+  static const Color statusConcurridoDot = Color(0xFFF59E0B);
+  static const Color statusLlenoDot = Color(0xFFDC2626);
+  static const Color statusCerradoDot = Color(0xFF4B5563);
+
   // Hero Gradients
   static const LinearGradient lightHeroGradient = LinearGradient(
     begin: Alignment.topLeft,
@@ -122,6 +128,10 @@ class BocadooColors extends ThemeExtension<BocadooColors> {
   final Color imageForeground;
   final Color walletAccent;
   final Color onWalletAccent;
+  final Color statusLibreDot;
+  final Color statusConcurridoDot;
+  final Color statusLlenoDot;
+  final Color statusCerradoDot;
   final LinearGradient heroGradient;
 
   const BocadooColors({
@@ -142,6 +152,10 @@ class BocadooColors extends ThemeExtension<BocadooColors> {
     this.imageForeground = AppColors.imageForeground,
     required this.walletAccent,
     required this.onWalletAccent,
+    this.statusLibreDot = AppColors.statusLibreDot,
+    this.statusConcurridoDot = AppColors.statusConcurridoDot,
+    this.statusLlenoDot = AppColors.statusLlenoDot,
+    this.statusCerradoDot = AppColors.statusCerradoDot,
     required this.heroGradient,
   });
 
@@ -203,6 +217,10 @@ class BocadooColors extends ThemeExtension<BocadooColors> {
     Color? qrBackground,
     Color? walletAccent,
     Color? onWalletAccent,
+    Color? statusLibreDot,
+    Color? statusConcurridoDot,
+    Color? statusLlenoDot,
+    Color? statusCerradoDot,
     LinearGradient? heroGradient,
   }) {
     return BocadooColors(
@@ -222,6 +240,10 @@ class BocadooColors extends ThemeExtension<BocadooColors> {
       qrBackground: qrBackground ?? this.qrBackground,
       walletAccent: walletAccent ?? this.walletAccent,
       onWalletAccent: onWalletAccent ?? this.onWalletAccent,
+      statusLibreDot: statusLibreDot ?? this.statusLibreDot,
+      statusConcurridoDot: statusConcurridoDot ?? this.statusConcurridoDot,
+      statusLlenoDot: statusLlenoDot ?? this.statusLlenoDot,
+      statusCerradoDot: statusCerradoDot ?? this.statusCerradoDot,
       heroGradient: heroGradient ?? this.heroGradient,
     );
   }
@@ -270,6 +292,10 @@ class BocadooColors extends ThemeExtension<BocadooColors> {
       imageForeground: imageForeground,
       walletAccent: Color.lerp(walletAccent, other.walletAccent, t)!,
       onWalletAccent: Color.lerp(onWalletAccent, other.onWalletAccent, t)!,
+      statusLibreDot: Color.lerp(statusLibreDot, other.statusLibreDot, t)!,
+      statusConcurridoDot: Color.lerp(statusConcurridoDot, other.statusConcurridoDot, t)!,
+      statusLlenoDot: Color.lerp(statusLlenoDot, other.statusLlenoDot, t)!,
+      statusCerradoDot: Color.lerp(statusCerradoDot, other.statusCerradoDot, t)!,
       heroGradient: heroGradient,
     );
   }

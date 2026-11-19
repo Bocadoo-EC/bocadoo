@@ -7,6 +7,7 @@ import 'package:material_ui/material_ui.dart';
 import '../../../core/config/api_capabilities.dart';
 import '../../../core/config/app_mode.dart';
 import '../../../core/config/support_config.dart';
+import '../../../core/contracts/models.dart';
 import '../../../core/session/session_notifier.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/external_links.dart';
@@ -462,6 +463,9 @@ class _StoreOpenCard extends ConsumerWidget {
         return;
       }
       ref.invalidate(posMenuProvider);
+      ref.read(manualOccupancyProvider.notifier).setStatus(
+            value ? ManualOccupancyStatus.libre : ManualOccupancyStatus.cerrado,
+          );
       showInfoSnackBar(messenger, value ? 'Local abierto' : 'Local cerrado');
     }
 

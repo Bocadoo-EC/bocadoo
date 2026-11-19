@@ -132,6 +132,7 @@ class MockCustomerRepository implements ICustomerRepository {
           ),
       ];
     }
+    final effectiveOpen = _store.storeOpenByRest[r.id] ?? r.isOpen;
     final filteredOffers = avail == MenuAvailabilityState.agotadoTotal
         ? [
             for (final o in r.offers)
@@ -141,6 +142,7 @@ class MockCustomerRepository implements ICustomerRepository {
     if (!r.hasLocation) {
       return r.copyWith(
         occupancy: effectiveOcc,
+        isOpen: effectiveOpen,
         fullUntil: overrideUntil,
         clearFullUntil: clearFullUntil,
         todayMenu: visibleMenu,
@@ -153,6 +155,7 @@ class MockCustomerRepository implements ICustomerRepository {
       distanceMeters: meters,
       distanceKm: km,
       occupancy: effectiveOcc,
+      isOpen: effectiveOpen,
       fullUntil: overrideUntil,
       clearFullUntil: clearFullUntil,
       todayMenu: visibleMenu,

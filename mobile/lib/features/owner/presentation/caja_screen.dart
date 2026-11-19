@@ -109,6 +109,12 @@ class _Header extends ConsumerWidget {
           b.danger,
           'Agotado hoy',
         ),
+      RestaurantEffectiveStatus.cerrado => (
+          colors.surfaceContainerHighest,
+          colors.onSurfaceVariant,
+          b.statusCerradoDot,
+          'Cerrado',
+        ),
     };
 
     return Container(
@@ -124,6 +130,7 @@ class _Header extends ConsumerWidget {
             customBorder: const StadiumBorder(),
             onTap: () => showModalBottomSheet<void>(
               context: context,
+              isScrollControlled: true,
               showDragHandle: true,
               useRootNavigator: true,
               builder: (_) => const _PublicStatusSheet(),
@@ -187,7 +194,7 @@ class _PublicStatusSheet extends ConsumerWidget {
           borderRadius: BorderRadius.circular(18),
           onTap: onTap,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             child: Row(children: [
               Container(
                 width: 12,
@@ -213,6 +220,7 @@ class _PublicStatusSheet extends ConsumerWidget {
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
+                        height: 1.25,
                         color: colors.onSurfaceVariant,
                       ),
                     ),
@@ -231,8 +239,10 @@ class _PublicStatusSheet extends ConsumerWidget {
     }
 
     return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+      top: false,
+      bottom: true,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -245,7 +255,7 @@ class _PublicStatusSheet extends ConsumerWidget {
                 color: colors.onSurface,
               ),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 2),
             Text(
               'Se refleja al instante en el Marketplace y tu ficha para comensales.',
               style: TextStyle(
@@ -255,9 +265,9 @@ class _PublicStatusSheet extends ConsumerWidget {
               ),
             ),
             if (status.isSoldOutToday) ...[
-              const SizedBox(height: 12),
+              const SizedBox(height: 10),
               Container(
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
                   color: b.dangerContainer,
                   borderRadius: BorderRadius.circular(14),
@@ -278,11 +288,11 @@ class _PublicStatusSheet extends ConsumerWidget {
                 ]),
               ),
             ],
-            const SizedBox(height: 14),
+            const SizedBox(height: 12),
             optionTile(
               title: 'Libre',
               subtitle: 'Hay mesas disponibles sin espera.',
-              dotColor: b.success,
+              dotColor: b.statusLibreDot,
               selected: status.manual == ManualOccupancyStatus.libre,
               onTap: () {
                 Navigator.of(context).pop();
@@ -292,8 +302,8 @@ class _PublicStatusSheet extends ConsumerWidget {
             const SizedBox(height: 8),
             optionTile(
               title: 'Concurrido',
-              subtitle: 'Pocas mesas disponibles / ligera espera.',
-              dotColor: b.onWalletAccent,
+              subtitle: 'Pocas mesas disponibles o ligera espera.',
+              dotColor: b.statusConcurridoDot,
               selected: status.manual == ManualOccupancyStatus.concurrido,
               onTap: () {
                 Navigator.of(context).pop();
@@ -305,8 +315,8 @@ class _PublicStatusSheet extends ConsumerWidget {
               title: isFullActive
                   ? 'Lleno · Quedan ${status.remainingFullMinutes} min'
                   : 'Lleno (20 min)',
-              subtitle: 'Sin disponibilidad temporal (vuelve a Libre automáticamente).',
-              dotColor: b.danger,
+              subtitle: 'Sin mesas (solo pedidos para llevar; vuelve a Libre en 20 min).',
+              dotColor: b.statusLlenoDot,
               selected: status.manual == ManualOccupancyStatus.lleno,
               onTap: () {
                 Navigator.of(context).pop();
@@ -328,6 +338,41 @@ class _PublicStatusSheet extends ConsumerWidget {
                       ),
                     )
                   : null,
+            ),
+            const SizedBox(height: 8),
+            optionTile(
+              title: 'Cerrado',
+              subtitle: 'No recibirás nuevas preórdenes ni pedidos grupales hoy.',
+              dotColor: b.statusCerradoDot,
+              selected: status.manual == ManualOccupancyStatus.cerrado,
+              onTap: () async {
+                if (status.manual == ManualOccupancyStatus.cerrado) {
+                  Navigator.of(context).pop();
+                  return;
+                }
+                final confirm = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: const Text('¿Cerrar el local por hoy?'),
+                    content: const Text(
+                      'No recibirás nuevas preórdenes ni pedidos grupales.',
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.of(ctx).pop(false),
+                        child: const Text('Cancelar'),
+                      ),
+                      FilledButton(
+                        onPressed: () => Navigator.of(ctx).pop(true),
+                        child: const Text('Cerrar local'),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirm != true || !context.mounted) return;
+                Navigator.of(context).pop();
+                unawaited(notifier.setStatus(ManualOccupancyStatus.cerrado));
+              },
             ),
           ],
         ),

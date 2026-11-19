@@ -473,7 +473,7 @@ final manualOccupancyProvider =
 );
 
 /// Fuente de verdad única en Dueño del estado público efectivo del restaurante.
-/// Jerarquía: 1) `AGOTADO_HOY` si menú sin disponibles; 2) semáforo manual.
+/// Jerarquía: 1) `CERRADO` manual; 2) `AGOTADO_HOY` si menú sin disponibles; 3) semáforo manual.
 final ownerPublicStatusProvider =
     Provider.autoDispose<RestaurantPublicStatus>((ref) {
   final menuAvail = ref.watch(menuAvailabilityProvider);
@@ -481,6 +481,7 @@ final ownerPublicStatusProvider =
   return resolveRestaurantPublicStatus(
     menuAvailability: menuAvail,
     manual: manualState.manual,
+    isOpen: manualState.manual != ManualOccupancyStatus.cerrado,
     fullUntil: manualState.fullUntil,
   );
 });
@@ -516,6 +517,12 @@ class ManualOccupancyNotifier extends Notifier<ManualOccupancyState> {
   Future<void> _loadInitial() async {
     final repo = ref.read(apiOwnerRepositoryProvider);
     final rid = ref.read(ownerRestaurantIdProvider);
+    final isOpen = await repo.fetchStoreOpen();
+    if (_disposed) return;
+    if (!isOpen) {
+      state = const ManualOccupancyState(manual: ManualOccupancyStatus.cerrado);
+      return;
+    }
     final until = await repo.fetchManualBusyUntil();
     if (_disposed) return;
     if (until != null && until.isAfter(DateTime.now())) {

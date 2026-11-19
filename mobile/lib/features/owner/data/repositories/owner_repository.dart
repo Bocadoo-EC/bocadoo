@@ -174,7 +174,14 @@ class OwnerRepository implements IOwnerRepository, IOwnerMenuRepository, IOwnerC
   @override
   Future<bool> publishMenu(DailyMenu menu) async {
     await Future<void>.delayed(const Duration(milliseconds: 200));
-    _todayMenu = menu.copyWith(isPublished: true);
+    _todayMenu = menu.copyWith(isPublished: true, isOpen: true);
+    final store = DemoStore.instance;
+    store.storeOpenByRest[DemoStore.ownerRestaurantId] = true;
+    store.storeOpenByRest[menu.restaurantId] = true;
+    store.occupancyOverrides[DemoStore.ownerRestaurantId] = 'LIBRE';
+    store.occupancyOverrides[menu.restaurantId] = 'LIBRE';
+    store.fullUntilByRest[DemoStore.ownerRestaurantId] = null;
+    store.fullUntilByRest[menu.restaurantId] = null;
     await _syncDemoMenuState(_todayMenu);
     return true;
   }
@@ -248,6 +255,17 @@ class OwnerRepository implements IOwnerRepository, IOwnerMenuRepository, IOwnerC
     if (_todayMenu != null) {
       _todayMenu = _todayMenu!.copyWith(isOpen: isOpen);
     }
+    final store = DemoStore.instance;
+    store.storeOpenByRest[DemoStore.ownerRestaurantId] = isOpen;
+    store.storeOpenByRest[restaurantId] = isOpen;
+    store.occupancyOverrides[DemoStore.ownerRestaurantId] =
+        isOpen ? 'LIBRE' : 'CERRADO';
+    store.occupancyOverrides[restaurantId] = isOpen ? 'LIBRE' : 'CERRADO';
+    if (!isOpen) {
+      store.fullUntilByRest[DemoStore.ownerRestaurantId] = null;
+      store.fullUntilByRest[restaurantId] = null;
+    }
+    store.changed();
     return true;
   }
 

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -192,6 +194,11 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
     }
     container.invalidate(posMenuProvider);
     container.invalidate(activeOfferProvider);
+    if (menu.availabilityState != MenuAvailabilityState.agotadoTotal) {
+      unawaited(
+        ref.read(manualOccupancyProvider.notifier).setStatus(ManualOccupancyStatus.libre),
+      );
+    }
     final publishMsg = menu.availabilityState == MenuAvailabilityState.agotadoTotal
         ? 'Menú marcado como Agotado hoy (ofertas flash pausadas)'
         : 'Menú publicado con éxito';

@@ -22,13 +22,14 @@ MenuAvailabilityState evaluateMenuAvailability({
 }
 
 /// Semáforo manual de aforo operado por el dueño/cajero desde Caja.
-enum ManualOccupancyStatus { libre, concurrido, lleno }
+enum ManualOccupancyStatus { libre, concurrido, lleno, cerrado }
 
 /// Estado público efectivo del restaurante visible para Caja y Comensal.
-enum RestaurantEffectiveStatus { libre, concurrido, lleno, agotadoHoy }
+enum RestaurantEffectiveStatus { libre, concurrido, lleno, agotadoHoy, cerrado }
 
 ManualOccupancyStatus parseManualOccupancy(String? raw) =>
     switch ((raw ?? '').toUpperCase()) {
+      'CERRADO' || 'PAUSADO' => ManualOccupancyStatus.cerrado,
       'LLENO' => ManualOccupancyStatus.lleno,
       'CONCURRIDO' || 'MODERADO' || 'MOVIDO' => ManualOccupancyStatus.concurrido,
       _ => ManualOccupancyStatus.libre,
@@ -49,6 +50,7 @@ class RestaurantPublicStatus {
 
   bool get isSoldOutToday => effective == RestaurantEffectiveStatus.agotadoHoy;
   bool get isFull => effective == RestaurantEffectiveStatus.lleno;
+  bool get isClosed => effective == RestaurantEffectiveStatus.cerrado;
 
   int get remainingFullMinutes {
     final until = fullUntil;
@@ -58,12 +60,13 @@ class RestaurantPublicStatus {
     return (secs / 60).ceil();
   }
 
-  /// Código de compatibilidad (`LIBRE`, `MOVIDO`, `LLENO`).
+  /// Código de compatibilidad (`LIBRE`, `MOVIDO`, `LLENO`, `CERRADO`).
   String get legacyOccupancy => switch (effective) {
         RestaurantEffectiveStatus.concurrido => 'MOVIDO',
         RestaurantEffectiveStatus.lleno ||
         RestaurantEffectiveStatus.agotadoHoy =>
           'LLENO',
+        RestaurantEffectiveStatus.cerrado => 'CERRADO',
         RestaurantEffectiveStatus.libre => 'LIBRE',
       };
 
@@ -79,21 +82,31 @@ class RestaurantPublicStatus {
 }
 
 /// Evalúa el estado público efectivo respetando la jerarquía estricta:
-/// 1. Prioridad 1: `AGOTADO_HOY` si el menú del día quedó con 0 platos disponibles.
-/// 2. Prioridad 2: Semáforo manual (`LIBRE` | `CONCURRIDO` | `LLENO` vigente hasta `fullUntil`).
+/// 1. Prioridad 1: `CERRADO` si el local fue cerrado/pausado manualmente.
+/// 2. Prioridad 2: `AGOTADO_HOY` si el menú del día quedó con 0 platos disponibles.
+/// 3. Prioridad 3: Semáforo manual (`LIBRE` | `CONCURRIDO` | `LLENO` vigente hasta `fullUntil`).
 RestaurantPublicStatus resolveRestaurantPublicStatus({
   required MenuAvailabilityState menuAvailability,
   required ManualOccupancyStatus manual,
+  bool isOpen = true,
   DateTime? fullUntil,
   DateTime? now,
 }) {
   final clock = now ?? DateTime.now();
   final fullActive = manual == ManualOccupancyStatus.lleno &&
       (fullUntil == null || fullUntil.isAfter(clock));
-  final effectiveManual =
-      (manual == ManualOccupancyStatus.lleno && !fullActive)
+  final effectiveManual = !isOpen
+      ? ManualOccupancyStatus.cerrado
+      : (manual == ManualOccupancyStatus.lleno && !fullActive)
           ? ManualOccupancyStatus.libre
           : manual;
+
+  if (effectiveManual == ManualOccupancyStatus.cerrado) {
+    return const RestaurantPublicStatus(
+      effective: RestaurantEffectiveStatus.cerrado,
+      manual: ManualOccupancyStatus.cerrado,
+    );
+  }
 
   if (menuAvailability == MenuAvailabilityState.agotadoTotal) {
     return RestaurantPublicStatus(
@@ -104,6 +117,7 @@ RestaurantPublicStatus resolveRestaurantPublicStatus({
   }
 
   final effective = switch (effectiveManual) {
+    ManualOccupancyStatus.cerrado => RestaurantEffectiveStatus.cerrado,
     ManualOccupancyStatus.lleno => RestaurantEffectiveStatus.lleno,
     ManualOccupancyStatus.concurrido => RestaurantEffectiveStatus.concurrido,
     ManualOccupancyStatus.libre => RestaurantEffectiveStatus.libre,

@@ -372,7 +372,7 @@ class _TableSheetState extends ConsumerState<TableSheet> {
     final rid = _restaurantId;
     final restaurant = _restaurantFor(rid);
     final isFull = rid != null && ref.watch(restaurantPublicStatusProvider(rid)).isFull;
-    final maxSeats = (restaurant?.seats ?? 12).clamp(2, 50);
+    final maxSeats = (restaurant?.seats ?? 10).clamp(2, 10);
     final t = _table;
     final visibleTimes = _visibleTimes();
     final unitSurchargeCents = Money.toCents(
@@ -449,17 +449,15 @@ class _TableSheetState extends ConsumerState<TableSheet> {
                               ),
                             ],
                           ]),
-                          if (t != null && !visibleTimes.contains(t.time)) ...[
-                            const SizedBox(height: 6),
-                            Text(
-                              'Hora programada: ${t.time}',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: colors.primary,
-                              ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Hora programada: ${t?.time ?? _time}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: colors.primary,
                             ),
-                          ],
+                          ),
                           if (showTakeawayBreakdown) ...[
                             const SizedBox(height: 14),
                             Container(
@@ -580,17 +578,23 @@ class _TableSheetState extends ConsumerState<TableSheet> {
                             Divider(height: 24, color: colors.outlineVariant),
                             _Members(table: t),
                             const SizedBox(height: 14),
-                            if (_canCancelTable(t))
-                              OutlinedButton.icon(
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: colors.error,
-                                  side: BorderSide(color: colors.error.withValues(alpha: 0.45)),
+                            OutlinedButton.icon(
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: colors.error,
+                                side: BorderSide(
+                                  color: _canCancelTable(t)
+                                      ? colors.error.withValues(alpha: 0.45)
+                                      : colors.outlineVariant,
                                 ),
-                                onPressed: _busy ? null : () => _cancelTable(t),
-                                icon: const Icon(Icons.close_rounded, size: 18),
-                                label: const Text('Cancelar mesa'),
-                              )
-                            else
+                              ),
+                              onPressed: (_busy || !_canCancelTable(t))
+                                  ? null
+                                  : () => _cancelTable(t),
+                              icon: const Icon(Icons.close_rounded, size: 18),
+                              label: const Text('Cancelar mesa'),
+                            ),
+                            if (!_canCancelTable(t)) ...[
+                              const SizedBox(height: 8),
                               Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                                 decoration: BoxDecoration(
@@ -598,7 +602,7 @@ class _TableSheetState extends ConsumerState<TableSheet> {
                                   borderRadius: BorderRadius.circular(14),
                                 ),
                                 child: Text(
-                                  'La cancelación solo está disponible hasta 15 min antes de la hora programada.',
+                                  'La cancelación solo está disponible hasta 15 min antes de la hora programada y antes de entrar en preparación.',
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
                                     fontSize: 12,
@@ -607,6 +611,7 @@ class _TableSheetState extends ConsumerState<TableSheet> {
                                   ),
                                 ),
                               ),
+                            ],
                             if (ApiCapabilities.sharedTableNotifyKitchen && !t.onTheWay) ...[
                               const SizedBox(height: 18),
                               ElevatedButton(

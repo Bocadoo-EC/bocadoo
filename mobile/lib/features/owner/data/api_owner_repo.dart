@@ -1979,15 +1979,48 @@ class ApiOwnerRepository
   }) async {
     _lastError = null;
     final busy = status == ManualOccupancyStatus.lleno;
+    final isClosed = status == ManualOccupancyStatus.cerrado;
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(
         '$_manualOccupancyPrefPrefix$restaurantId',
-        status == ManualOccupancyStatus.concurrido ? 'CONCURRIDO' : 'LIBRE',
+        switch (status) {
+          ManualOccupancyStatus.cerrado => 'CERRADO',
+          ManualOccupancyStatus.concurrido => 'CONCURRIDO',
+          _ => 'LIBRE',
+        },
       );
     } catch (_) {}
 
     try {
+      if (isClosed) {
+        final paused = await setStoreOpen(restaurantId, isOpen: false);
+        try {
+          await guard(
+            () => _api.send<Map<String, dynamic>>(
+                  'POST',
+                  '${ApiConfig.v1}/restaurante/lleno',
+                  body: const {'lleno': false},
+                  restaurant: true,
+                ).then((v) => v ?? <String, dynamic>{}),
+          );
+        } catch (_) {}
+        eventsService.track(
+          'dueno.aforo_cambiado',
+          restaurantId: restaurantId,
+          props: {'lleno': false, 'estado': status.name, 'cerrado': paused},
+        );
+        return null;
+      }
+
+      // Si el local estaba cerrado/pausado y vuelve a Libre/Concurrido/Lleno, reactivarlo.
+      try {
+        final currentOpen = await fetchStoreOpen();
+        if (!currentOpen) {
+          await setStoreOpen(restaurantId, isOpen: true);
+        }
+      } catch (_) {}
+
       final res = await guard(
         () => _api.send<Map<String, dynamic>>(
               'POST',
@@ -3208,8 +3241,21 @@ class ApiOwnerRepository
         populateSoldOutMap: true,
       );
 
-      // Si el local sigue en BORRADOR, asegura horarios y precio suelto antes de activar.
+      // Si el local estaba cerrado/pausado y vuelve a publicar menú, reabrirlo y pasar a Libre.
       await _activateIfDraft(menu, dishes);
+      if (menu.availabilityState != MenuAvailabilityState.agotadoTotal) {
+        try {
+          final isOpen = await fetchStoreOpen();
+          if (!isOpen) {
+            await setStoreOpen(menu.restaurantId, isOpen: true);
+          }
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString(
+            '$_manualOccupancyPrefPrefix${menu.restaurantId}',
+            'LIBRE',
+          );
+        } catch (_) {}
+      }
 
       // Si el usuario marcó platos como agotados antes de publicar, sincronízalos.
       for (final course in menu.courses) {

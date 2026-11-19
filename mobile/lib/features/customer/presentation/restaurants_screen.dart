@@ -608,12 +608,23 @@ class _RestaurantCard extends StatelessWidget {
     required this.onReserve,
   });
 
+  static const _grayscaleFilter = ColorFilter.matrix(<double>[
+    0.2126, 0.7152, 0.0722, 0, 0,
+    0.2126, 0.7152, 0.0722, 0, 0,
+    0.2126, 0.7152, 0.0722, 0, 0,
+    0, 0, 0, 1, 0,
+  ]);
+
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     final b = context.bocadooColors;
     final r = restaurant;
     final isMenuSoldOut = publicStatus.isSoldOutToday;
+    final isClosed = publicStatus.isClosed;
+    final isFull = publicStatus.isFull;
+    final canGroupOrder = !isMenuSoldOut && !isClosed;
+    final bannerCover = CoverImage(url: rLogoOrImage(r), name: r.name);
 
     return Material(
       color: colors.surface,
@@ -628,7 +639,12 @@ class _RestaurantCard extends StatelessWidget {
           SizedBox(
             height: 112,
             child: Stack(fit: StackFit.expand, children: [
-              CoverImage(url: rLogoOrImage(r), name: r.name),
+              isClosed
+                  ? ColorFiltered(
+                      colorFilter: _grayscaleFilter,
+                      child: bannerCover,
+                    )
+                  : bannerCover,
               DecoratedBox(
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
@@ -675,7 +691,7 @@ class _RestaurantCard extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: colors.onSurface),
               ),
-              if (!isMenuSoldOut)
+              if (!isMenuSoldOut && !isClosed)
                 for (final o in r.offers.take(2)) ...[
                 const SizedBox(height: 8),
                 Container(
@@ -723,12 +739,12 @@ class _RestaurantCard extends StatelessWidget {
               Row(children: [
                 Expanded(
                   child: PillAction(
-                    label: publicStatus.isFull
+                    label: isFull
                         ? 'Pedido grupal (Para llevar)'
                         : 'Pedido grupal',
                     icon: Icons.group_add_outlined,
                     tonal: false,
-                    onPressed: onTable,
+                    onPressed: canGroupOrder ? onTable : null,
                   ),
                 ),
                 const SizedBox(width: 8),

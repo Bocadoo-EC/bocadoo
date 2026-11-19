@@ -1025,6 +1025,7 @@ class MockOwnerRepository
   }) async {
     await _simulateLatency();
     final legacy = switch (status) {
+      ManualOccupancyStatus.cerrado => 'CERRADO',
       ManualOccupancyStatus.lleno => 'LLENO',
       ManualOccupancyStatus.concurrido => 'MOVIDO',
       ManualOccupancyStatus.libre => 'LIBRE',
@@ -1032,8 +1033,13 @@ class MockOwnerRepository
     final effectiveUntil = status == ManualOccupancyStatus.lleno
         ? (fullUntil ?? DateTime.now().add(const Duration(minutes: 20)))
         : null;
+    final isOpen = status != ManualOccupancyStatus.cerrado;
+    _store.occupancyOverrides[DemoStore.ownerRestaurantId] = legacy;
     _store.occupancyOverrides[restaurantId] = legacy;
+    _store.fullUntilByRest[DemoStore.ownerRestaurantId] = effectiveUntil;
     _store.fullUntilByRest[restaurantId] = effectiveUntil;
+    _store.storeOpenByRest[DemoStore.ownerRestaurantId] = isOpen;
+    _store.storeOpenByRest[restaurantId] = isOpen;
     _store.changed();
     return effectiveUntil;
   }

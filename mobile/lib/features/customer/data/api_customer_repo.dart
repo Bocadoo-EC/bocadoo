@@ -951,7 +951,7 @@ class ApiCustomerRepository implements ICustomerRepository {
     final normalizedPartySize = partySize < 2 ? 2 : partySize;
     final nowUtc = DateTime.now().toUtc();
     var arrivalUtc = EcuadorTime.todayAtUtc(time);
-    if (!arrivalUtc.isAfter(nowUtc.add(const Duration(minutes: 1)))) {
+    if (!arrivalUtc.isAfter(nowUtc)) {
       arrivalUtc = nowUtc.add(const Duration(minutes: 15));
     } else if (arrivalUtc.difference(nowUtc) > const Duration(hours: 11)) {
       arrivalUtc = nowUtc.add(const Duration(hours: 11));

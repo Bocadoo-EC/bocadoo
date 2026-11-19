@@ -108,6 +108,7 @@ class OccupancyChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.colorScheme;
     final b = context.bocadooColors;
     final mins = status.remainingFullMinutes;
     final (String label, Color dot, Color bg, Color fg) = switch (status.effective) {
@@ -134,6 +135,12 @@ class OccupancyChip extends StatelessWidget {
           b.danger,
           b.dangerContainer,
           b.onDangerContainer,
+        ),
+      RestaurantEffectiveStatus.cerrado => (
+          'Cerrado',
+          colors.onSurface,
+          colors.surfaceContainerHighest,
+          colors.onSurface,
         ),
     };
     return Container(
@@ -165,6 +172,7 @@ class OccupancyDetail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.colorScheme;
     final b = context.bocadooColors;
     final mins = status.remainingFullMinutes;
     final (String label, Color dot, Color bg, Color fg) = switch (status.effective) {
@@ -191,6 +199,12 @@ class OccupancyDetail extends StatelessWidget {
           b.danger,
           b.dangerContainer,
           b.onDangerContainer,
+        ),
+      RestaurantEffectiveStatus.cerrado => (
+          'Cerrado por hoy',
+          colors.onSurface,
+          colors.surfaceContainerHighest,
+          colors.onSurface,
         ),
     };
     return Container(
@@ -259,13 +273,21 @@ class PillAction extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
-    final iconWidget = icon == null ? null : Icon(icon, size: 15, color: colors.primary);
+    final enabled = onPressed != null;
+    final iconWidget = icon == null
+        ? null
+        : Icon(
+            icon,
+            size: 15,
+            color: enabled ? colors.primary : colors.onSurfaceVariant,
+          );
     return TextButton(
       onPressed: onPressed,
       style: TextButton.styleFrom(
         backgroundColor: tonal ? colors.primaryContainer : colors.surface,
         foregroundColor: tonal ? colors.onPrimaryContainer : colors.primary,
         disabledBackgroundColor: colors.outlineVariant.withValues(alpha: 0.5),
+        disabledForegroundColor: colors.onSurfaceVariant,
         minimumSize: const Size(0, 36),
         padding: const EdgeInsets.symmetric(horizontal: 14),
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,

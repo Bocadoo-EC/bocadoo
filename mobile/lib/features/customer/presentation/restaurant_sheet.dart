@@ -191,11 +191,13 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
         .where((b) => b.id == _breakfastId && !b.isSoldOut)
         .firstOrNull;
     final publicStatus = ref.watch(restaurantPublicStatusProvider(r.id));
+    final isClosed = publicStatus.isClosed;
     final menuSoldOutAll = publicStatus.isSoldOutToday ||
         (breakfastMode
             ? r.breakfasts.every((b) => b.isSoldOut)
             : r.isMenuSoldOutToday);
     final canOrder =
+        !isClosed &&
         !hasActiveOrder &&
         !_sending &&
         r.hasMenu &&
@@ -243,7 +245,11 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
               ),
               const SizedBox(height: 16),
               if (!r.hasMenu)
-                const _CenteredStatus(text: 'Sin menú publicado hoy')
+                _CenteredStatus(
+                  text: isClosed
+                      ? 'Este restaurante está cerrado por hoy'
+                      : 'Sin menú publicado hoy',
+                )
               else ...[
                 if (hasBreakfasts) ...[
                   _ModeTabs(
@@ -315,8 +321,41 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
             top: false,
             bottom: true,
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-              child: Column(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+              child: isClosed
+                  ? Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 14,
+                      ),
+                      decoration: BoxDecoration(
+                        color: colors.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.lock_clock_outlined,
+                            size: 18,
+                            color: colors.onSurfaceVariant,
+                          ),
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: Text(
+                              'Este restaurante está cerrado por hoy',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w800,
+                                color: colors.onSurface,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
@@ -452,10 +491,21 @@ class _HeaderCard extends StatelessWidget {
     required this.onTable,
   });
 
+  static const _grayscaleFilter = ColorFilter.matrix(<double>[
+    0.2126, 0.7152, 0.0722, 0, 0,
+    0.2126, 0.7152, 0.0722, 0, 0,
+    0.2126, 0.7152, 0.0722, 0, 0,
+    0, 0, 0, 1, 0,
+  ]);
+
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     final r = restaurant;
+    final cover = CoverImage(
+      url: r.imageUrl.isNotEmpty ? r.imageUrl : r.logoUrl,
+      name: r.name,
+    );
     return Container(
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
@@ -471,10 +521,9 @@ class _HeaderCard extends StatelessWidget {
             child: Stack(
               fit: StackFit.expand,
               children: [
-                CoverImage(
-                  url: r.imageUrl.isNotEmpty ? r.imageUrl : r.logoUrl,
-                  name: r.name,
-                ),
+                publicStatus.isClosed
+                    ? ColorFiltered(colorFilter: _grayscaleFilter, child: cover)
+                    : cover,
                 DecoratedBox(
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
@@ -554,7 +603,9 @@ class _HeaderCard extends StatelessWidget {
                       ? 'Pedido grupal (Para llevar)'
                       : 'Pedido grupal',
                   icon: Icons.group_outlined,
-                  onPressed: onTable,
+                  onPressed: (publicStatus.isSoldOutToday || publicStatus.isClosed)
+                      ? null
+                      : onTable,
                 ),
               ],
             ),

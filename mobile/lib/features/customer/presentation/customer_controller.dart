@@ -169,6 +169,7 @@ class CustomerUiState {
         final effective = resolveRestaurantPublicStatus(
           menuAvailability: menuAvailabilityFor(r.id),
           manual: parseManualOccupancy(r.occupancy),
+          isOpen: r.isOpen,
           fullUntil: r.fullUntil,
         ).effective;
         if (effective != RestaurantEffectiveStatus.libre) {
@@ -1414,6 +1415,7 @@ final restaurantPublicStatusProvider =
   return resolveRestaurantPublicStatus(
     menuAvailability: menuAvail,
     manual: parseManualOccupancy(fromList?.occupancy),
+    isOpen: fromList?.isOpen ?? true,
     fullUntil: fromList?.fullUntil,
   );
 });
