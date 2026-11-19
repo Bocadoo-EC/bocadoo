@@ -15,7 +15,7 @@ class ApiCapabilities {
   static bool get sharedTableModeChange => !_api;
   static bool get sharedTableNotifyKitchen => !_api;
   static bool get sharedTableDishChoice => !_api;
-  static bool get ownerPendingTablesList => !_api;
+  static bool get ownerPendingTablesList => true;
 
   // Auth
   static bool get googleSignIn => !_api;

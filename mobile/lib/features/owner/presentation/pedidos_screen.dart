@@ -41,6 +41,7 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
   void _refresh() {
     ref.invalidate(activeOrdersProvider);
     ref.invalidate(ordersOnTheWayProvider);
+    ref.invalidate(pendingTablesProvider);
     ref.invalidate(dailySummaryProvider);
   }
 
@@ -109,9 +110,10 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     final orders = ref.watch(activeOrdersProvider);
+    final tables = ref.watch(pendingTablesProvider).value ?? const <PendingTable>[];
     final lunchesToday =
         ref.watch(dailySummaryProvider).value?.lunchesRedeemedToday ?? 0;
-    final count = orders.value?.length ?? 0;
+    final count = (orders.value?.length ?? 0) + tables.length;
 
     return Scaffold(
       backgroundColor: colors.surface,
@@ -142,25 +144,135 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
               ),
               data: (list) {
                 _maybeOpenFromScanner(list);
-                if (list.isEmpty) {
+                if (list.isEmpty && tables.isEmpty) {
                   return _Empty(
                     onBack: _back,
                     hasDispatchedToday: lunchesToday > 0,
                   );
                 }
+                final totalItems = tables.length + list.length;
                 return RefreshIndicator(
                   onRefresh: () async => _refresh(),
                   child: ListView.separated(
                     padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-                    itemCount: list.length,
+                    itemCount: totalItems,
                     separatorBuilder: (_, _) => const SizedBox(height: 12),
-                    itemBuilder: (_, i) => _OrderCard(order: list[i], onAction: () => _act(list[i])),
+                    itemBuilder: (_, i) {
+                      if (i < tables.length) {
+                        final t = tables[i];
+                        return _TableOrderCard(
+                          table: t,
+                          onAction: () async {
+                            await context.push('/owner/cobrar-mesa/${t.id}');
+                            if (mounted) _refresh();
+                          },
+                        );
+                      }
+                      final order = list[i - tables.length];
+                      return _OrderCard(order: order, onAction: () => _act(order));
+                    },
                   ),
                 );
               },
             ),
           ),
         ]),
+      ),
+    );
+  }
+}
+
+class _TableOrderCard extends StatelessWidget {
+  const _TableOrderCard({required this.table, required this.onAction});
+
+  final PendingTable table;
+  final VoidCallback onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: colors.primary.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                decoration: BoxDecoration(
+                  color: colors.primaryContainer,
+                  borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.groups_rounded, size: 15, color: colors.onPrimaryContainer),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Mesa grupal',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w900,
+                        color: colors.onPrimaryContainer,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  table.hostName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w900,
+                    color: colors.onSurface,
+                  ),
+                ),
+              ),
+              Icon(Icons.schedule_rounded, size: 15, color: colors.onSurfaceVariant),
+              const SizedBox(width: 4),
+              Text(
+                table.time,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: colors.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: colors.primaryContainer.withValues(alpha: 0.4),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Text(
+              '${table.members} ${table.members == 1 ? 'comensal' : 'comensales'} · Llega a las ${table.time}',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: colors.onSurface,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          ElevatedButton.icon(
+            onPressed: onAction,
+            icon: const Icon(Icons.point_of_sale_rounded, size: 18),
+            label: const Text('Cobrar mesa'),
+          ),
+        ],
       ),
     );
   }

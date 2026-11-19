@@ -2563,8 +2563,48 @@ class ApiOwnerRepository
 
   @override
   Future<List<PendingTable>> getPendingTables(String restaurantId) async {
-    // El backend actual no expone listado de mesas pendientes en caja (B-15).
-    return const [];
+    try {
+      final list = await guard(
+        () => _api.getList(
+          '${ApiConfig.v1}/restaurante/mesas',
+          restaurant: true,
+        ),
+      );
+      final out = <PendingTable>[];
+      for (final raw in list.whereType<Map>()) {
+        final m = Map<String, dynamic>.from(raw);
+        final estado = (m['estado'] ?? '').toString().toUpperCase();
+        if (estado == 'FINALIZADA' ||
+            estado == 'CANCELADA' ||
+            estado == 'EXPIRADA' ||
+            m['validadaEn'] != null) {
+          continue;
+        }
+        final id = (m['id'] ?? '').toString();
+        if (id.isEmpty) continue;
+        final anfitrion = m['anfitrion'] is Map
+            ? Map<String, dynamic>.from(m['anfitrion'] as Map)
+            : const <String, dynamic>{};
+        final hostName = (anfitrion['nombre'] ?? 'Mesa grupal').toString();
+        final miembros = m['miembros'] is List ? m['miembros'] as List : const [];
+        final horaRaw = m['horaLlegada']?.toString();
+        final timeStr = horaRaw != null && horaRaw.isNotEmpty
+            ? _hhmmEcuador(_parseDateTime(horaRaw))
+            : '--:--';
+        out.add(
+          PendingTable(
+            id: id,
+            hostName: hostName,
+            members: miembros.length,
+            time: timeStr,
+          ),
+        );
+      }
+      return out;
+    } on ApiException catch (e) {
+      if (e.status == 403) return const [];
+      rethrow;
+    }
   }
 
   @override

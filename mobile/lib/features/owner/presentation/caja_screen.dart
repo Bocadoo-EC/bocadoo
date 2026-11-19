@@ -34,6 +34,7 @@ class _CajaScreenState extends ConsumerState<CajaScreen> {
       if (!mounted) return;
       ref.invalidate(planRequestsProvider);
       ref.invalidate(ordersOnTheWayProvider);
+      ref.invalidate(pendingTablesProvider);
       ref.invalidate(posMenuProvider);
       unawaited(ref.read(cajaMovementsProvider.notifier).refresh());
       setState(() {});
@@ -349,7 +350,22 @@ class _OrdersStrip extends ConsumerWidget {
         SystemSound.play(SystemSoundType.alert);
       }
     });
-    final count = ref.watch(ordersOnTheWayProvider).value ?? 0;
+    ref.listen<AsyncValue<List<PendingTable>>>(pendingTablesProvider, (prev, next) {
+      final prevCount = prev?.value?.length;
+      final nextCount = next.value?.length;
+      if (prevCount != null && nextCount != null && nextCount > prevCount) {
+        HapticFeedback.mediumImpact();
+        SystemSound.play(SystemSoundType.alert);
+      }
+    });
+    final ordersCount = ref.watch(ordersOnTheWayProvider).value ?? 0;
+    final tablesCount = ref.watch(pendingTablesProvider).value?.length ?? 0;
+    final count = ordersCount + tablesCount;
+    final stripText = tablesCount > 0 && ordersCount > 0
+        ? '$ordersCount pedidos · $tablesCount ${tablesCount == 1 ? 'mesa' : 'mesas'} en camino'
+        : tablesCount > 0
+            ? '$tablesCount ${tablesCount == 1 ? 'mesa grupal' : 'mesas grupales'} en camino'
+            : '$count en camino';
     return Material(
       color: colors.primaryContainer,
       child: InkWell(
@@ -360,7 +376,9 @@ class _OrdersStrip extends ConsumerWidget {
             Icon(Icons.schedule_rounded, size: 18, color: colors.onPrimaryContainer),
             const SizedBox(width: 8),
             Expanded(
-              child: Text('$count en camino',
+              child: Text(stripText,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: colors.onPrimaryContainer)),
             ),
             Container(
@@ -422,6 +440,7 @@ class _CajaBody extends ConsumerWidget {
       onRefresh: () async {
         ref.invalidate(dailySummaryProvider);
         ref.invalidate(ordersOnTheWayProvider);
+        ref.invalidate(pendingTablesProvider);
         ref.invalidate(posMenuProvider);
         await movementsNotifier.refresh();
       },
