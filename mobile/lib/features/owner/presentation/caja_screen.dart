@@ -1075,7 +1075,7 @@ class _MovementRow extends StatelessWidget {
           if (item.subtitle != null && item.subtitle!.isNotEmpty) item.subtitle!,
           if (item.metodoPago != null && item.metodoPago!.isNotEmpty && item.subtitle != item.metodoPago)
             item.metodoPago!,
-          OwnerFormat.time(item.timestamp),
+          if (item.timestamp != null) OwnerFormat.time(item.timestamp!),
         ].join(' · ');
         trailing = Column(
           crossAxisAlignment: CrossAxisAlignment.end,
@@ -1113,7 +1113,7 @@ class _MovementRow extends StatelessWidget {
         final refCents = item.valorPedidoCentavos ?? 0;
         infoLine = [
           if (item.subtitle != null && item.subtitle!.isNotEmpty) item.subtitle!,
-          OwnerFormat.time(item.timestamp),
+          if (item.timestamp != null) OwnerFormat.time(item.timestamp!),
         ].join(' · ');
         trailing = Column(
           crossAxisAlignment: CrossAxisAlignment.end,
@@ -1151,7 +1151,7 @@ class _MovementRow extends StatelessWidget {
         infoLine = [
           dish,
           if (item.planNombre != null && item.planNombre!.isNotEmpty) item.planNombre!,
-          OwnerFormat.time(item.timestamp),
+          if (item.timestamp != null) OwnerFormat.time(item.timestamp!),
         ].join(' · ');
         trailing = Column(
           crossAxisAlignment: CrossAxisAlignment.end,

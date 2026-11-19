@@ -221,7 +221,7 @@ class CajaMovement {
 
   final String id;
   final CajaMovementType tipo;
-  final DateTime timestamp;
+  final DateTime? timestamp;
   final String title;
   final String? subtitle;
 

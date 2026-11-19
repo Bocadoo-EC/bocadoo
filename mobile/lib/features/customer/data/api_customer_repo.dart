@@ -1396,8 +1396,9 @@ class ApiCustomerRepository implements ICustomerRepository {
     final ocupacion = _asMap(json['ocupacion']);
     final nivelRaw = ocupacion['nivel']?.toString().toUpperCase();
     final estadoRaw = json['estado']?.toString().toUpperCase();
-    final isOpenFromServer = json['abiertoAhora'] != false &&
-        estadoRaw != 'PAUSADO' &&
+    // `GET /v1/restaurantes` solo lista locales activos; un local cerrado manualmente
+    // llega como PAUSADO/CERRADO o con nivel CERRADO, nunca por horario (`abiertoAhora`).
+    final isOpenFromServer = estadoRaw != 'PAUSADO' &&
         estadoRaw != 'CERRADO' &&
         nivelRaw != 'CERRADO';
     final mappedOccupancy = !isOpenFromServer

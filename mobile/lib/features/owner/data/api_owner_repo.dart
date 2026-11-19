@@ -161,11 +161,47 @@ class ApiOwnerRepository
   }
 
   static DateTime _parseDateTime(dynamic raw) {
-    if (raw is String && raw.isNotEmpty) {
-      final parsed = DateTime.tryParse(raw);
-      if (parsed != null) return parsed.toLocal();
+    return _tryParseDateTime(raw) ?? DateTime.now();
+  }
+
+  /// Parsea fechas ISO o epochs numéricos devolviendo `null` cuando no hay hora
+  /// real registrada (evita sustituir logs antiguos por `DateTime.now()`).
+  static DateTime? _tryParseDateTime(
+    dynamic raw, {
+    dynamic timeFallback,
+    dynamic dateFallback,
+  }) {
+    if (raw is DateTime) return raw.toLocal();
+    if (raw is int) {
+      final ms = raw > 1000000000000 ? raw : raw * 1000;
+      return DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true).toLocal();
     }
-    return DateTime.now();
+    if (raw is num) {
+      final v = raw.toInt();
+      final ms = v > 1000000000000 ? v : v * 1000;
+      return DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true).toLocal();
+    }
+    if (raw is String && raw.trim().isNotEmpty) {
+      final s = raw.trim();
+      final hasTime = s.contains(':') || s.contains('T');
+      if (hasTime) {
+        final parsed = DateTime.tryParse(s);
+        if (parsed != null) return parsed.toLocal();
+      }
+    }
+
+    final timeStr = timeFallback?.toString().trim() ?? '';
+    if (timeStr.isNotEmpty && timeStr.contains(':')) {
+      final dateStr = (raw is String && raw.trim().length >= 10)
+          ? raw.trim().substring(0, 10)
+          : (dateFallback?.toString().trim() ?? '');
+      if (dateStr.length >= 10) {
+        final hhmmss = timeStr.length == 5 ? '$timeStr:00' : timeStr;
+        final combined = DateTime.tryParse('${dateStr.substring(0, 10)}T$hhmmss');
+        if (combined != null) return combined.toLocal();
+      }
+    }
+    return null;
   }
 
   static String _hhmmEcuador(DateTime utcOrLocal) {
@@ -588,13 +624,15 @@ class ApiOwnerRepository
       final clienteNombre = cliente?['nombre']?.toString();
       final consumoId = consumo?['id']?.toString();
       final planNombre = plan?['nombre']?.toString();
-      final creadoEnRaw = consumo?['creadoEn'];
-      final redeemedAt = creadoEnRaw != null ? _parseDateTime(creadoEnRaw) : null;
-      final prevCreadoRaw = consumoPrevio?['creadoEn'];
-      final DateTime? prevRedeemedAt =
-          (prevCreadoRaw is String && prevCreadoRaw.trim().isNotEmpty)
-              ? DateTime.tryParse(prevCreadoRaw)?.toLocal()
-              : null;
+      final creadoEnRaw =
+          consumo?['creadoEn'] ?? consumo?['fecha'] ?? consumo?['fechaHora'] ?? data['canjeadoEn'];
+      final redeemedAt = _tryParseDateTime(creadoEnRaw);
+      if (consumoId != null && consumoId.isNotEmpty && redeemedAt != null) {
+        _orderScanTimestampByKey[consumoId] = redeemedAt;
+      }
+      final prevCreadoRaw =
+          consumoPrevio?['creadoEn'] ?? consumoPrevio?['fecha'];
+      final DateTime? prevRedeemedAt = _tryParseDateTime(prevCreadoRaw);
       final rawPlatoNombre =
           (data['platoNombre'] ?? consumo?['platoNombre'])?.toString().trim();
       final dishDisplay = (rawPlatoNombre != null && rawPlatoNombre.isNotEmpty)
@@ -1010,7 +1048,9 @@ class ApiOwnerRepository
           type: isPrepaid ? 'Canje de plan' : 'Pedido #$numero',
           amount: Money.fromCents(paidByPlan ? 0 : totalCents),
           paymentMethod: isPrepaid ? 'Plan' : 'Efectivo',
-          timestamp: _parseDateTime(p['servidoEn'] ?? p['creadoEn']),
+          timestamp: _parseDateTime(
+            p['canjeadoEn'] ?? p['servidoEn'] ?? p['creadoEn'],
+          ),
           detail: isPrepaid ? 'Canje de plan · $dishLabel (Prepagado)' : null,
         ),
       );
@@ -1037,6 +1077,8 @@ class ApiOwnerRepository
     return out;
   }
 
+  final Map<String, DateTime> _orderScanTimestampByKey = {};
+
   @override
   Future<CajaMovementsPage> getCajaMovements(
     String restaurantId, {
@@ -1062,18 +1104,129 @@ class ApiOwnerRepository
             ? data['movimientos'] as List
             : (data['data'] is List ? data['data'] as List : const []));
 
+    final responseFecha = (data['fecha'] ?? fecha).toString();
     final mapped = <CajaMovement>[
-      for (final raw in rawItems.whereType<Map>()) _mapCajaMovement(raw),
+      for (final raw in rawItems.whereType<Map>())
+        _mapCajaMovement(raw, fechaFallback: responseFecha),
     ];
+
+    // Si algún movimiento PEDIDO llegó sin hora exacta desde `/v1/caja/movimientos`,
+    // resuelve `canjeadoEn ?? servidoEn ?? creadoEn` desde `/v1/caja/pedidos`
+    // sin inventar nunca la hora actual (`DateTime.now()`).
+    final missingPedidoIndices = <int>[
+      for (var i = 0; i < mapped.length; i++)
+        if (mapped[i].timestamp == null && mapped[i].tipo == CajaMovementType.pedido) i,
+    ];
+    if (missingPedidoIndices.isNotEmpty) {
+      await _hydrateMissingPedidoTimestamps(
+        rawItems: rawItems,
+        mapped: mapped,
+        missingIndices: missingPedidoIndices,
+      );
+    }
+
     final next = data['nextCursor']?.toString();
     return CajaMovementsPage(
-      fecha: (data['fecha'] ?? fecha).toString(),
+      fecha: responseFecha,
       items: mapped,
       nextCursor: (next != null && next.isNotEmpty) ? next : null,
     );
   }
 
-  CajaMovement _mapCajaMovement(Map raw) {
+  Future<void> _hydrateMissingPedidoTimestamps({
+    required List<dynamic> rawItems,
+    required List<CajaMovement> mapped,
+    required List<int> missingIndices,
+  }) async {
+    bool resolvedAllFromCache = true;
+    for (final idx in missingIndices) {
+      final raw = rawItems[idx] is Map ? rawItems[idx] as Map : const {};
+      final pedId = (raw['pedidoId'] ?? raw['id'] ?? '').toString();
+      final numStr = _asNullableInt(raw['pedidoNumero'] ?? raw['numero'])?.toString() ?? '';
+      final cached = _orderScanTimestampByKey[pedId] ??
+          (numStr.isNotEmpty ? _orderScanTimestampByKey['#$numStr'] : null);
+      if (cached != null) {
+        final m = mapped[idx];
+        mapped[idx] = CajaMovement(
+          id: m.id,
+          tipo: m.tipo,
+          timestamp: cached,
+          title: m.title,
+          subtitle: m.subtitle,
+          montoCentavos: m.montoCentavos,
+          valorPedidoCentavos: m.valorPedidoCentavos,
+          pagoEstado: m.pagoEstado,
+          metodoPago: m.metodoPago,
+          revertido: m.revertido,
+          platoNombre: m.platoNombre,
+          customerName: m.customerName,
+          planNombre: m.planNombre,
+        );
+      } else {
+        resolvedAllFromCache = false;
+      }
+    }
+    if (resolvedAllFromCache) return;
+
+    try {
+      final lists = await Future.wait([
+        guard(
+          () => _api.getList(
+            '${ApiConfig.v1}/caja/pedidos',
+            query: const {'estado': 'SERVIDA'},
+            restaurant: true,
+          ),
+        ).catchError((_) => const <dynamic>[]),
+        guard(
+          () => _api.getList(
+            '${ApiConfig.v1}/caja/pedidos',
+            query: const {'estado': 'CANJEADA'},
+            restaurant: true,
+          ),
+        ).catchError((_) => const <dynamic>[]),
+      ]);
+      for (final list in lists) {
+        for (final p in list.whereType<Map>()) {
+          final ts = _tryParseDateTime(
+            p['canjeadoEn'] ?? p['servidoEn'] ?? p['creadoEn'],
+          );
+          if (ts == null) continue;
+          final pid = (p['id'] ?? '').toString();
+          final pnum = _asNullableInt(p['numero'])?.toString() ?? '';
+          if (pid.isNotEmpty) _orderScanTimestampByKey[pid] = ts;
+          if (pnum.isNotEmpty) _orderScanTimestampByKey['#$pnum'] = ts;
+        }
+      }
+      for (final idx in missingIndices) {
+        if (mapped[idx].timestamp != null) continue;
+        final raw = rawItems[idx] is Map ? rawItems[idx] as Map : const {};
+        final pedId = (raw['pedidoId'] ?? raw['id'] ?? '').toString();
+        final numStr = _asNullableInt(raw['pedidoNumero'] ?? raw['numero'])?.toString() ?? '';
+        final found = _orderScanTimestampByKey[pedId] ??
+            (numStr.isNotEmpty ? _orderScanTimestampByKey['#$numStr'] : null);
+        if (found != null) {
+          final m = mapped[idx];
+          mapped[idx] = CajaMovement(
+            id: m.id,
+            tipo: m.tipo,
+            timestamp: found,
+            title: m.title,
+            subtitle: m.subtitle,
+            montoCentavos: m.montoCentavos,
+            valorPedidoCentavos: m.valorPedidoCentavos,
+            pagoEstado: m.pagoEstado,
+            metodoPago: m.metodoPago,
+            revertido: m.revertido,
+            platoNombre: m.platoNombre,
+            customerName: m.customerName,
+            planNombre: m.planNombre,
+          );
+        }
+      }
+    } catch (_) {}
+  }
+
+  CajaMovement _mapCajaMovement(Map raw, {String? fechaFallback}) {
     final tipoRaw = (raw['tipo'] ?? '').toString().toUpperCase();
     final tipo = switch (tipoRaw) {
       'VENTA' => CajaMovementType.venta,
@@ -1086,6 +1239,7 @@ class ApiOwnerRepository
     final clienteMap = raw['cliente'] is Map ? raw['cliente'] as Map : null;
     final comensalMap = raw['comensal'] is Map ? raw['comensal'] as Map : null;
     final consumoMap = raw['consumo'] is Map ? raw['consumo'] as Map : null;
+    final pedidoMap = raw['pedido'] is Map ? raw['pedido'] as Map : null;
     final planMap = raw['plan'] is Map ? raw['plan'] as Map : null;
 
     final customerName = (raw['clienteNombre'] ??
@@ -1156,12 +1310,52 @@ class ApiOwnerRepository
             : dishDisplay;
     }
 
+    final rawTs = tipo == CajaMovementType.pedido
+        ? (raw['canjeadoEn'] ??
+            raw['validadoEn'] ??
+            raw['servidoEn'] ??
+            raw['ocurrioEn'] ??
+            raw['fechaHora'] ??
+            raw['registradoEn'] ??
+            raw['momento'] ??
+            raw['en'] ??
+            raw['creadoEn'] ??
+            raw['timestamp'] ??
+            raw['createdAt'] ??
+            raw['actualizadoEn'] ??
+            raw['fecha'] ??
+            pedidoMap?['canjeadoEn'] ??
+            pedidoMap?['servidoEn'] ??
+            pedidoMap?['creadoEn'] ??
+            consumoMap?['creadoEn'] ??
+            consumoMap?['fecha'])
+        : (raw['creadoEn'] ??
+            raw['fechaHora'] ??
+            raw['ocurrioEn'] ??
+            raw['canjeadoEn'] ??
+            raw['validadoEn'] ??
+            raw['servidoEn'] ??
+            raw['registradoEn'] ??
+            raw['momento'] ??
+            raw['en'] ??
+            raw['timestamp'] ??
+            raw['createdAt'] ??
+            raw['fecha'] ??
+            consumoMap?['creadoEn'] ??
+            consumoMap?['fecha'] ??
+            pagoMap?['pagadoEn'] ??
+            pagoMap?['creadoEn']);
+
+    final resolvedTs = _tryParseDateTime(
+      rawTs,
+      timeFallback: raw['hora'] ?? raw['horaLocal'],
+      dateFallback: raw['fecha'] ?? fechaFallback,
+    );
+
     return CajaMovement(
       id: (raw['id'] ?? '').toString(),
       tipo: tipo,
-      timestamp: _parseDateTime(
-        raw['creadoEn'] ?? raw['fechaHora'] ?? raw['servidoEn'] ?? raw['timestamp'],
-      ),
+      timestamp: resolvedTs,
       title: title,
       subtitle: subtitle,
       montoCentavos: montoCentavos,
@@ -2347,6 +2541,13 @@ class ApiOwnerRepository
       final dishSummary = (cachedDish != null && cachedDish.isNotEmpty)
           ? cachedDish
           : (dishParts.isNotEmpty ? dishParts.join(' + ') : null);
+      final scanTs = _orderScanTimestampByKey[order.id ?? ''] ??
+          _orderScanTimestampByKey['#${order.number}'] ??
+          DateTime.now();
+      if (order.id != null && order.id!.isNotEmpty) {
+        _orderScanTimestampByKey.putIfAbsent(order.id!, () => scanTs);
+      }
+      _orderScanTimestampByKey.putIfAbsent('#${order.number}', () => scanTs);
       _sessionValidatedTransactions.insert(
         0,
         TransactionItem(
@@ -2355,7 +2556,7 @@ class ApiOwnerRepository
           type: order.paidByPlan ? 'Canje de plan' : 'Pedido #${order.number}',
           amount: order.paidByPlan ? 0 : Money.fromCents(order.effectiveTotalCents),
           paymentMethod: order.paidByPlan ? 'Plan' : 'Efectivo',
-          timestamp: DateTime.now(),
+          timestamp: scanTs,
           detail: order.paidByPlan
               ? 'Canje de plan · ${dishSummary ?? 'Almuerzo del día'} (Prepagado)'
               : null,
@@ -2424,6 +2625,15 @@ class ApiOwnerRepository
             resultado == 'OK_ADVERTENCIA';
         if (ok) {
           entry.validated = true;
+          final pedidoTs = _tryParseDateTime(
+            pedidoMap?['canjeadoEn'] ??
+                pedidoMap?['servidoEn'] ??
+                pedidoMap?['creadoEn'],
+          );
+          if (pedidoTs != null) {
+            _orderScanTimestampByKey[entry.id] = pedidoTs;
+            _orderScanTimestampByKey['#$orderNumber'] = pedidoTs;
+          }
           eventsService.track(
             'dueno.pedido_validado',
             restaurantId: restaurantId,
