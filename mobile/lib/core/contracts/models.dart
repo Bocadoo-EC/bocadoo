@@ -274,6 +274,9 @@ class Restaurant {
   /// Hora hasta la que el local permanece en estado `LLENO`.
   final DateTime? fullUntil;
 
+  /// Capacidad máxima de puestos del local (puestos configurados).
+  final int? seats;
+
   const Restaurant({
     required this.id,
     required this.name,
@@ -303,6 +306,7 @@ class Restaurant {
     this.longitude,
     this.slug,
     this.fullUntil,
+    this.seats,
   });
 
   bool get hasLocation =>
@@ -365,6 +369,7 @@ class Restaurant {
     String? slug,
     DateTime? fullUntil,
     bool clearFullUntil = false,
+    int? seats,
   }) {
     return Restaurant(
       id: id ?? this.id,
@@ -395,6 +400,7 @@ class Restaurant {
       longitude: longitude,
       slug: slug ?? this.slug,
       fullUntil: clearFullUntil ? null : (fullUntil ?? this.fullUntil),
+      seats: seats ?? this.seats,
     );
   }
 }
@@ -598,7 +604,7 @@ class TableDish {
   });
 }
 
-/// Mesa con amigos (C9) e invitación (C7).
+/// Pedido grupal / mesa compartida (C9) e invitación (C7).
 @immutable
 class SharedTable {
   final String id;
@@ -609,6 +615,10 @@ class SharedTable {
   final TableMode mode;
   final List<TableMember> members;
   final bool onTheWay;
+  final String status;
+  final DateTime? scheduledAt;
+  final int partySize;
+  final bool takeaway;
 
   /// Texto de ocupación del local ("Fluido · Llegas y te sientas").
   final String occupancyLabel;
@@ -622,6 +632,26 @@ class SharedTable {
   /// Enlace que se comparte con los invitados.
   final String shareUrl;
 
+  /// Últimos 6 caracteres en mayúsculas del identificador para mostrar en UI.
+  String get shortId {
+    final clean = id.replaceAll('-', '').trim().toUpperCase();
+    if (clean.length <= 6) return clean;
+    return clean.substring(clean.length - 6);
+  }
+
+  /// Cantidad efectiva de comensales contemplados en el pedido grupal (mínimo 2).
+  int get effectivePartySize {
+    final count = members.length > partySize ? members.length : partySize;
+    return count < 2 ? 2 : count;
+  }
+
+  /// Recargo unitario de envase para llevar en centavos.
+  int get takeawayUnitSurchargeCents => (takeawaySurcharge * 100).round();
+
+  /// Recargo total de envase para llevar (`recargoUnitario * personas`).
+  int get takeawaySurchargeCentsTotal =>
+      takeaway ? takeawayUnitSurchargeCents * effectivePartySize : 0;
+
   const SharedTable({
     required this.id,
     required this.restaurantId,
@@ -633,23 +663,41 @@ class SharedTable {
     this.mode = TableMode.eachOwn,
     this.members = const [],
     this.onTheWay = false,
+    this.status = 'ABIERTA',
+    this.scheduledAt,
+    this.partySize = 2,
+    this.takeaway = false,
     this.occupancyLabel = '',
     this.soups = const [],
     this.mains = const [],
     this.takeawaySurcharge = 0.25,
   });
 
-  SharedTable copyWith({TableMode? mode, List<TableMember>? members, bool? onTheWay}) => SharedTable(
+  SharedTable copyWith({
+    String? time,
+    TableMode? mode,
+    List<TableMember>? members,
+    bool? onTheWay,
+    String? status,
+    DateTime? scheduledAt,
+    int? partySize,
+    bool? takeaway,
+  }) =>
+      SharedTable(
         id: id,
         restaurantId: restaurantId,
         restaurantName: restaurantName,
         hostName: hostName,
-        time: time,
+        time: time ?? this.time,
         qrPayload: qrPayload,
         shareUrl: shareUrl,
         mode: mode ?? this.mode,
         members: members ?? this.members,
         onTheWay: onTheWay ?? this.onTheWay,
+        status: status ?? this.status,
+        scheduledAt: scheduledAt ?? this.scheduledAt,
+        partySize: partySize ?? this.partySize,
+        takeaway: takeaway ?? this.takeaway,
         occupancyLabel: occupancyLabel,
         soups: soups,
         mains: mains,

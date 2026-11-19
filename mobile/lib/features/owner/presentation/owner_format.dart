@@ -12,4 +12,12 @@ class OwnerFormat {
     final mm = t.minute.toString().padLeft(2, '0');
     return '$h12:$mm ${t.hour < 12 ? 'AM' : 'PM'}';
   }
+
+  /// `13:15` (24h en hora Ecuador UTC-5).
+  static String time24(DateTime t) {
+    final ec = t.toUtc().subtract(const Duration(hours: 5));
+    final hh = ec.hour.toString().padLeft(2, '0');
+    final mm = ec.minute.toString().padLeft(2, '0');
+    return '$hh:$mm';
+  }
 }

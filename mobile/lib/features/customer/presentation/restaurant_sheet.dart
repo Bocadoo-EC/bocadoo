@@ -98,6 +98,14 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
     }
   }
 
+  String _resolveArrivalHhmm() {
+    if (_selectedArrival != 'En 15 min') return _selectedArrival;
+    final target = EcuadorTime.now().add(const Duration(minutes: 15));
+    final hh = target.hour.toString().padLeft(2, '0');
+    final mm = target.minute.toString().padLeft(2, '0');
+    return '$hh:$mm';
+  }
+
   Future<void> _order(CustomerController controller, Restaurant r) async {
     setState(() => _sending = true);
     final ok = await controller.preorder(
@@ -106,7 +114,7 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
       mainId: _breakfastMode ? null : _mainId,
       breakfastId: _breakfastMode ? _breakfastId : null,
       takeaway: _takeaway,
-      estimatedArrival: _selectedArrival,
+      estimatedArrival: _resolveArrivalHhmm(),
     );
     if (!mounted) return;
     setState(() => _sending = false);
@@ -303,121 +311,127 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
           ),
         ),
         if (r.hasMenu)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  'Hora estimada de consumo',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w800,
-                    color: colors.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 6,
-                  children: [
-                    for (final opt in _availableArrivalOptions())
-                      ChoiceChip(
-                        label: Text(opt),
-                        selected: _selectedArrival == opt,
-                        onSelected: (_) => setState(() => _selectedArrival = opt),
-                      ),
-                    ChoiceChip(
-                      label: Text(_customArrival ?? '+'),
-                      selected: _customArrival != null &&
-                          _selectedArrival == _customArrival,
-                      onSelected: (_) => _pickCustomTime(r),
+          SafeArea(
+            top: false,
+            bottom: true,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'Hora estimada de consumo',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                      color: colors.onSurfaceVariant,
                     ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Builder(
-                  builder: (context) {
-                    final activePass = s.passFor(r.id);
-                    final hasPlanHere = activePass != null &&
-                        activePass.remainingLunches > 0 &&
-                        !activePass.isExpired;
-                    final baseCents = breakfastMode
-                        ? Money.toCents(chosenBreakfast?.price ?? r.singleLunchPrice)
-                        : Money.toCents(r.singleLunchPrice);
-                    final surchargeCents =
-                        _takeaway ? Money.toCents(r.takeawaySurcharge) : 0;
-                    final totalCents =
-                        hasPlanHere ? 0 : baseCents + surchargeCents;
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        if (hasPlanHere) ...[
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 8,
-                            ),
-                            margin: const EdgeInsets.only(bottom: 8),
-                            decoration: BoxDecoration(
-                              color: context.bocadooColors.successContainer,
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(
-                                  Icons.verified_rounded,
-                                  size: 16,
-                                  color: context.bocadooColors.success,
-                                ),
-                                const SizedBox(width: 6),
-                                Flexible(
-                                  child: Text(
-                                    'Cubierto por tu Plan (Quedan ${activePass.remainingLunches} almuerzos)',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w800,
-                                      color: context.bocadooColors.success,
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: [
+                      for (final opt in _availableArrivalOptions())
+                        ChoiceChip(
+                          label: Text(opt),
+                          selected: _selectedArrival == opt,
+                          onSelected: (_) => setState(() => _selectedArrival = opt),
+                        ),
+                      ChoiceChip(
+                        label: Text(_customArrival ?? '+'),
+                        selected: _customArrival != null &&
+                            _selectedArrival == _customArrival,
+                        onSelected: (_) => _pickCustomTime(r),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Builder(
+                    builder: (context) {
+                      final activePass = s.passFor(r.id);
+                      final hasPlanHere = activePass != null &&
+                          activePass.remainingLunches > 0 &&
+                          !activePass.isExpired;
+                      final baseCents = breakfastMode
+                          ? Money.toCents(chosenBreakfast?.price ?? r.singleLunchPrice)
+                          : Money.toCents(r.singleLunchPrice);
+                      final surchargeCents =
+                          _takeaway ? Money.toCents(r.takeawaySurcharge) : 0;
+                      final totalCents =
+                          hasPlanHere ? 0 : baseCents + surchargeCents;
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (hasPlanHere) ...[
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 8,
+                              ),
+                              margin: const EdgeInsets.only(bottom: 8),
+                              decoration: BoxDecoration(
+                                color: context.bocadooColors.successContainer,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    Icons.verified_rounded,
+                                    size: 16,
+                                    color: context.bocadooColors.success,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Flexible(
+                                    child: Text(
+                                      'Cubierto por tu Plan (Quedan ${activePass.remainingLunches} almuerzos)',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w800,
+                                        color: context.bocadooColors.success,
+                                      ),
                                     ),
                                   ),
-                                ),
-                              ],
+                                ],
+                              ),
+                            ),
+                          ],
+                          ElevatedButton(
+                            onPressed:
+                                canOrder ? () => _order(controller, r) : null,
+                            child: Text(
+                              hasActiveOrder
+                                  ? 'Ya tienes un pedido en camino'
+                                  : menuSoldOutAll
+                                      ? 'Menú agotado por hoy'
+                                      : breakfastMode
+                                          ? (hasPlanHere
+                                              ? 'Preordenar desayuno con Plan (\$0,00)'
+                                              : 'Preordenar desayuno · ${formatCents(totalCents)}')
+                                          : (hasPlanHere
+                                              ? 'Preordenar almuerzo con Plan (\$0,00)'
+                                              : 'Preordenar almuerzo · ${formatCents(totalCents)}'),
                             ),
                           ),
                         ],
-                        ElevatedButton(
-                          onPressed:
-                              canOrder ? () => _order(controller, r) : null,
-                          child: Text(
-                            menuSoldOutAll
-                                ? 'Menú agotado por hoy'
-                                : breakfastMode
-                                    ? (hasPlanHere
-                                        ? 'Preordenar desayuno con Plan (\$0,00)'
-                                        : 'Preordenar desayuno · ${formatCents(totalCents)}')
-                                    : (hasPlanHere
-                                        ? 'Preordenar almuerzo con Plan (\$0,00)'
-                                        : 'Preordenar almuerzo · ${formatCents(totalCents)}'),
-                          ),
-                        ),
-                      ],
-                    );
-                  },
-                ),
-                if (hasActiveOrder) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    'Límite: tienes una orden activa pendiente.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: context.bocadooColors.danger,
-                    ),
+                      );
+                    },
                   ),
+                  if (hasActiveOrder) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Límite: tienes una orden activa pendiente.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: context.bocadooColors.danger,
+                      ),
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
       ],
@@ -536,7 +550,9 @@ class _HeaderCard extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 PillAction(
-                  label: 'Armar mesa',
+                  label: publicStatus.isFull
+                      ? 'Pedido grupal (Para llevar)'
+                      : 'Pedido grupal',
                   icon: Icons.group_outlined,
                   onPressed: onTable,
                 ),

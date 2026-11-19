@@ -14,16 +14,16 @@ import '../../../core/network/polling.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatters.dart';
 import 'customer_controller.dart';
-import 'customer_widgets.dart' show CustomerErrorView;
+import 'customer_widgets.dart' show CustomerErrorView, formatCents;
 import 'social_widgets.dart';
 
 const _times = ['12:30', '13:00', '13:30', '14:00'];
 
-/// C9 · Mesa con amigos: un QR de caja para toda la mesa e invitación por WhatsApp.
+/// C9 · Pedido grupal: un QR de caja para todo el grupo e invitación por WhatsApp.
 class TableSheet extends ConsumerStatefulWidget {
   const TableSheet({super.key, this.restaurantId});
 
-  /// Local de la mesa. Sin él se usa el del pase en pantalla.
+  /// Local del pedido grupal. Sin él se usa el del pase en pantalla.
   final String? restaurantId;
 
   @override
@@ -31,9 +31,11 @@ class TableSheet extends ConsumerStatefulWidget {
 }
 
 class _TableSheetState extends ConsumerState<TableSheet> {
-  late String _time = ref.read(customerControllerProvider).state.activeTable?.time ?? '13:00';
+  late String _time;
   String? _selectedRestaurantId;
   SharedTable? _table;
+  int _partySize = 2;
+  TableMode _selectedMode = TableMode.eachOwn;
   bool _loading = true;
   bool _failed = false;
   bool _busy = false;
@@ -50,14 +52,62 @@ class _TableSheetState extends ConsumerState<TableSheet> {
         (s.restaurants.length == 1 ? s.restaurants.first.id : null);
   }
 
+  Restaurant? _restaurantFor(String? id) {
+    if (id == null) return null;
+    return ref.read(customerControllerProvider).state.restaurantById(id);
+  }
+
+  bool _isRestaurantFull(String? id) {
+    if (id == null) return false;
+    return ref.read(restaurantPublicStatusProvider(id)).isFull;
+  }
+
+  String _nextSlotHhmm() {
+    final target = EcuadorTime.now().add(const Duration(minutes: 15));
+    return '${target.hour.toString().padLeft(2, '0')}:${target.minute.toString().padLeft(2, '0')}';
+  }
+
+  bool _isPastSlot(String hhmm) {
+    final parts = hhmm.split(':');
+    if (parts.length != 2) return false;
+    return EcuadorTime.todayAtUtc(hhmm).isBefore(DateTime.now().toUtc());
+  }
+
+  List<String> _visibleTimes() {
+    final upcoming = _times.where((slot) => !_isPastSlot(slot)).toList();
+    if (upcoming.isNotEmpty) return upcoming;
+    return [_nextSlotHhmm()];
+  }
+
   @override
   void initState() {
     super.initState();
-    if (_restaurantId != null) {
-      _open();
+    final active = ref.read(customerControllerProvider).state.activeTable;
+    final available = _visibleTimes();
+    if (active != null && available.contains(active.time)) {
+      _time = active.time;
+    } else if (active != null && !_isPastSlot(active.time)) {
+      _time = active.time;
+    } else {
+      _time = available.first;
+    }
+    final rid = _restaurantId;
+    if (rid != null) {
+      final hasMatchingActive =
+          active != null && (widget.restaurantId == null || _isRestaurantActiveMatch(active, rid));
+      if (_isRestaurantFull(rid) && !hasMatchingActive) {
+        _loading = false;
+      } else {
+        _open();
+      }
     } else {
       _loading = false;
     }
+  }
+
+  bool _isRestaurantActiveMatch(ActiveTable active, String rid) {
+    final r = _restaurantFor(rid);
+    return r != null && active.restaurantName == r.name;
   }
 
   @override
@@ -107,18 +157,24 @@ class _TableSheetState extends ConsumerState<TableSheet> {
     } catch (_) {}
   }
 
-  bool _isPastSlot(String hhmm) {
-    final parts = hhmm.split(':');
-    if (parts.length != 2) return false;
-    return EcuadorTime.todayAtUtc(hhmm).isBefore(DateTime.now().toUtc());
-  }
-
-  Future<void> _open() async {
+  Future<void> _open({bool forceCreate = false}) async {
     final restaurantId = _restaurantId;
     if (restaurantId == null) {
       setState(() {
         _loading = false;
         _failed = false;
+      });
+      return;
+    }
+    final isFull = _isRestaurantFull(restaurantId);
+    final active = ref.read(customerControllerProvider).state.activeTable;
+    final hasMatchingActive =
+        active != null && (widget.restaurantId == null || _isRestaurantActiveMatch(active, restaurantId));
+    if (isFull && !forceCreate && _table == null && !hasMatchingActive) {
+      setState(() {
+        _loading = false;
+        _failed = false;
+        _errorMsg = null;
       });
       return;
     }
@@ -129,9 +185,8 @@ class _TableSheetState extends ConsumerState<TableSheet> {
     });
     try {
       final repo = ref.read(customerRepositoryProvider);
-      final active = ref.read(customerControllerProvider).state.activeTable;
       SharedTable? table;
-      if (active != null &&
+      if (hasMatchingActive &&
           (widget.restaurantId == null || _table == null) &&
           active.time == _time) {
         table = await repo.getSharedTable(active.id);
@@ -139,12 +194,20 @@ class _TableSheetState extends ConsumerState<TableSheet> {
       table ??= await repo.openSharedTable(
         restaurantId: restaurantId,
         time: _time,
+        partySize: _partySize,
+        takeaway: isFull,
+        mode: _selectedMode,
       );
       if (!mounted) return;
-      ref.read(customerControllerProvider).syncTable(table);
+      final effectiveTable = isFull && !table.takeaway
+          ? table.copyWith(takeaway: true, partySize: _partySize)
+          : table.copyWith(partySize: table.effectivePartySize > _partySize ? table.effectivePartySize : _partySize);
+      ref.read(customerControllerProvider).syncTable(effectiveTable);
       setState(() {
-        _table = table;
-        _time = table!.time;
+        _table = effectiveTable;
+        _time = effectiveTable.time;
+        _partySize = effectiveTable.effectivePartySize;
+        _selectedMode = effectiveTable.mode;
         _loading = false;
       });
       _startPolling();
@@ -161,9 +224,45 @@ class _TableSheetState extends ConsumerState<TableSheet> {
         setState(() {
           _loading = false;
           _failed = true;
-          _errorMsg = 'No pudimos preparar tu mesa.';
+          _errorMsg = 'No pudimos preparar tu pedido grupal.';
         });
       }
+    }
+  }
+
+  bool _canCancelTable(SharedTable t) {
+    final st = t.status.toUpperCase();
+    final isInitial = st == 'ABIERTA' || st == 'EN_ESPERA';
+    if (!isInitial || t.onTheWay) return false;
+    final arrivalUtc = t.scheduledAt?.toUtc() ?? EcuadorTime.todayAtUtc(t.time);
+    return arrivalUtc.difference(DateTime.now().toUtc()) >=
+        const Duration(minutes: 15);
+  }
+
+  void _updatePartySize(int next, int maxSeats) {
+    final clamped = next.clamp(2, maxSeats);
+    if (clamped == _partySize) return;
+    setState(() {
+      _partySize = clamped;
+      final current = _table;
+      if (current != null) {
+        final updated = current.copyWith(partySize: clamped);
+        _table = updated;
+        ref.read(customerControllerProvider).syncTable(updated);
+      }
+    });
+    final current = _table;
+    final rid = _restaurantId;
+    if (current != null && rid != null && AppMode.useMock) {
+      unawaited(
+        ref.read(customerRepositoryProvider).openSharedTable(
+              restaurantId: rid,
+              time: current.time,
+              partySize: clamped,
+              takeaway: _isRestaurantFull(rid) || current.takeaway,
+              mode: current.mode,
+            ),
+      );
     }
   }
 
@@ -270,159 +369,350 @@ class _TableSheetState extends ConsumerState<TableSheet> {
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     final repo = ref.read(customerRepositoryProvider);
+    final rid = _restaurantId;
+    final restaurant = _restaurantFor(rid);
+    final isFull = rid != null && ref.watch(restaurantPublicStatusProvider(rid)).isFull;
+    final maxSeats = (restaurant?.seats ?? 12).clamp(2, 50);
     final t = _table;
+    final visibleTimes = _visibleTimes();
+    final unitSurchargeCents = Money.toCents(
+      restaurant?.takeawaySurcharge ?? t?.takeawaySurcharge ?? 0.25,
+    );
+    final totalSurchargeCents = unitSurchargeCents * _partySize;
+    final showTakeawayBreakdown = isFull || (t?.takeaway ?? false);
+    final modalTitle =
+        isFull ? 'Pedido grupal (Para llevar)' : 'Pedido grupal';
 
     return SizedBox(
       height: MediaQuery.sizeOf(context).height * 0.9,
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-          child: Text('Mesa con amigos',
-              style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: colors.onSurface)),
+          child: Text(
+            modalTitle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: colors.onSurface),
+          ),
         ),
         Expanded(
           child: _loading && t == null
-              ? const SocialLoading('Preparando tu mesa')
-              : _restaurantId == null && t == null
+              ? const SocialLoading('Preparando tu pedido grupal')
+              : rid == null && t == null
                   ? _RestaurantPicker(
                       restaurants: ref.read(customerControllerProvider).state.restaurants,
                       onSelect: (id) {
                         setState(() => _selectedRestaurantId = id);
-                        _open();
+                        if (!_isRestaurantFull(id)) {
+                          _open();
+                        }
                       },
                     )
-                  : _failed || t == null
+                  : _failed
                       ? CustomerErrorView(
-                          title: 'Error al crear mesa',
-                          message: _errorMsg ?? 'No pudimos preparar tu mesa.',
-                          onRetry: _open,
+                          title: 'Error al crear pedido grupal',
+                          message: _errorMsg ?? 'No pudimos preparar tu pedido grupal.',
+                          onRetry: () => _open(forceCreate: true),
                         )
-                  : ListView(padding: const EdgeInsets.fromLTRB(16, 0, 16, 24), children: [
-                      _LocalHeader(table: t),
-                      const SizedBox(height: 16),
-                      const SocialLabel('Hora de encuentro'),
-                      const SizedBox(height: 8),
-                      Row(children: [
-                        for (final time in _times) ...[
-                          if (time != _times.first) const SizedBox(width: 8),
-                          Expanded(
-                            child: SocialChoice(
-                              label: time,
-                              selected: _time == time,
-                              radius: AppTheme.buttonRadius,
-                              onTap: _busy ||
-                                      _loading ||
-                                      (!AppMode.useMock &&
-                                          _times.any((slot) => !_isPastSlot(slot)) &&
-                                          _isPastSlot(time))
-                                  ? null
-                                  : () {
-                                      setState(() => _time = time);
-                                      _open();
-                                    },
+                      : ListView(padding: const EdgeInsets.fromLTRB(16, 0, 16, 24), children: [
+                          _LocalHeader(
+                            restaurantName: t?.restaurantName ?? restaurant?.name ?? 'Restaurante',
+                            isFull: isFull,
+                          ),
+                          const SizedBox(height: 16),
+                          _PartySizeSelector(
+                            partySize: _partySize,
+                            minSeats: 2,
+                            maxSeats: maxSeats,
+                            onChanged: (next) => _updatePartySize(next, maxSeats),
+                          ),
+                          const SizedBox(height: 16),
+                          const SocialLabel('Hora programada'),
+                          const SizedBox(height: 8),
+                          Row(children: [
+                            for (final time in visibleTimes) ...[
+                              if (time != visibleTimes.first) const SizedBox(width: 8),
+                              Expanded(
+                                child: SocialChoice(
+                                  label: time,
+                                  selected: _time == time,
+                                  radius: AppTheme.buttonRadius,
+                                  onTap: _busy || _loading
+                                      ? null
+                                      : () {
+                                          setState(() => _time = time);
+                                          if (t != null) {
+                                            _open(forceCreate: true);
+                                          }
+                                        },
+                                ),
+                              ),
+                            ],
+                          ]),
+                          if (t != null && !visibleTimes.contains(t.time)) ...[
+                            const SizedBox(height: 6),
+                            Text(
+                              'Hora programada: ${t.time}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: colors.primary,
+                              ),
                             ),
-                          ),
-                        ],
-                      ]),
-                      if (!_times.contains(t.time)) ...[
-                        const SizedBox(height: 6),
-                        Text(
-                          'Hora programada: ${t.time}',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: colors.primary,
-                          ),
-                        ),
-                      ],
-                      const SizedBox(height: 16),
-                      _QrCard(table: t),
-                      const SizedBox(height: 14),
-                      Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Expanded(
-                          child: _ModeOption(
-                            title: 'Cada quien lo suyo',
-                            hint: 'Cada amigo con plan descuenta el suyo.',
-                            selected: t.mode == TableMode.eachOwn,
-                            onTap: _busy || !ApiCapabilities.sharedTableModeChange
-                                ? null
-                                : () => _run(() => repo.setTableMode(t.id, TableMode.eachOwn)),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: _ModeOption(
-                            title: 'Yo invito la mesa',
-                            hint: 'Se descuentan de mi plan y gano un sello por cada uno.',
-                            selected: t.mode == TableMode.hostPays,
-                            onTap: _busy || !ApiCapabilities.sharedTableModeChange
-                                ? null
-                                : () => _run(() => repo.setTableMode(t.id, TableMode.hostPays)),
-                          ),
-                        ),
-                      ]),
-                      const SizedBox(height: 14),
-                      Row(children: [
-                        Expanded(
-                          child: FilledButton.tonalIcon(
-                            style: compactButtonStyle(context),
-                            onPressed: () => _invite(t),
-                            icon: const Icon(Icons.send_rounded, size: 18),
-                            label: const Text('Invitar por WhatsApp', maxLines: 1, overflow: TextOverflow.ellipsis),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            style: compactButtonStyle(context),
-                            onPressed: () => _copy(t),
-                            icon: Icon(_copied ? Icons.check_rounded : Icons.copy_rounded, size: 18),
-                            label: Text(_copied ? 'Copiado' : 'Copiar link'),
-                          ),
-                        ),
-                      ]),
-                      const SizedBox(height: 6),
-                      TextButton.icon(
-                        onPressed: () => context.push('/customer/mesa/${t.id}'),
-                        icon: const Icon(Icons.open_in_new_rounded, size: 16),
-                        label: const Text('Ver la invitación como invitado'),
-                      ),
-                      Divider(height: 24, color: colors.outlineVariant),
-                      _Members(table: t),
-                      const SizedBox(height: 14),
-                      OutlinedButton.icon(
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: colors.error,
-                          side: BorderSide(color: colors.error.withValues(alpha: 0.45)),
-                        ),
-                        onPressed: _busy ? null : () => _cancelTable(t),
-                        icon: const Icon(Icons.close_rounded, size: 18),
-                        label: const Text('Cancelar mesa'),
-                      ),
-                      if (ApiCapabilities.sharedTableNotifyKitchen && !t.onTheWay) ...[
-                        const SizedBox(height: 18),
-                        ElevatedButton(
-                          onPressed: _busy
-                              ? null
-                              : () => _run(
-                                    () => repo.notifyKitchen(t.id),
-                                    done: '¡Avisado a cocina! El restaurante sabe que van en camino.',
+                          ],
+                          if (showTakeawayBreakdown) ...[
+                            const SizedBox(height: 14),
+                            Container(
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                color: colors.secondaryContainer,
+                                borderRadius: BorderRadius.circular(18),
+                                border: Border.all(color: colors.primary.withValues(alpha: 0.35)),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(children: [
+                                    Icon(Icons.takeout_dining_outlined, size: 18, color: colors.primary),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        isFull
+                                            ? 'Local lleno · Modalidad Para llevar'
+                                            : 'Modalidad Para llevar',
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w900,
+                                          color: colors.onSecondaryContainer,
+                                        ),
+                                      ),
+                                    ),
+                                  ]),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    'Recargo de envases: $_partySize personas × ${formatCents(unitSurchargeCents)} = ${formatCents(totalSurchargeCents)}',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                      color: colors.onSecondaryContainer,
+                                    ),
                                   ),
-                          child: Text('Avisar a cocina: ¡Vamos ${t.members.length} en camino!',
-                              maxLines: 1, overflow: TextOverflow.ellipsis),
-                        ),
-                      ],
-                    ]),
+                                ],
+                              ),
+                            ),
+                          ],
+                          const SizedBox(height: 16),
+                          if (t != null) ...[
+                            _QrCard(table: t),
+                            const SizedBox(height: 14),
+                          ],
+                          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Expanded(
+                              child: _ModeOption(
+                                title: 'Cada quien lo suyo',
+                                hint: 'Cada amigo con plan descuenta el suyo.',
+                                selected: (t?.mode ?? _selectedMode) == TableMode.eachOwn,
+                                onTap: t == null
+                                    ? () => setState(() => _selectedMode = TableMode.eachOwn)
+                                    : (_busy || !ApiCapabilities.sharedTableModeChange
+                                        ? null
+                                        : () => _run(() => repo.setTableMode(t.id, TableMode.eachOwn))),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: _ModeOption(
+                                title: 'Yo invito la mesa',
+                                hint: 'Se descuentan de mi plan y gano un sello por cada uno.',
+                                selected: (t?.mode ?? _selectedMode) == TableMode.hostPays,
+                                onTap: t == null
+                                    ? () => setState(() => _selectedMode = TableMode.hostPays)
+                                    : (_busy || !ApiCapabilities.sharedTableModeChange
+                                        ? null
+                                        : () => _run(() => repo.setTableMode(t.id, TableMode.hostPays))),
+                              ),
+                            ),
+                          ]),
+                          if (t == null) ...[
+                            const SizedBox(height: 16),
+                            ElevatedButton.icon(
+                              onPressed: _busy || _loading
+                                  ? null
+                                  : () => _open(forceCreate: true),
+                              icon: const Icon(Icons.takeout_dining_outlined),
+                              label: Text(
+                                isFull
+                                    ? 'Pedido grupal (Para llevar)'
+                                    : 'Confirmar pedido grupal',
+                              ),
+                            ),
+                          ] else ...[
+                            const SizedBox(height: 14),
+                            Row(children: [
+                              Expanded(
+                                child: FilledButton.tonalIcon(
+                                  style: compactButtonStyle(context),
+                                  onPressed: () => _invite(t),
+                                  icon: const Icon(Icons.chat_rounded, size: 18),
+                                  label: const Text('WhatsApp', maxLines: 1, overflow: TextOverflow.ellipsis),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: OutlinedButton.icon(
+                                  style: compactButtonStyle(context),
+                                  onPressed: () => _copy(t),
+                                  icon: Icon(_copied ? Icons.check_rounded : Icons.copy_rounded, size: 18),
+                                  label: Text(
+                                    _copied ? 'Copiado' : 'Copiar link',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ),
+                            ]),
+                            const SizedBox(height: 6),
+                            TextButton.icon(
+                              onPressed: () => context.push('/customer/mesa/${t.id}'),
+                              icon: const Icon(Icons.open_in_new_rounded, size: 16),
+                              label: const Text('Ver la invitación como invitado'),
+                            ),
+                            Divider(height: 24, color: colors.outlineVariant),
+                            _Members(table: t),
+                            const SizedBox(height: 14),
+                            if (_canCancelTable(t))
+                              OutlinedButton.icon(
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: colors.error,
+                                  side: BorderSide(color: colors.error.withValues(alpha: 0.45)),
+                                ),
+                                onPressed: _busy ? null : () => _cancelTable(t),
+                                icon: const Icon(Icons.close_rounded, size: 18),
+                                label: const Text('Cancelar mesa'),
+                              )
+                            else
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                decoration: BoxDecoration(
+                                  color: colors.surfaceContainerHighest.withValues(alpha: 0.6),
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                child: Text(
+                                  'La cancelación solo está disponible hasta 15 min antes de la hora programada.',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: colors.onSurfaceVariant,
+                                  ),
+                                ),
+                              ),
+                            if (ApiCapabilities.sharedTableNotifyKitchen && !t.onTheWay) ...[
+                              const SizedBox(height: 18),
+                              ElevatedButton(
+                                onPressed: _busy
+                                    ? null
+                                    : () => _run(
+                                          () => repo.notifyKitchen(t.id),
+                                          done: '¡Avisado a cocina! El restaurante sabe que van en camino.',
+                                        ),
+                                child: Text(
+                                  'Avisar a cocina: ¡Vamos $_partySize en camino!',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ]),
         ),
       ]),
     );
   }
 }
 
-class _LocalHeader extends StatelessWidget {
-  const _LocalHeader({required this.table});
+class _PartySizeSelector extends StatelessWidget {
+  const _PartySizeSelector({
+    required this.partySize,
+    required this.minSeats,
+    required this.maxSeats,
+    required this.onChanged,
+  });
 
-  final SharedTable table;
+  final int partySize;
+  final int minSeats;
+  final int maxSeats;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: Theme.of(context).scaffoldBackgroundColor,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: colors.outlineVariant),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.groups_rounded, size: 20, color: colors.primary),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Personas',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    color: colors.onSurface,
+                  ),
+                ),
+                Text(
+                  'Mín. $minSeats · Máx. $maxSeats',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: colors.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton.filledTonal(
+            onPressed: partySize > minSeats ? () => onChanged(partySize - 1) : null,
+            icon: const Icon(Icons.remove_rounded, size: 18),
+            tooltip: 'Menos personas',
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Text(
+              '$partySize',
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w900,
+                color: colors.onSurface,
+              ),
+            ),
+          ),
+          IconButton.filledTonal(
+            onPressed: partySize < maxSeats ? () => onChanged(partySize + 1) : null,
+            icon: const Icon(Icons.add_rounded, size: 18),
+            tooltip: 'Más personas',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LocalHeader extends StatelessWidget {
+  const _LocalHeader({required this.restaurantName, this.isFull = false});
+
+  final String restaurantName;
+  final bool isFull;
 
   @override
   Widget build(BuildContext context) {
@@ -436,17 +726,20 @@ class _LocalHeader extends StatelessWidget {
       ),
       child: Column(children: [
         SocialBadge(
-          label: 'Almuerzo compartido',
-          icon: Icons.restaurant_rounded,
+          label: isFull ? 'Pedido grupal (Para llevar)' : 'Almuerzo compartido',
+          icon: isFull ? Icons.takeout_dining_outlined : Icons.restaurant_rounded,
           background: colors.primaryContainer,
           foreground: colors.primary,
         ),
         const SizedBox(height: 8),
-        Text(table.restaurantName,
+        Text(restaurantName,
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: colors.onSurface)),
         const SizedBox(height: 2),
-        Text('Tus amigos eligen su plato y la mesa se sincroniza al instante',
+        Text(
+            isFull
+                ? 'Local lleno: coordina el pedido del grupo para recoger y llevar'
+                : 'Tus amigos eligen su plato y el pedido grupal se sincroniza al instante',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant)),
       ]),
@@ -479,8 +772,15 @@ class _QrCard extends StatelessWidget {
         Row(mainAxisAlignment: MainAxisAlignment.center, children: [
           Icon(Icons.qr_code_2_rounded, size: 18, color: colors.primary),
           const SizedBox(width: 6),
-          Text('QR de la mesa #${table.id}',
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: colors.primary)),
+          Expanded(
+            child: Text(
+              'QR de la mesa #${table.shortId}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: colors.primary),
+            ),
+          ),
         ]),
         const SizedBox(height: 12),
         Container(
@@ -501,7 +801,7 @@ class _QrCard extends StatelessWidget {
             SocialBadge(
               label: AppMode.useMock
                   ? BocadooQrParser.generateTableCode(table.id, restaurantId: table.restaurantId)
-                  : 'Mesa ${table.id}',
+                  : 'Mesa #${table.shortId}',
               background: colors.primaryContainer,
               foreground: colors.primary,
             ),

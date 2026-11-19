@@ -110,9 +110,10 @@ final activeOrdersProvider = FutureProvider.autoDispose<List<OwnerOrder>>((ref) 
       .getActiveOrders(ref.read(ownerRestaurantIdProvider));
 });
 
-/// Mesas con amigos por cobrar (banner de Caja).
+/// Mesas con amigos por cobrar (banner de Caja / Pedidos en camino).
 final pendingTablesProvider = FutureProvider.autoDispose<List<PendingTable>>((ref) {
   if (!ApiCapabilities.ownerPendingTablesList) return Future.value(const []);
+  _scheduleOrdersPoll(ref);
   return ref
       .read(ownerTablesRepositoryProvider)
       .getPendingTables(ref.read(ownerRestaurantIdProvider));

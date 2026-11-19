@@ -261,11 +261,28 @@ class MockCustomerRepository implements ICustomerRepository {
       };
 
   @override
-  Future<SharedTable> openSharedTable({required String restaurantId, required String time}) async {
+  Future<SharedTable> openSharedTable({
+    required String restaurantId,
+    required String time,
+    int partySize = 2,
+    bool takeaway = false,
+    TableMode mode = TableMode.eachOwn,
+  }) async {
     // TODO: Conectar con provider de backend
     await _simulateNetwork();
+    final scheduledAt = EcuadorTime.todayAtUtc(time);
     for (final t in _tables.values) {
-      if (t.restaurantId == restaurantId && t.time == time) return t;
+      if (t.restaurantId == restaurantId && t.time == time) {
+        final updated = t.copyWith(
+          partySize: partySize,
+          takeaway: takeaway,
+          mode: mode,
+          scheduledAt: scheduledAt,
+        );
+        _tables[t.id] = updated;
+        _store.changed();
+        return updated;
+      }
     }
     final r = _allRestaurants.where((x) => x.id == restaurantId).firstOrNull ?? _allRestaurants.first;
     final soups = [for (final m in r.soups) m.name];
@@ -280,6 +297,10 @@ class MockCustomerRepository implements ICustomerRepository {
       restaurantName: r.name,
       hostName: _hostName,
       time: time,
+      scheduledAt: scheduledAt,
+      partySize: partySize < 2 ? 2 : partySize,
+      takeaway: takeaway,
+      mode: mode,
       qrPayload: BocadooQrParser.generateTableCode(id, restaurantId: r.id),
       // TODO: Definir el enlace de invitación de la app (ficha Fase 5, B12).
       shareUrl: 'https://bocadoo.ec/app/comensal/mesa/$id',
@@ -294,12 +315,21 @@ class MockCustomerRepository implements ICustomerRepository {
           isHost: true,
           soup: soups.firstOrNull,
           main: mains.firstOrNull?.name,
+          takeaway: takeaway,
         ),
       ],
     );
     _tables[id] = table;
     _store.changed();
     return table;
+  }
+
+  @override
+  Future<void> cancelSharedTable(String tableId) async {
+    await _simulateNetwork();
+    _tables.remove(tableId.toUpperCase());
+    _tables.remove(tableId);
+    _store.changed();
   }
 
   @override
@@ -526,6 +556,14 @@ class MockCustomerRepository implements ICustomerRepository {
         (_store.remainingLunchesByRest[restaurantId] ?? 0) > 0;
     final totalCents = hasPlan ? 0 : baseCents + (takeaway ? surchargeCents : 0);
     final now = DateTime.now();
+    final resolvedEta = (estimatedArrival != null &&
+            estimatedArrival.isNotEmpty &&
+            estimatedArrival != 'En 15 min')
+        ? estimatedArrival
+        : () {
+            final t = EcuadorTime.now().add(const Duration(minutes: 15));
+            return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+          }();
     final record = DemoPreorder(
       number: number,
       restaurantId: restaurantId,
@@ -541,7 +579,7 @@ class MockCustomerRepository implements ICustomerRepository {
       basePriceCents: baseCents,
       takeawaySurchargeCents: surchargeCents,
       totalCents: totalCents,
-      estimatedArrivalLabel: estimatedArrival ?? 'En 15 min',
+      estimatedArrivalLabel: resolvedEta,
       hasPlan: hasPlan,
       // Con plan prepagado no se cobra nada en caja.
       amount: Money.fromCents(totalCents),

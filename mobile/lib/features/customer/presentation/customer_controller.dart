@@ -1222,10 +1222,7 @@ class CustomerController extends ChangeNotifier {
   Future<bool> cancelSharedTable(String tableId) async {
     lastActionError = null;
     try {
-      final repo = _repository;
-      if (repo is ApiCustomerRepository) {
-        await repo.cancelSharedTable(tableId);
-      }
+      await _repository.cancelSharedTable(tableId);
       _emit(_state.copyWith(clearActiveTable: true));
       _syncOrderPolling(
         _state.activeOrder,

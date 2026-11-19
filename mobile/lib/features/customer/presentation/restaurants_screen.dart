@@ -401,7 +401,7 @@ class _TableHero extends StatelessWidget {
                       child: Row(mainAxisSize: MainAxisSize.min, children: [
                         Container(width: 7, height: 7, decoration: BoxDecoration(color: colors.primary, shape: BoxShape.circle)),
                         const SizedBox(width: 6),
-                        Text('Nuevo · Mesa con amigos',
+                        Text('Nuevo · Pedido grupal',
                             style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: colors.onSurface)),
                       ]),
                     ),
@@ -723,7 +723,9 @@ class _RestaurantCard extends StatelessWidget {
               Row(children: [
                 Expanded(
                   child: PillAction(
-                    label: 'Armar mesa',
+                    label: publicStatus.isFull
+                        ? 'Pedido grupal (Para llevar)'
+                        : 'Pedido grupal',
                     icon: Icons.group_add_outlined,
                     tonal: false,
                     onPressed: onTable,

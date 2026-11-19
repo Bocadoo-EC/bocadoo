@@ -1661,7 +1661,7 @@ class _TableButton extends StatelessWidget {
         textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
       ),
       icon: Icon(Icons.group_outlined, size: 18, color: colors.primary),
-      label: Text(hasTable ? 'Mi mesa' : 'Mesa con amigos'),
+      label: Text(hasTable ? 'Mi mesa' : 'Pedido grupal'),
     );
   }
 }

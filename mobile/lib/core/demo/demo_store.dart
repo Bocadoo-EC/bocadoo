@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../contracts/models.dart';
 import '../contracts/qr_parser.dart';
+import '../utils/formatters.dart';
 
 /// Estado de una preorden en el almacén de demostración.
 enum PreorderStatus { pending, delivered, acknowledged, cancelled }
@@ -156,6 +157,9 @@ class DemoStore extends ChangeNotifier {
 
   void _seed() {
     final now = DateTime.now();
+    final plus15 = EcuadorTime.now().add(const Duration(minutes: 15));
+    final plus15Hhmm =
+        '${plus15.hour.toString().padLeft(2, '0')}:${plus15.minute.toString().padLeft(2, '0')}';
     preorders.addAll([
       // Pedido cubierto por un plan prepagado: se valida con su QR y se entrega.
       DemoPreorder(
@@ -186,7 +190,7 @@ class DemoStore extends ChangeNotifier {
         detail: 'Locro de papa con queso · Seco de pollo con maduro',
         basePriceCents: 300,
         totalCents: 300,
-        estimatedArrivalLabel: 'En 15 min',
+        estimatedArrivalLabel: plus15Hhmm,
         amount: 3.00,
         createdAt: now.subtract(const Duration(minutes: 6)),
         expiresAt: now.add(const Duration(minutes: 24)),
@@ -224,12 +228,23 @@ class DemoStore extends ChangeNotifier {
         imageUrl: 'https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=300&q=80',
       ),
     ];
+    final slot1300Utc = EcuadorTime.todayAtUtc('13:00');
+    final tableScheduledAt =
+        slot1300Utc.isAfter(now.toUtc().add(const Duration(minutes: 20)))
+            ? slot1300Utc
+            : now.toUtc().add(const Duration(minutes: 45));
+    final ecTableTime = tableScheduledAt.subtract(const Duration(hours: 5));
+    final tableHhmm =
+        '${ecTableTime.hour.toString().padLeft(2, '0')}:${ecTableTime.minute.toString().padLeft(2, '0')}';
     tables['M1234'] = SharedTable(
       id: 'M1234',
       restaurantId: ownerRestaurantId,
       restaurantName: 'La Cuchara de San Blas',
       hostName: 'Carlos Mejía',
-      time: '13:00',
+      time: tableHhmm,
+      scheduledAt: tableScheduledAt,
+      partySize: 3,
+      takeaway: true,
       qrPayload: BocadooQrParser.generateTableCode('M1234', restaurantId: ownerRestaurantId),
       // TODO: Definir el enlace de invitación de la app (ficha Fase 5, B12).
       shareUrl: 'https://bocadoo.ec/app/comensal/mesa/M1234',

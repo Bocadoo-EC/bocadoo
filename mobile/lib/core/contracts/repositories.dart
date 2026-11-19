@@ -73,8 +73,17 @@ abstract class ICustomerRepository {
   /// Cancela una solicitud de plan recién enviada (deshacer)
   Future<bool> cancelPlanRequest(String planId);
 
-  /// Crea la mesa con amigos del local para esa hora, o recupera la que ya existe (C9)
-  Future<SharedTable> openSharedTable({required String restaurantId, required String time});
+  /// Crea el pedido grupal / mesa compartida del local para esa hora, o recupera el existente (C9)
+  Future<SharedTable> openSharedTable({
+    required String restaurantId,
+    required String time,
+    int partySize = 2,
+    bool takeaway = false,
+    TableMode mode = TableMode.eachOwn,
+  });
+
+  /// Cancela una mesa compartida abierta (C9)
+  Future<void> cancelSharedTable(String tableId);
 
   /// Mesa por su ID, para la invitación (C7). `null` si ya expiró
   Future<SharedTable?> getSharedTable(String tableId);

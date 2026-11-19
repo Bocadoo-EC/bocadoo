@@ -60,15 +60,54 @@ class OwnerOrder {
   bool get canDeliver => !paidByPlan || validated;
 }
 
-/// Mesa abierta con comensales, por cobrar (banner de Caja).
+/// Plato elegido por un integrante de una mesa grupal.
+@immutable
+class PendingTableMemberDish {
+  const PendingTableMemberDish({
+    required this.memberName,
+    this.soup,
+    this.main,
+    this.takeaway = false,
+    this.hasPlan = false,
+  });
+
+  final String memberName;
+  final String? soup;
+  final String? main;
+  final bool takeaway;
+  final bool hasPlan;
+}
+
+/// Mesa abierta con comensales, por cobrar (banner de Caja / Pedidos en camino).
 @immutable
 class PendingTable {
-  const PendingTable({required this.id, required this.hostName, required this.members, required this.time});
+  const PendingTable({
+    required this.id,
+    required this.hostName,
+    required this.members,
+    required this.time,
+    this.planCount = 0,
+    this.cashCount = 0,
+    this.takeawayCount = 0,
+    this.takeawaySurchargeCents = 0,
+    this.memberDishes = const [],
+  });
 
   final String id;
   final String hostName;
   final int members;
   final String time;
+  final int planCount;
+  final int cashCount;
+  final int takeawayCount;
+  final int takeawaySurchargeCents;
+  final List<PendingTableMemberDish> memberDishes;
+
+  String get shortId {
+    final clean = id.replaceAll('-', '').trim().toUpperCase();
+    if (clean.length <= 6) return clean;
+    return clean.substring(clean.length - 6);
+  }
 }
 
 /// Cómo paga cada integrante de la mesa (O5).

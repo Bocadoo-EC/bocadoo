@@ -10,11 +10,14 @@ import 'owner_controller.dart';
 import 'owner_format.dart';
 import 'owner_widgets.dart';
 
-String _ago(DateTime t) {
-  final m = DateTime.now().difference(t).inMinutes;
-  if (m < 1) return 'Ahora';
-  if (m < 60) return 'Hace $m min';
-  return 'Hace ${m ~/ 60} h';
+String _arrivalLabel(OwnerOrder order) {
+  final raw = order.estimatedArrivalLabel?.trim();
+  if (raw != null && raw.isNotEmpty && raw != 'En 15 min') {
+    return raw;
+  }
+  final target =
+      order.estimatedArrival ?? order.createdAt.add(const Duration(minutes: 15));
+  return OwnerFormat.time24(target);
 }
 
 /// "Locro de papa con queso" → "Locro de papa".
@@ -191,6 +194,11 @@ class _TableOrderCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
+    final b = context.bocadooColors;
+    final modalityText = table.takeawayCount > 0
+        ? 'Para llevar (+${OwnerFormat.money(Money.fromCents(table.takeawaySurchargeCents))})'
+        : 'En local';
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -202,51 +210,35 @@ class _TableOrderCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                decoration: BoxDecoration(
-                  color: colors.primaryContainer,
-                  borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.groups_rounded, size: 15, color: colors.onPrimaryContainer),
-                    const SizedBox(width: 4),
-                    Text(
-                      'Mesa grupal',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w900,
-                        color: colors.onPrimaryContainer,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  table.hostName,
-                  maxLines: 1,
+                  '👥 Mesa #${table.shortId} · ${table.hostName} (${table.members} pers.)',
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: 17,
+                    fontSize: 16,
                     fontWeight: FontWeight.w900,
                     color: colors.onSurface,
                   ),
                 ),
               ),
-              Icon(Icons.schedule_rounded, size: 15, color: colors.onSurfaceVariant),
-              const SizedBox(width: 4),
-              Text(
-                table.time,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  color: colors.onSurfaceVariant,
-                ),
+              const SizedBox(width: 8),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.schedule_rounded, size: 15, color: colors.onSurfaceVariant),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Llega ${table.time}',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: colors.onSurfaceVariant,
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -257,14 +249,71 @@ class _TableOrderCard extends StatelessWidget {
               color: colors.primaryContainer.withValues(alpha: 0.4),
               borderRadius: BorderRadius.circular(16),
             ),
-            child: Text(
-              '${table.members} ${table.members == 1 ? 'comensal' : 'comensales'} · Llega a las ${table.time}',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w700,
-                color: colors.onSurface,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text.rich(
+                  TextSpan(
+                    children: [
+                      TextSpan(
+                        text: 'Modalidad: ',
+                        style: TextStyle(fontWeight: FontWeight.w800, color: colors.primary),
+                      ),
+                      TextSpan(text: modalityText),
+                    ],
+                  ),
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: colors.onSurface,
+                  ),
+                ),
+                if (table.memberDishes.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  for (final m in table.memberDishes) ...[
+                    Builder(
+                      builder: (_) {
+                        final chosen = [m.soup, m.main]
+                            .where((s) => s != null && s.trim().isNotEmpty)
+                            .join(' + ');
+                        final dishText =
+                            chosen.isNotEmpty ? chosen : 'Almuerzo del día';
+                        final extraTag = m.takeaway ? ' (Para llevar)' : '';
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 3),
+                          child: Text(
+                            '• ${m.memberName}: $dishText$extraTag',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: colors.onSurface,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ],
+              ],
             ),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            children: [
+              OwnerBadge(
+                label: '${table.planCount} con Plan · ${table.cashCount} pagan en caja',
+                background: table.cashCount == 0
+                    ? b.successContainer
+                    : colors.secondaryContainer,
+                foreground: table.cashCount == 0
+                    ? b.onSuccessContainer
+                    : colors.onSecondaryContainer,
+              ),
+            ],
           ),
           const SizedBox(height: 12),
           ElevatedButton.icon(
@@ -288,6 +337,7 @@ class _OrderCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     final b = context.bocadooColors;
+    final arrival = _arrivalLabel(order);
     TextSpan line(String label, String value) => TextSpan(children: [
           TextSpan(text: '$label: ', style: TextStyle(fontWeight: FontWeight.w800, color: colors.primary)),
           TextSpan(text: value),
@@ -321,10 +371,7 @@ class _OrderCard extends StatelessWidget {
           Icon(Icons.schedule_rounded, size: 15, color: colors.onSurfaceVariant),
           const SizedBox(width: 4),
           Text(
-            order.estimatedArrivalLabel ??
-                (order.estimatedArrival != null
-                    ? OwnerFormat.time(order.estimatedArrival!)
-                    : _ago(order.createdAt)),
+            'Llega $arrival',
             style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: colors.onSurfaceVariant),
           ),
         ]),
@@ -351,27 +398,19 @@ class _OrderCard extends StatelessWidget {
                     ? 'Para llevar (+${OwnerFormat.money(Money.fromCents(order.takeawaySurchargeCents))})'
                     : 'En local',
               ),
-              if (order.estimatedArrivalLabel != null || order.estimatedArrival != null) ...[
-                const TextSpan(text: '\n'),
-                line(
-                  'Llegada est.',
-                  order.estimatedArrivalLabel ?? OwnerFormat.time(order.estimatedArrival!),
-                ),
-              ],
               const TextSpan(text: '\n'),
-              line(
-                'Pago',
-                order.paidByPlan
-                    ? 'Pagado con Plan (\$0,00)'
-                    : 'Pago por confirmar en caja',
-              ),
+              line('Llegada est.', arrival),
+              if (!order.paidByPlan) ...[
+                const TextSpan(text: '\n'),
+                line('Pago', 'Pago por confirmar en caja'),
+              ],
             ]),
             style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, height: 1.4, color: colors.onSurface),
           ),
         ),
         const SizedBox(height: 12),
         if (!order.paidByPlan)
-          // En efectivo: se cobra y se entrega.
+          // Preorden individual (Sin plan): se cobra el total USD y se entrega.
           Row(children: [
             Icon(Icons.payments_outlined, size: 18, color: colors.onSurface),
             const SizedBox(width: 6),
@@ -381,30 +420,39 @@ class _OrderCard extends StatelessWidget {
                 style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: colors.onSurface),
               ),
             ),
-            OwnerSmallButton(label: 'Cobrar y entregar', icon: Icons.check_circle_outline_rounded, onPressed: onAction),
+            OwnerSmallButton(
+              label: 'Cobrar y entregar',
+              icon: Icons.check_circle_outline_rounded,
+              onPressed: onAction,
+            ),
           ])
         else
-          // Con plan: se valida su QR y luego se entrega. No se cobra nada.
+          // Preorden con Plan (Prepagado): sin cobro en efectivo, se canjea y entrega.
           Row(children: [
             Expanded(
-              child: Text('QR: ${order.qrCode}',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant)),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: OwnerBadge(
+                  label: '🎫 Plan activo (Prepagado)',
+                  background: b.successContainer,
+                  foreground: b.onSuccessContainer,
+                ),
+              ),
             ),
-            const SizedBox(width: 6),
-            if (order.validated) ...[
-              OwnerBadge(label: 'Validado', background: b.successContainer, foreground: b.onSuccessContainer),
-              const SizedBox(width: 8),
-              OwnerSmallButton(label: 'Entregar', icon: Icons.check_circle_outline_rounded, onPressed: onAction),
-            ] else
-              OwnerSmallButton(label: 'Validar QR', icon: Icons.qr_code_scanner_rounded, onPressed: onAction),
+            const SizedBox(width: 8),
+            OwnerSmallButton(
+              label: 'Canjear y entregar',
+              icon: Icons.qr_code_scanner_rounded,
+              onPressed: onAction,
+            ),
           ]),
       ]),
     );
   }
 }
 
-/// Hoja "Validar pedido #N": un pedido cubierto por plan se valida con su QR y
-/// descuenta 1 almuerzo del plan del comensal. No se cobra nada.
+/// Hoja "Canjear pedido #N": un pedido cubierto por plan descuenta 1 almuerzo
+/// mediante `POST /v1/caja/pedidos/{id}/canjear` y se entrega. No se cobra nada.
 class _ValidateOrderSheet extends StatelessWidget {
   const _ValidateOrderSheet({required this.order});
 
@@ -420,7 +468,7 @@ class _ValidateOrderSheet extends StatelessWidget {
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           Row(children: [
             Expanded(
-              child: Text('Validar pedido #${order.number}',
+              child: Text('Canjear pedido #${order.number}',
                   style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: colors.onSurface)),
             ),
             IconButton.filledTonal(
@@ -447,8 +495,8 @@ class _ValidateOrderSheet extends StatelessWidget {
               if (dishes.isNotEmpty)
                 Text(dishes, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant)),
               const SizedBox(height: 4),
-              Text(order.qrCode,
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: colors.primary)),
+              Text('Llega ${_arrivalLabel(order)} · Plan activo (Prepagado)',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: colors.primary)),
             ]),
           ),
           const SizedBox(height: 8),
@@ -459,7 +507,7 @@ class _ValidateOrderSheet extends StatelessWidget {
           ElevatedButton.icon(
             onPressed: () => Navigator.of(context).pop(true),
             icon: const Icon(Icons.check_circle_outline_rounded),
-            label: const Text('Validar con su plan'),
+            label: const Text('Canjear y entregar'),
           ),
         ]),
       ),

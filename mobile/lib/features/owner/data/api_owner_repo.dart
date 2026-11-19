@@ -344,9 +344,11 @@ class ApiOwnerRepository
       );
     }
 
+    final createdAt = _parseDateTime(json['creadoEn']);
     final rawEta = json['horaEstimada'] ?? json['horaLlegada'];
-    final estimatedArrival =
-        rawEta != null ? _parseDateTime(rawEta) : null;
+    final estimatedArrival = rawEta != null
+        ? _parseDateTime(rawEta)
+        : createdAt.add(const Duration(minutes: 15));
 
     return OwnerOrder(
       id: id.isEmpty ? null : id,
@@ -355,7 +357,7 @@ class ApiOwnerRepository
       dinerName: dinerName,
       amount: amount,
       totalCents: resolvedTotalCents,
-      createdAt: _parseDateTime(json['creadoEn']),
+      createdAt: createdAt,
       soup: soup,
       main: mainDish,
       drink: drink,
@@ -2564,13 +2566,21 @@ class ApiOwnerRepository
   @override
   Future<List<PendingTable>> getPendingTables(String restaurantId) async {
     try {
-      final list = await guard(
-        () => _api.getList(
-          '${ApiConfig.v1}/restaurante/mesas',
-          restaurant: true,
+      final results = await Future.wait([
+        guard(
+          () => _api.getList(
+            '${ApiConfig.v1}/restaurante/mesas',
+            restaurant: true,
+          ),
         ),
-      );
-      final out = <PendingTable>[];
+        _fetchRestaurantMap().catchError((_) => const <String, dynamic>{}),
+      ]);
+      final list = results[0] as List<dynamic>;
+      final rest = results[1] as Map<String, dynamic>;
+      final rawRecargo = _asInt(rest['recargoParaLlevarCentavos']);
+      final recargoUnitCents = rawRecargo > 0 ? rawRecargo : 25;
+
+      final activeRaw = <Map<String, dynamic>>[];
       for (final raw in list.whereType<Map>()) {
         final m = Map<String, dynamic>.from(raw);
         final estado = (m['estado'] ?? '').toString().toUpperCase();
@@ -2582,21 +2592,121 @@ class ApiOwnerRepository
         }
         final id = (m['id'] ?? '').toString();
         if (id.isEmpty) continue;
+        activeRaw.add(m);
+      }
+      if (activeRaw.isEmpty) return const [];
+
+      final previews = await Future.wait([
+        for (final m in activeRaw)
+          guard(
+            () => _api.getMap(
+              '${ApiConfig.v1}/caja/mesas/${m['id']}',
+              restaurant: true,
+            ),
+          ).catchError((_) => const <String, dynamic>{}),
+      ]);
+
+      final out = <PendingTable>[];
+      for (var i = 0; i < activeRaw.length; i++) {
+        final m = activeRaw[i];
+        final vista = previews[i];
+        final id = (m['id'] ?? '').toString();
         final anfitrion = m['anfitrion'] is Map
             ? Map<String, dynamic>.from(m['anfitrion'] as Map)
             : const <String, dynamic>{};
         final hostName = (anfitrion['nombre'] ?? 'Mesa grupal').toString();
-        final miembros = m['miembros'] is List ? m['miembros'] as List : const [];
-        final horaRaw = m['horaLlegada']?.toString();
+
+        final rawMembers = vista['miembros'] is List
+            ? (vista['miembros'] as List).whereType<Map>().toList()
+            : (m['miembros'] is List
+                ? (m['miembros'] as List).whereType<Map>().toList()
+                : const <Map>[]);
+
+        final modoRaw = (vista['modo'] ?? m['modo'] ?? 'CADA_UNO')
+            .toString()
+            .toUpperCase();
+        final hostMember = rawMembers
+            .where((mm) => mm['esAnfitrion'] == true)
+            .firstOrNull;
+        var hostAvailable = _asInt(hostMember?['almuerzosDisponibles']);
+
+        final totalPersonas = _asInt(vista['personas']) > 0
+            ? _asInt(vista['personas'])
+            : rawMembers.length;
+        final hasVistaCounts = vista.isNotEmpty && vista.containsKey('cubiertos');
+        final cubiertos = hasVistaCounts ? _asInt(vista['cubiertos']) : 0;
+
+        final memberDishes = <PendingTableMemberDish>[];
+        var takeawayCount = 0;
+        var inferredPlanCount = 0;
+        for (final mm in rawMembers) {
+          final isTakeaway = mm['paraLlevar'] == true;
+          if (isTakeaway) takeawayCount++;
+
+          final available = _asInt(mm['almuerzosDisponibles']);
+          bool hasPlan;
+          if (modoRaw == 'INVITO_YO') {
+            if (hostAvailable > 0) {
+              hasPlan = true;
+              hostAvailable--;
+            } else {
+              hasPlan = false;
+            }
+          } else {
+            hasPlan = available > 0;
+          }
+          if (hasPlan) inferredPlanCount++;
+
+          String? soup;
+          String? main;
+          if (mm['platos'] is List) {
+            for (final p in (mm['platos'] as List).whereType<Map>()) {
+              final sec = (p['seccion'] ?? '').toString().toUpperCase();
+              final nombre = (p['nombre'] ?? '').toString();
+              if (nombre.isEmpty) continue;
+              if (sec == 'SOPA') {
+                soup ??= nombre;
+              } else if (sec == 'FUERTE') {
+                main ??= nombre;
+              } else {
+                main ??= nombre;
+              }
+            }
+          } else {
+            soup = mm['sopa']?.toString();
+            main = (mm['segundo'] ?? mm['plato'])?.toString();
+          }
+          memberDishes.add(
+            PendingTableMemberDish(
+              memberName: (mm['nombre'] ?? 'Comensal').toString(),
+              soup: (soup != null && soup.isNotEmpty) ? soup : null,
+              main: (main != null && main.isNotEmpty) ? main : null,
+              takeaway: isTakeaway,
+              hasPlan: hasPlan,
+            ),
+          );
+        }
+
+        final planCount = hasVistaCounts
+            ? cubiertos.clamp(0, totalPersonas)
+            : inferredPlanCount.clamp(0, totalPersonas);
+        final cashCount = (totalPersonas - planCount).clamp(0, totalPersonas);
+        final horaRaw = (vista['horaLlegada'] ?? m['horaLlegada'])?.toString();
         final timeStr = horaRaw != null && horaRaw.isNotEmpty
             ? _hhmmEcuador(_parseDateTime(horaRaw))
             : '--:--';
+
         out.add(
           PendingTable(
             id: id,
             hostName: hostName,
-            members: miembros.length,
+            members: totalPersonas,
             time: timeStr,
+            planCount: planCount,
+            cashCount: cashCount,
+            takeawayCount: takeawayCount,
+            takeawaySurchargeCents: takeawayCount * recargoUnitCents,
+            memberDishes: memberDishes,
           ),
         );
       }

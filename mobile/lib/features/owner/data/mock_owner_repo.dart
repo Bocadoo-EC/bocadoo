@@ -1404,13 +1404,54 @@ class MockOwnerRepository
   @override
   Future<List<PendingTable>> getPendingTables(String restaurantId) async {
     await _simulateLatency();
-    return [
-      for (final t in _store.tables.values)
-        if (t.restaurantId == DemoStore.ownerRestaurantId &&
-            t.members.isNotEmpty &&
-            !_store.settledTables.contains(t.id))
-          PendingTable(id: t.id, hostName: t.hostName, members: t.members.length, time: t.time),
-    ];
+    final out = <PendingTable>[];
+    for (final t in _store.tables.values) {
+      if (t.restaurantId != DemoStore.ownerRestaurantId ||
+          t.members.isEmpty ||
+          _store.settledTables.contains(t.id)) {
+        continue;
+      }
+      final preview = _preview(t.id);
+      var planCount = 0;
+      var cashCount = 0;
+      for (final line in preview.lines) {
+        if (line.via == TableChargeVia.cash) {
+          cashCount++;
+        } else {
+          planCount++;
+        }
+      }
+      final takeawayCount = t.members.where((m) => m.takeaway).length;
+      final unitSurchargeCents = (t.takeawaySurcharge * 100).round();
+      final totalSurchargeCents = takeawayCount > 0
+          ? takeawayCount * unitSurchargeCents
+          : (t.takeaway ? t.effectivePartySize * unitSurchargeCents : 0);
+      final memberDishes = <PendingTableMemberDish>[
+        for (var i = 0; i < t.members.length; i++)
+          PendingTableMemberDish(
+            memberName: t.members[i].name,
+            soup: t.members[i].soup,
+            main: t.members[i].main,
+            takeaway: t.members[i].takeaway,
+            hasPlan: i < preview.lines.length &&
+                preview.lines[i].via != TableChargeVia.cash,
+          ),
+      ];
+      out.add(
+        PendingTable(
+          id: t.id,
+          hostName: t.hostName,
+          members: t.members.length,
+          time: t.time,
+          planCount: planCount,
+          cashCount: cashCount,
+          takeawayCount: takeawayCount > 0 ? takeawayCount : (t.takeaway ? t.effectivePartySize : 0),
+          takeawaySurchargeCents: totalSurchargeCents,
+          memberDishes: memberDishes,
+        ),
+      );
+    }
+    return out;
   }
 
   TablePreview _preview(String tableId) {

@@ -48,6 +48,7 @@ class ApiCustomerRepository implements ICustomerRepository {
   final Map<String, List<String>> _planIncludesByName = {};
   final Map<String, String> _orderIdByNumber = {};
   final Map<String, String> _estimatedArrivalByOrderNumber = {};
+  final Map<String, ({int partySize, bool takeaway})> _tablePrefsById = {};
 
   /// Último estado conocido de publicación del menú de hoy por `restaurantId`.
   bool? cachedTodayMenuPublished(String restaurantId) =>
@@ -697,7 +698,12 @@ class ApiCustomerRepository implements ICustomerRepository {
     );
     _idempotency.done(intent);
     final mapped = _mapPedidoToActiveOrder(res ?? const {});
-    final eta = estimatedArrival ?? mapped.estimatedArrivalLabel ?? 'En 15 min';
+    final eta = (estimatedArrival != null &&
+            estimatedArrival.isNotEmpty &&
+            estimatedArrival != 'En 15 min')
+        ? estimatedArrival
+        : (mapped.estimatedArrivalLabel ??
+            _formatEcuadorTime(DateTime.now().toUtc().add(const Duration(minutes: 15))));
     if (mapped.orderNumber.isNotEmpty) {
       _estimatedArrivalByOrderNumber[mapped.orderNumber] = eta;
     }
@@ -938,7 +944,11 @@ class ApiCustomerRepository implements ICustomerRepository {
   Future<SharedTable> openSharedTable({
     required String restaurantId,
     required String time,
+    int partySize = 2,
+    bool takeaway = false,
+    TableMode mode = TableMode.eachOwn,
   }) async {
+    final normalizedPartySize = partySize < 2 ? 2 : partySize;
     final nowUtc = DateTime.now().toUtc();
     var arrivalUtc = EcuadorTime.todayAtUtc(time);
     if (!arrivalUtc.isAfter(nowUtc.add(const Duration(minutes: 1)))) {
@@ -947,7 +957,9 @@ class ApiCustomerRepository implements ICustomerRepository {
       arrivalUtc = nowUtc.add(const Duration(hours: 11));
     }
 
-    final intent = 'mesa-open:$restaurantId:$time';
+    final apiMode = mode == TableMode.hostPays ? 'INVITO_YO' : 'CADA_UNO';
+    final intent =
+        'mesa-open:$restaurantId:$time:$apiMode:$takeaway:$normalizedPartySize';
     final key = _idempotency.keyFor(intent);
     try {
       final res = await guard(
@@ -957,18 +969,33 @@ class ApiCustomerRepository implements ICustomerRepository {
           body: {
             'restaurante': restaurantId,
             'horaLlegada': arrivalUtc.toIso8601String(),
-            'modo': 'CADA_UNO',
-            'paraLlevar': false,
+            'modo': apiMode,
+            'paraLlevar': takeaway,
           },
           idempotencyKey: key,
         ),
       );
       _idempotency.done(intent);
-      final table = await _mapMesaResponseToSharedTable(res ?? const {});
+      final rawId = (res?['id'] ?? '').toString();
+      if (rawId.isNotEmpty) {
+        _tablePrefsById[rawId] = (
+          partySize: normalizedPartySize,
+          takeaway: takeaway,
+        );
+      }
+      final table = await _mapMesaResponseToSharedTable(
+        res ?? const {},
+        overridePartySize: normalizedPartySize,
+        overrideTakeaway: takeaway,
+      );
       eventsService.track(
         'comensal.mesa_abierta',
         restaurantId: restaurantId,
-        props: {'hora': table.time},
+        props: {
+          'hora': table.time,
+          'personas': table.effectivePartySize,
+          'para_llevar': table.takeaway,
+        },
       );
       return table;
     } on ApiException catch (e) {
@@ -1089,6 +1116,7 @@ class ApiCustomerRepository implements ICustomerRepository {
   }
 
   /// Cancela una mesa compartida abierta (solo anfitrión, antes de validar en caja).
+  @override
   Future<void> cancelSharedTable(String tableId) async {
     await guard(
       () => _api.send<Map<String, dynamic>>(
@@ -1096,12 +1124,15 @@ class ApiCustomerRepository implements ICustomerRepository {
         '${ApiConfig.v1}/mis/mesas/$tableId/cancelar',
       ),
     );
+    _tablePrefsById.remove(tableId);
     eventsService.track('comensal.mesa_cancelada');
   }
 
   Future<SharedTable> _mapMesaResponseToSharedTable(
-    Map<String, dynamic> json,
-  ) async {
+    Map<String, dynamic> json, {
+    int? overridePartySize,
+    bool? overrideTakeaway,
+  }) async {
     final id = (json['id'] ?? '').toString();
     final invitacion = (json['invitacion'] ?? id).toString();
     final rest = _asMap(json['restaurante']);
@@ -1129,6 +1160,17 @@ class ApiCustomerRepository implements ICustomerRepository {
       ));
     }
 
+    final savedPrefs = _tablePrefsById[id];
+    final inferredParty = _asInt(json['personas']) ??
+        overridePartySize ??
+        savedPrefs?.partySize ??
+        members.length;
+    final partySize = inferredParty < 2 ? 2 : inferredParty;
+    final takeaway = overrideTakeaway ??
+        (json['paraLlevar'] == true) ||
+        members.any((m) => m.takeaway) ||
+        (savedPrefs?.takeaway ?? false);
+
     return _buildSharedTable(
       id: id,
       invitacion: invitacion,
@@ -1138,7 +1180,11 @@ class ApiCustomerRepository implements ICustomerRepository {
       time: _formatEcuadorTime(hora),
       mode: modoRaw == 'INVITO_YO' ? TableMode.hostPays : TableMode.eachOwn,
       members: members,
-      onTheWay: estado == 'EN_CAMINO' || estado == 'EN_MESA',
+      onTheWay: estado == 'EN_CAMINO' || estado == 'EN_MESA' || estado == 'EN_PREPARACION',
+      status: estado,
+      scheduledAt: hora?.toUtc(),
+      partySize: partySize,
+      takeaway: takeaway,
       restaurant: cachedRest,
     );
   }
@@ -1168,6 +1214,10 @@ class ApiCustomerRepository implements ICustomerRepository {
         TableMember(id: 'guest-$i', name: 'Acompañante $i', isHost: false),
     ];
 
+    final savedPrefs = _tablePrefsById[id];
+    final partySize = count > 2 ? count : (savedPrefs?.partySize ?? 2);
+    final takeaway = (json['paraLlevar'] == true) || (savedPrefs?.takeaway ?? false);
+
     return _buildSharedTable(
       id: id,
       invitacion: id,
@@ -1177,7 +1227,11 @@ class ApiCustomerRepository implements ICustomerRepository {
       time: _formatEcuadorTime(hora),
       mode: modoRaw == 'INVITO_YO' ? TableMode.hostPays : TableMode.eachOwn,
       members: members,
-      onTheWay: estado == 'EN_CAMINO' || estado == 'EN_MESA',
+      onTheWay: estado == 'EN_CAMINO' || estado == 'EN_MESA' || estado == 'EN_PREPARACION',
+      status: estado,
+      scheduledAt: hora?.toUtc(),
+      partySize: partySize,
+      takeaway: takeaway,
       restaurant: cachedRest,
     );
   }
@@ -1192,6 +1246,10 @@ class ApiCustomerRepository implements ICustomerRepository {
     required TableMode mode,
     required List<TableMember> members,
     required bool onTheWay,
+    required String status,
+    DateTime? scheduledAt,
+    required int partySize,
+    required bool takeaway,
     Restaurant? restaurant,
   }) {
     final soups = restaurant?.todayMenu
@@ -1224,6 +1282,10 @@ class ApiCustomerRepository implements ICustomerRepository {
       mode: mode,
       members: members,
       onTheWay: onTheWay,
+      status: status,
+      scheduledAt: scheduledAt,
+      partySize: partySize < 2 ? 2 : partySize,
+      takeaway: takeaway,
       occupancyLabel: _mapOccupancyLabel(restaurant?.occupancy),
       soups: soups,
       mains: mains,
@@ -1340,6 +1402,8 @@ class ApiCustomerRepository implements ICustomerRepository {
         : null;
     final singlePrice =
         Money.fromCents(_asInt(json['precioSueltoCentavos']) ?? 300);
+    final rawRecargo = _asInt(json['recargoParaLlevarCentavos']);
+    final seats = _asInt(json['puestos']) ?? prev?.seats;
 
     final mapped = Restaurant(
       id: id,
@@ -1367,10 +1431,13 @@ class ApiCustomerRepository implements ICustomerRepository {
       tags: tags,
       juice: prev?.juice ?? '',
       dessert: prev?.dessert ?? '',
-      takeawaySurcharge: prev?.takeawaySurcharge ?? 0.25,
+      takeawaySurcharge: rawRecargo != null
+          ? Money.fromCents(rawRecargo)
+          : (prev?.takeawaySurcharge ?? 0.25),
       latitude: lat,
       longitude: lng,
       fullUntil: fullUntil,
+      seats: seats,
     );
 
     _restaurantCache[id] = mapped;
@@ -1506,6 +1573,7 @@ class ApiCustomerRepository implements ICustomerRepository {
       latitude: base.latitude,
       longitude: base.longitude,
       fullUntil: base.fullUntil,
+      seats: base.seats,
     );
 
     final availability = (!published || menuItems.isEmpty)
@@ -1580,8 +1648,13 @@ class ApiCustomerRepository implements ICustomerRepository {
     final orderNum = numero.isEmpty ? id : numero;
     final rawEta = json['horaEstimada'] ?? json['horaLlegada'];
     final etaDt = rawEta != null ? DateTime.tryParse(rawEta.toString()) : null;
+    final createdDt = DateTime.tryParse((json['creadoEn'] ?? '').toString());
     final etaLabel = _estimatedArrivalByOrderNumber[orderNum] ??
-        (etaDt != null ? _formatEcuadorTime(etaDt) : null);
+        (etaDt != null
+            ? _formatEcuadorTime(etaDt)
+            : (createdDt != null
+                ? _formatEcuadorTime(createdDt.toUtc().add(const Duration(minutes: 15)))
+                : null));
 
     return ActiveOrder(
       id: id.isEmpty ? null : id,
