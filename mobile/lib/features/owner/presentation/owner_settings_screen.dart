@@ -14,6 +14,7 @@ import '../../../core/utils/external_links.dart';
 import '../../../core/widgets/appearance_selector.dart';
 import '../../../core/widgets/bocadoo_logo.dart';
 import '../../../core/widgets/location_picker_map.dart';
+import '../data/api_owner_repo.dart';
 import '../domain/models/extras_models.dart';
 import '../domain/models/metrics_models.dart';
 import 'owner_controller.dart';
