@@ -463,19 +463,44 @@ class CustomerController extends ChangeNotifier {
         _emit(_state.copyWith(passes: [cached]));
       }
 
-      final passes = await _repository.getActivePasses();
-      final restaurants = await _repository.getRestaurants();
-      final table = await _repository.getActiveTable();
-      final order = await _repository.getActiveOrder();
-      final activity = await _repository.getRecentActivity();
-      final feedback = await _repository.getPendingFeedback();
+      // Dispara en paralelo los recursos principales; los secundarios no tumban la carga.
+      final passesFuture = _repository.getActivePasses();
+      final restaurantsFuture = _repository.getRestaurants();
+      final tableFuture = _repository
+          .getActiveTable()
+          .then<ActiveTable?>((v) => v, onError: (_) => _state.activeTable);
+      final orderFuture = _repository
+          .getActiveOrder()
+          .then<ActiveOrder?>((v) => v, onError: (_) => _state.activeOrder);
+      final activityFuture = _repository
+          .getRecentActivity()
+          .then<List<ActivityItem>>(
+            (v) => v,
+            onError: (_) => _state.recentActivity,
+          );
+      final feedbackFuture = _repository
+          .getPendingFeedback()
+          .then<PendingFeedback?>(
+            (v) => v,
+            onError: (_) => _state.pendingFeedback,
+          );
+
+      final passes = await passesFuture;
+      final restaurants = await restaurantsFuture;
+      final table = await tableFuture;
+      final order = await orderFuture;
+      final activity = await activityFuture;
+      final feedback = await feedbackFuture;
+
       final stamps = <String, StampCard>{};
-      for (final p in passes) {
-        final card = await _repository.getStampCard(p.restaurantId);
-        if (card != null) stamps[p.restaurantId] = card;
-      }
-      final menuStates =
-          await _resolveMenuStatesForPasses(passes, restaurants);
+      final menuStatesFuture = _resolveMenuStatesForPasses(passes, restaurants);
+      await Future.wait([
+        for (final p in passes)
+          _repository.getStampCard(p.restaurantId).then((card) {
+            if (card != null) stamps[p.restaurantId] = card;
+          }, onError: (_) {}),
+      ]);
+      final menuStates = await menuStatesFuture;
       final cleanedPasses = _sanitizePassQrsForAvailability(
         passes,
         menuStates.availability,
@@ -509,7 +534,7 @@ class CustomerController extends ChangeNotifier {
                 restaurants.any((r) => r.id == _state.plansRestaurantId)
             ? _state.plansRestaurantId!
             : restaurants.first.id;
-        await selectPlansRestaurant(targetId);
+        unawaited(selectPlansRestaurant(targetId));
       }
       _syncOrderPolling(
         order,

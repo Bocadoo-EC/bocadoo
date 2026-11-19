@@ -407,7 +407,10 @@ class ApiCustomerRepository implements ICustomerRepository {
     String? query,
     String? category,
   }) async {
-    final userPos = await _resolveUserPosition();
+    final posFuture = _resolveUserPosition().timeout(
+      const Duration(seconds: 3),
+      onTimeout: () => _cachedUserPosition,
+    );
     final allRaw = <Map<String, dynamic>>[];
     String? cursor;
     var pages = 0;
@@ -428,6 +431,8 @@ class ApiCustomerRepository implements ICustomerRepository {
       cursor = res['nextCursor']?.toString();
       pages++;
     } while (cursor != null && cursor.isNotEmpty && pages < 10);
+
+    final userPos = await posFuture;
 
     final mapped = <Restaurant>[];
     for (final item in allRaw) {

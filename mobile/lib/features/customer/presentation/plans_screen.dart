@@ -179,18 +179,30 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
       collected += (_plansByRestaurant[zoneRests[i].id] ?? const []).length;
     }
 
+    const batchSize = 5;
     while (_nextRestaurantIndex < zoneRests.length && collected < targetCount) {
-      final r = zoneRests[_nextRestaurantIndex];
-      _nextRestaurantIndex++;
-      if (!_plansByRestaurant.containsKey(r.id)) {
-        try {
-          final plans = await repo.getPlanTemplates(r.id);
-          _plansByRestaurant[r.id] = plans;
-        } catch (_) {
-          _plansByRestaurant[r.id] = const [];
+      final batch = <Restaurant>[];
+      while (_nextRestaurantIndex < zoneRests.length && batch.length < batchSize) {
+        final r = zoneRests[_nextRestaurantIndex];
+        _nextRestaurantIndex++;
+        if (_plansByRestaurant.containsKey(r.id)) {
+          collected += (_plansByRestaurant[r.id] ?? const []).length;
+        } else {
+          batch.add(r);
         }
       }
-      collected += (_plansByRestaurant[r.id] ?? const []).length;
+      if (batch.isNotEmpty) {
+        await Future.wait([
+          for (final r in batch)
+            repo.getPlanTemplates(r.id).then((plans) {
+              _plansByRestaurant[r.id] = plans;
+              collected += plans.length;
+            }, onError: (_) {
+              _plansByRestaurant[r.id] = const [];
+            }),
+        ]);
+        if (mounted) setState(() {});
+      }
     }
 
     if (mounted) setState(() => _loadingBatch = false);
