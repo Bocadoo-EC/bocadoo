@@ -4,6 +4,7 @@ import 'package:material_ui/material_ui.dart';
 import '../../../core/config/api_capabilities.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../group_orders/presentation/group_order_simulation_provider.dart';
 import '../domain/models/extras_models.dart';
 import 'owner_controller.dart';
 import 'owner_format.dart';
@@ -80,6 +81,7 @@ class _CobrarMesaSheetState extends ConsumerState<CobrarMesaSheet> {
       showInfoSnackBar(messenger, 'No se pudo cobrar la mesa');
       return;
     }
+    GroupOrderSimulationStore.instance.markCancelled(widget.tableId);
     void refresh() {
       container.invalidate(pendingTablesProvider);
       container.invalidate(dailySummaryProvider);

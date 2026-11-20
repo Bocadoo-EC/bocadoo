@@ -12,6 +12,7 @@ import '../../../core/network/api_client.dart';
 import '../../../core/network/api_exception.dart';
 import '../../../core/session/session_notifier.dart';
 import '../../../core/utils/formatters.dart';
+import '../../group_orders/presentation/group_order_simulation_provider.dart';
 import '../data/api_owner_repo.dart';
 import '../data/mock_owner_repo.dart';
 import '../data/repositories/owner_repository.dart';
@@ -111,12 +112,28 @@ final activeOrdersProvider = FutureProvider.autoDispose<List<OwnerOrder>>((ref) 
 });
 
 /// Mesas con amigos por cobrar (banner de Caja / Pedidos en camino).
-final pendingTablesProvider = FutureProvider.autoDispose<List<PendingTable>>((ref) {
-  if (!ApiCapabilities.ownerPendingTablesList) return Future.value(const []);
+final pendingTablesProvider =
+    FutureProvider.autoDispose<List<PendingTable>>((ref) async {
+  final sim = GroupOrderSimulationStore.instance;
+  void onSimChanged() => ref.invalidateSelf();
+  sim.addListener(onSimChanged);
+  ref.onDispose(() => sim.removeListener(onSimChanged));
+
   _scheduleOrdersPoll(ref);
-  return ref
-      .read(ownerTablesRepositoryProvider)
-      .getPendingTables(ref.read(ownerRestaurantIdProvider));
+  final repoTables = ApiCapabilities.ownerPendingTablesList
+      ? await ref
+          .read(ownerTablesRepositoryProvider)
+          .getPendingTables(ref.read(ownerRestaurantIdProvider))
+      : const <PendingTable>[];
+
+  final simTables = sim.confirmedOwnerTables;
+  if (simTables.isEmpty) return repoTables;
+
+  final merged = <String, PendingTable>{
+    for (final t in repoTables) t.id: t,
+    for (final t in simTables) t.id: t,
+  };
+  return merged.values.toList();
 });
 
 /// O15 · Opiniones.

@@ -10,20 +10,28 @@ import '../../../core/contracts/models.dart';
 import '../../../core/contracts/qr_parser.dart';
 import '../../../core/network/api_exception.dart';
 import '../../../core/network/polling.dart';
+import '../../../core/session/session_notifier.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatters.dart';
 import '../../customer/presentation/customer_controller.dart';
 import '../../customer/presentation/customer_widgets.dart' show CustomerErrorView;
 import '../../customer/presentation/social_widgets.dart';
 import 'group_order_models.dart';
+import 'group_order_simulation_provider.dart';
+import 'guest_group_order_screen.dart';
 
 part 'group_order_steps.dart';
 
 /// Flujo progresivo en 3 pasos de Pedido Grupal con máquina de estados estricta.
 class GroupOrderFlowScreen extends ConsumerStatefulWidget {
-  const GroupOrderFlowScreen({super.key, this.restaurantId});
+  const GroupOrderFlowScreen({
+    super.key,
+    this.restaurantId,
+    this.groupOrderId,
+  });
 
   final String? restaurantId;
+  final String? groupOrderId;
 
   @override
   ConsumerState<GroupOrderFlowScreen> createState() =>
@@ -55,6 +63,7 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
   Timer? _countdownTimer;
   Timer? _copiedTimer;
   LifecyclePollingController? _poller;
+  late final GroupOrderSimulationStore _simStore;
 
   String? get _restaurantId {
     final s = ref.read(customerControllerProvider).state;
@@ -76,10 +85,19 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
     return ref.read(restaurantPublicStatusProvider(id)).isFull;
   }
 
+  DailyMenu _dailyMenuFor(Restaurant? r) {
+    final s = ref.read(customerControllerProvider).state;
+    final override =
+        r != null ? s.todayMenuAvailabilityByRest[r.id] : null;
+    return DailyMenu.fromRestaurant(r, availabilityOverride: override);
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _simStore = ref.read(groupOrderSimulationProvider);
+    _simStore.addListener(_onSimulationUpdated);
     _startTicker();
     unawaited(_bootstrap());
   }
@@ -87,10 +105,26 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _simStore.removeListener(_onSimulationUpdated);
     _countdownTimer?.cancel();
     _copiedTimer?.cancel();
     _poller?.dispose();
     super.dispose();
+  }
+
+  void _onSimulationUpdated() {
+    if (!mounted || _table == null) return;
+    final session = _simStore.sessionById(_table!.id);
+    if (session == null) return;
+    setState(() {
+      _status = session.status;
+      _partySize = session.totalParticipants;
+      _selectedMode = session.mode;
+      _estimatedConsumptionTime = session.estimatedConsumptionTime;
+      if (session.status == GroupOrderStatus.confirmed) {
+        _poller?.stop();
+      }
+    });
   }
 
   @override
@@ -115,22 +149,84 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
   }
 
   Future<void> _bootstrap() async {
+    final targetGroupId = widget.groupOrderId;
+    final requestedRid = widget.restaurantId;
+    if (requestedRid != null) {
+      unawaited(_hydrateRestaurantMenu(requestedRid));
+    }
+
+    // 1. Revisa primero por groupOrderId explícito o sesión activa en el simulador.
+    final simSession = targetGroupId != null
+        ? (_simStore.sessionById(targetGroupId) ?? _simStore.activeSession)
+        : _simStore.activeSession;
+    final matchesSim = simSession != null &&
+        simSession.status != GroupOrderStatus.cancelled &&
+        (targetGroupId != null ||
+            requestedRid == null ||
+            simSession.restaurantId == requestedRid);
+    if (matchesSim) {
+      _selectedRestaurantId = simSession.restaurantId;
+      _partySize = simSession.totalParticipants;
+      _selectedMode = simSession.mode;
+      _estimatedConsumptionTime = simSession.estimatedConsumptionTime;
+      _table = SharedTable(
+        id: simSession.tableId,
+        restaurantId: simSession.restaurantId,
+        restaurantName: simSession.restaurantName,
+        hostName: simSession.hostName,
+        time: simSession.timeHhmm,
+        mode: simSession.mode,
+        members: [
+          for (final p in simSession.participants)
+            TableMember(
+              id: p.id,
+              name: p.name,
+              isHost: p.isHost,
+              soup: p.selection.soup,
+              main: p.selection.main,
+              takeaway: p.selection.takeaway,
+            ),
+        ],
+        onTheWay: simSession.status == GroupOrderStatus.confirmed,
+        partySize: simSession.totalParticipants,
+        scheduledAt: simSession.estimatedConsumptionTime,
+        occupancyLabel: '',
+        soups: simSession.dailyMenu.soups,
+        mains: const [],
+        qrPayload: simSession.qrPayload,
+        shareUrl: simSession.shareUrl,
+      );
+      _status = simSession.status;
+      unawaited(_hydrateRestaurantMenu(simSession.restaurantId));
+      if (_status == GroupOrderStatus.collecting) {
+        _evaluateTransitions();
+        if (_status == GroupOrderStatus.collecting) _startPolling();
+      }
+      if (mounted) setState(() => _loading = false);
+      return;
+    }
+
     final rid = _restaurantId;
-    if (rid != null) {
+    if (rid != null && requestedRid == null) {
       unawaited(_hydrateRestaurantMenu(rid));
     }
 
+    // 2. Recupera mesa activa desde repositorio remoto si existe.
     final active = ref.read(customerControllerProvider).state.activeTable;
-    final activeRest = _restaurantFor(rid);
-    final matchesActive = active != null &&
-        (rid == null ||
-            (activeRest != null && active.restaurantName == activeRest.name));
+    final activeRest = _restaurantFor(requestedRid);
+    final lookupTableId = targetGroupId ?? active?.id;
+    final matchesActive = lookupTableId != null &&
+        (targetGroupId != null ||
+            requestedRid == null ||
+            (active != null &&
+                activeRest != null &&
+                active.restaurantName == activeRest.name));
 
     if (matchesActive) {
       try {
         final existing = await ref
             .read(customerRepositoryProvider)
-            .getSharedTable(active.id);
+            .getSharedTable(lookupTableId);
         if (!mounted) return;
         if (existing != null) {
           final targetTime =
@@ -146,9 +242,33 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
           _selectedRestaurantId = existing.restaurantId;
           unawaited(_hydrateRestaurantMenu(existing.restaurantId));
 
+          final menu = _dailyMenuFor(
+            _restaurantFor(existing.restaurantId),
+          );
+          final hostName = existing.hostName.isNotEmpty
+              ? existing.hostName
+              : (ref.read(sessionProvider).userName ?? 'Anfitrión');
+
+          _simStore.startCollecting(
+            tableId: existing.id,
+            shortCode: existing.shortId,
+            restaurantId: existing.restaurantId,
+            restaurantName: existing.restaurantName,
+            hostName: hostName,
+            totalParticipants: party,
+            estimatedConsumptionTime: targetTime,
+            timeHhmm: existing.time,
+            mode: existing.mode,
+            dailyMenu: menu,
+            hostSelection: _dishSelection,
+            qrPayload: existing.qrPayload,
+          );
+          _simStore.syncRemoteMembers(existing.id, existing.members);
+
           if (now.isAfter(targetTime) && confirmed < party && !existing.onTheWay) {
             _transitionToExpired(existing);
           } else if (confirmed >= party || existing.onTheWay) {
+            _simStore.confirmNow(existing.id);
             _status = GroupOrderStatus.confirmed;
           } else {
             _status = GroupOrderStatus.collecting;
@@ -157,9 +277,7 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
           setState(() => _loading = false);
           return;
         }
-      } catch (_) {
-        // Si no se pudo recuperar mesa previa, inicia limpio en Paso 1.
-      }
+      } catch (_) {}
     }
 
     if (mounted) {
@@ -175,6 +293,7 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
       final detail =
           await ref.read(customerRepositoryProvider).getRestaurantById(rid);
       if (!mounted || detail == null) return;
+      ref.read(customerControllerProvider).syncRestaurantSummary(detail);
       setState(() {
         _hydratedRestaurant = detail;
         _syncDefaultDishes(detail);
@@ -183,55 +302,20 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
   }
 
   void _syncDefaultDishes(Restaurant? r) {
-    final soups = _soupOptions(r);
-    final mains = _mainOptions(r);
-    final drinks = _drinkOptions(r);
+    final menu = _dailyMenuFor(r);
+    final isFull = _isRestaurantFull(r?.id);
     _dishSelection = GroupOrderDishSelection(
-      soup: soups.contains(_dishSelection.soup)
+      soup: menu.soups.contains(_dishSelection.soup)
           ? _dishSelection.soup
-          : soups.firstOrNull,
-      main: mains.contains(_dishSelection.main)
+          : menu.soups.firstOrNull,
+      main: menu.mains.contains(_dishSelection.main)
           ? _dishSelection.main
-          : mains.firstOrNull,
-      drink: drinks.contains(_dishSelection.drink)
+          : menu.mains.firstOrNull,
+      drink: menu.drinks.contains(_dishSelection.drink)
           ? _dishSelection.drink
-          : drinks.firstOrNull,
+          : menu.drinks.firstOrNull,
+      takeaway: isFull ? true : _dishSelection.takeaway,
     );
-  }
-
-  List<String> _soupOptions(Restaurant? r) {
-    final fromMenu = r?.soups
-            .where((m) => !m.isSoldOut)
-            .map((m) => m.name)
-            .toList() ??
-        const <String>[];
-    if (fromMenu.isNotEmpty) return fromMenu;
-    return const ['Sopa del día', 'Consomé'];
-  }
-
-  List<String> _mainOptions(Restaurant? r) {
-    final fromMenu = r?.mains
-            .where((m) => !m.isSoldOut)
-            .map((m) => m.name)
-            .toList() ??
-        const <String>[];
-    if (fromMenu.isNotEmpty) return fromMenu;
-    return const ['Plato fuerte del día', 'Opción Fit'];
-  }
-
-  List<String> _drinkOptions(Restaurant? r) {
-    final fromMenu = r?.todayMenu
-            .where(
-              (m) =>
-                  !m.isSoldOut &&
-                  (m.category.toLowerCase().contains('bebida') ||
-                      m.category.toLowerCase().contains('jugo')),
-            )
-            .map((m) => m.name)
-            .toList() ??
-        const <String>[];
-    if (fromMenu.isNotEmpty) return fromMenu;
-    return const ['Jugo del día', 'Limonada', 'Agua'];
   }
 
   DateTime _dateTimeFromHhmm(String hhmm) {
@@ -299,7 +383,9 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
 
   Future<void> _createGroupAndMoveToLobby() async {
     final rid = _restaurantId;
-    if (rid == null || !_isEstimatedTimeValid) return;
+    final restaurant = _restaurantFor(rid);
+    final menu = _dailyMenuFor(restaurant);
+    if (rid == null || !_isEstimatedTimeValid || !menu.hasActiveDishes) return;
 
     final hostLunches = _hostRemainingLunches(rid);
     if (_selectedMode == TableMode.hostPays && hostLunches < _partySize) {
@@ -320,16 +406,36 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
         restaurantId: rid,
         time: targetHhmm,
         partySize: _partySize,
-        takeaway: isFull,
+        takeaway: isFull || _dishSelection.takeaway,
         mode: _selectedMode,
       );
       if (!mounted) return;
 
+      final hostName =
+          (ref.read(sessionProvider).userName ?? table.hostName).trim();
+      final effectiveHost = hostName.isNotEmpty ? hostName : 'Anfitrión';
       final synced = table.copyWith(
         partySize: _partySize,
         mode: _selectedMode,
         scheduledAt: _estimatedConsumptionTime,
-        takeaway: isFull || table.takeaway,
+        takeaway: isFull || _dishSelection.takeaway,
+      );
+
+      _simStore.startCollecting(
+        tableId: synced.id,
+        shortCode: synced.shortId,
+        restaurantId: synced.restaurantId,
+        restaurantName: synced.restaurantName,
+        hostName: effectiveHost,
+        totalParticipants: _partySize,
+        estimatedConsumptionTime: _estimatedConsumptionTime,
+        timeHhmm: synced.time,
+        mode: _selectedMode,
+        dailyMenu: menu,
+        hostSelection: _dishSelection.copyWith(
+          takeaway: isFull || _dishSelection.takeaway,
+        ),
+        qrPayload: synced.qrPayload,
       );
       ref.read(customerControllerProvider).syncTable(synced);
 
@@ -379,6 +485,7 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
       if (!mounted) return;
       if (latest == null) {
         _poller?.stop();
+        _simStore.clearActive();
         await ref.read(customerControllerProvider).refreshLive();
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
@@ -392,6 +499,7 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
         }
         return;
       }
+      _simStore.syncRemoteMembers(current.id, latest.members);
       final merged = latest.copyWith(
         partySize: _partySize,
         scheduledAt: _estimatedConsumptionTime,
@@ -407,7 +515,9 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
     final t = _table;
     if (t == null) return;
 
-    final confirmedCount = t.members.length.clamp(1, _partySize);
+    final session = _simStore.sessionById(t.id);
+    final confirmedCount =
+        session?.confirmedCount ?? t.members.length.clamp(1, _partySize);
     final now = DateTime.now();
 
     if (now.isAfter(_estimatedConsumptionTime) && confirmedCount < _partySize) {
@@ -416,28 +526,31 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
     }
 
     if (confirmedCount >= _partySize && now.isBefore(_estimatedConsumptionTime)) {
-      _transitionToConfirmed();
+      _transitionToConfirmed(t.id);
     }
   }
 
-  void _transitionToConfirmed() {
+  void _transitionToConfirmed(String tableId) {
     if (_status == GroupOrderStatus.confirmed) return;
     _poller?.stop();
+    _simStore.confirmNow(tableId);
     setState(() => _status = GroupOrderStatus.confirmed);
   }
 
   void _transitionToExpired(SharedTable t) {
     if (_status == GroupOrderStatus.expired) return;
     _poller?.stop();
+    _simStore.markExpired(t.id);
     setState(() => _status = GroupOrderStatus.expired);
-    // Libera el hold en segundo plano sin exponer el estado como "cancelada".
     unawaited(ref.read(customerControllerProvider).cancelSharedTable(t.id));
   }
 
   Future<void> _confirmEarlySend() async {
     final t = _table;
     if (t == null) return;
-    final confirmedCount = t.members.length.clamp(1, _partySize);
+    final session = _simStore.sessionById(t.id);
+    final confirmedCount =
+        session?.confirmedCount ?? t.members.length.clamp(1, _partySize);
     if (confirmedCount < 2) return;
 
     final proceed = await showDialog<bool>(
@@ -460,7 +573,7 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
       ),
     );
     if (proceed != true || !mounted) return;
-    _transitionToConfirmed();
+    _transitionToConfirmed(t.id);
   }
 
   Future<void> _cancelTable(SharedTable t) async {
@@ -505,6 +618,7 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
       return;
     }
     _poller?.stop();
+    _simStore.markCancelled(t.id);
     _status = GroupOrderStatus.cancelled;
     messenger.showSnackBar(
       const SnackBar(
@@ -519,6 +633,7 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
 
   void _resetToDraft() {
     _poller?.stop();
+    _simStore.clearActive();
     setState(() {
       _table = null;
       _status = GroupOrderStatus.draft;
@@ -540,20 +655,28 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
         const Duration(minutes: 15);
   }
 
-  void _shareWhatsApp(SharedTable t) {
-    final text =
-        '¡Vamos a almorzar juntos en ${t.restaurantName} a las ${t.time}! '
-        'Elige tu plato y únete aquí: ${t.shareUrl} (código: ${t.shortId})';
-    openExternal(
-      context,
-      whatsAppUri(text),
-      failMessage: 'No se pudo abrir WhatsApp',
+  Future<void> _shareWhatsApp(SharedTable t, GroupOrderSession? session) async {
+    final hostName = session?.hostName ?? t.hostName;
+    final message = buildGroupWhatsAppMessage(
+      hostName: hostName,
+      restaurantName: t.restaurantName,
+      tableCode: t.shortId,
     );
+    final waUri = Uri.parse(
+      'https://wa.me/?text=${Uri.encodeComponent(message)}',
+    );
+    await openExternal(
+      context,
+      waUri,
+      failMessage: 'WhatsApp no disponible; mensaje copiado al portapapeles.',
+    );
+    await Clipboard.setData(ClipboardData(text: message));
   }
 
   Future<void> _copyLink(SharedTable t) async {
     final messenger = ScaffoldMessenger.of(context);
-    await Clipboard.setData(ClipboardData(text: t.shareUrl));
+    final link = buildGroupInviteLink(t.shortId);
+    await Clipboard.setData(ClipboardData(text: link));
     if (!mounted) return;
     setState(() => _copied = true);
     messenger.showSnackBar(
@@ -568,14 +691,280 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
     });
   }
 
-  List<({String name, int qty})> _consolidateDishes(SharedTable t) {
+  Future<void> _openGuestPreview(SharedTable t) async {
+    await context.push('/customer/mesa/${t.id}');
+    if (!mounted) return;
+    _onSimulationUpdated();
+    _evaluateTransitions();
+  }
+
+  Future<void> _editParticipantDishInLobby(
+    SharedTable t,
+    DailyMenu menu,
+    GroupOrderParticipant participant,
+  ) async {
+    final session = _simStore.sessionById(t.id);
+    if (session?.isOrderFrozen == true) return;
+    var draft = participant.selection;
+
+    final saved = await showModalBottomSheet<GroupOrderDishSelection>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      backgroundColor: context.colorScheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'Cambiar elección · ${participant.name}',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w900,
+                      color: ctx.colorScheme.onSurface,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  GroupDailyMenuSelector(
+                    dailyMenu: menu,
+                    selection: draft,
+                    onChanged: (next) => setModalState(() => draft = next),
+                  ),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed: () => Navigator.of(ctx).pop(draft),
+                    child: const Text('Guardar elección'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    if (saved == null || !mounted) return;
+    _simStore.updateDish(
+      tableId: t.id,
+      participantId: participant.id,
+      selection: saved,
+    );
+    if (participant.isHost) {
+      setState(() => _dishSelection = saved);
+    }
+  }
+
+  Future<void> _editTableConfigInLobby(
+    SharedTable t,
+    GroupOrderSession? session,
+    Restaurant? restaurant,
+  ) async {
+    if (session?.isOrderFrozen == true) return;
+    final minAllowed =
+        (session?.participants.length ?? t.members.length).clamp(2, 12);
+    final maxSeats = (restaurant?.seats ?? 12).clamp(minAllowed, 12);
+
+    var draftParty = _partySize.clamp(minAllowed, maxSeats);
+    var draftMode = _selectedMode;
+    var draftTime = _estimatedConsumptionTime;
+
+    final saved = await showModalBottomSheet<
+        ({int party, TableMode mode, DateTime time})>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      backgroundColor: context.colorScheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) {
+          final colors = ctx.colorScheme;
+          return SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'Editar datos de mesa',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w900,
+                      color: colors.onSurface,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Personas (mín. $minAllowed)',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w800,
+                            color: colors.onSurface,
+                          ),
+                        ),
+                      ),
+                      IconButton.filledTonal(
+                        onPressed: draftParty > minAllowed
+                            ? () => setModalState(() => draftParty--)
+                            : null,
+                        icon: const Icon(Icons.remove_rounded, size: 18),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: Text(
+                          '$draftParty',
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                      IconButton.filledTonal(
+                        onPressed: draftParty < maxSeats
+                            ? () => setModalState(() => draftParty++)
+                            : null,
+                        icon: const Icon(Icons.add_rounded, size: 18),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  const SocialLabel('Hora estimada de consumo'),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('En 15 min'),
+                        selected: false,
+                        onSelected: (_) => setModalState(
+                          () => draftTime =
+                              DateTime.now().add(const Duration(minutes: 15)),
+                        ),
+                      ),
+                      ChoiceChip(
+                        label: const Text('En 30 min'),
+                        selected: false,
+                        onSelected: (_) => setModalState(
+                          () => draftTime =
+                              DateTime.now().add(const Duration(minutes: 30)),
+                        ),
+                      ),
+                      ChoiceChip(
+                        label: Text('Hora (${_formatHhmm(draftTime)})'),
+                        selected: true,
+                        onSelected: (_) async {
+                          final now = DateTime.now();
+                          final picked = await showTimePicker(
+                            context: ctx,
+                            initialTime: TimeOfDay.fromDateTime(draftTime),
+                          );
+                          if (picked == null) return;
+                          final next = DateTime(
+                            now.year,
+                            now.month,
+                            now.day,
+                            picked.hour,
+                            picked.minute,
+                          );
+                          if (next.isAfter(now.add(const Duration(minutes: 10)))) {
+                            setModalState(() => draftTime = next);
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  const SocialLabel('Modalidad de pago'),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _PaymentModeCard(
+                          title: 'Cada quien lo suyo',
+                          hint: 'Cada amigo paga lo suyo.',
+                          selected: draftMode == TableMode.eachOwn,
+                          onTap: () => setModalState(
+                            () => draftMode = TableMode.eachOwn,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Builder(
+                          builder: (ctx) {
+                            final pass = ref
+                                .read(customerControllerProvider)
+                                .state
+                                .passFor(t.restaurantId);
+                            final canHostInvite = pass != null &&
+                                !pass.isExpired &&
+                                pass.remainingLunches >= draftParty;
+                            return _PaymentModeCard(
+                              title: 'Yo invito la mesa',
+                              hint: pass == null || pass.isExpired
+                                  ? 'Requiere plan prepagado activo.'
+                                  : '$draftParty almuerzos de mi plan (${pass.remainingLunches} disp.).',
+                              disabled: !canHostInvite,
+                              disabledBadge: pass == null || pass.isExpired
+                                  ? 'Primero adquiere un plan'
+                                  : (!canHostInvite ? 'Saldo insuficiente' : null),
+                              selected:
+                                  canHostInvite && draftMode == TableMode.hostPays,
+                              onTap: canHostInvite
+                                  ? () => setModalState(
+                                        () => draftMode = TableMode.hostPays,
+                                      )
+                                  : null,
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed: () => Navigator.of(ctx).pop(
+                      (party: draftParty, mode: draftMode, time: draftTime),
+                    ),
+                    child: const Text('Guardar cambios'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+    if (saved == null || !mounted) return;
+    _simStore.updateTableConfig(
+      tableId: t.id,
+      totalParticipants: saved.party,
+      estimatedConsumptionTime: saved.time,
+      timeHhmm: _formatHhmm(saved.time),
+      mode: saved.mode,
+    );
+  }
+
+  List<({String name, int qty})> _consolidateDishes(
+    List<GroupOrderParticipant> participants,
+  ) {
     final counts = <String, int>{};
-    for (final m in t.members) {
-      final dishName = m.isHost
-          ? (_dishSelection.main ?? 'Almuerzo del día')
-          : ((m.main ?? '').trim().isNotEmpty
-              ? m.main!.trim()
-              : 'Almuerzo del día');
+    for (final p in participants) {
+      final dishName = (p.selection.main ?? '').trim().isNotEmpty
+          ? p.selection.main!.trim()
+          : 'Almuerzo del día';
       counts[dishName] = (counts[dishName] ?? 0) + 1;
     }
     if (counts.isEmpty) {
@@ -593,13 +982,44 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
     final maxSeats = (restaurant?.seats ?? 12).clamp(2, 12);
     final effectiveParty = _partySize.clamp(2, maxSeats);
     final isFull = rid != null && ref.watch(restaurantPublicStatusProvider(rid)).isFull;
-    final hostLunches = _hostRemainingLunches(rid);
+    final activePassForRest = rid != null
+        ? ref.read(customerControllerProvider).state.passFor(rid)
+        : null;
+    final hasActivePlanForRestaurant = activePassForRest != null &&
+        !activePassForRest.isExpired &&
+        activePassForRest.remainingLunches > 0;
+    final hostLunches = activePassForRest?.remainingLunches ?? 0;
+    final effectiveMode = !hasActivePlanForRestaurant && _selectedMode == TableMode.hostPays
+        ? TableMode.eachOwn
+        : _selectedMode;
     final hasInsufficientLunches =
-        _selectedMode == TableMode.hostPays && hostLunches < effectiveParty;
-    final canSubmitStep1 =
-        rid != null && _isEstimatedTimeValid && !hasInsufficientLunches;
+        effectiveMode == TableMode.hostPays && hostLunches < effectiveParty;
+    final dailyMenu = _dailyMenuFor(restaurant);
+
+    final canSubmitStep1 = rid != null &&
+        _isEstimatedTimeValid &&
+        !hasInsufficientLunches &&
+        dailyMenu.hasActiveDishes;
+
+    final dishSelection = GroupOrderDishSelection(
+      soup: _dishSelection.soup ?? dailyMenu.soups.firstOrNull,
+      main: _dishSelection.main ?? dailyMenu.mains.firstOrNull,
+      drink: _dishSelection.drink ?? dailyMenu.drinks.firstOrNull,
+      takeaway: isFull ? true : _dishSelection.takeaway,
+    );
 
     final t = _table;
+    final simSession = t != null ? _simStore.sessionById(t.id) : null;
+    final participants = simSession?.participants ??
+        [
+          GroupOrderParticipant(
+            id: 'host',
+            name: (ref.read(sessionProvider).userName ?? t?.hostName ?? 'Anfitrión'),
+            isHost: true,
+            selection: dishSelection,
+          ),
+        ];
+
     final stepNumber = switch (_status) {
       GroupOrderStatus.draft => 1,
       GroupOrderStatus.collecting => 2,
@@ -607,17 +1027,6 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
       GroupOrderStatus.expired || GroupOrderStatus.cancelled => 3,
     };
 
-    final soups = _soupOptions(restaurant);
-    final mains = _mainOptions(restaurant);
-    final drinks = _drinkOptions(restaurant);
-    final dishSelection = GroupOrderDishSelection(
-      soup: _dishSelection.soup ?? soups.firstOrNull,
-      main: _dishSelection.main ?? mains.firstOrNull,
-      drink: _dishSelection.drink ?? drinks.firstOrNull,
-    );
-
-    final confirmedCount =
-        t != null ? t.members.length.clamp(1, effectiveParty) : 1;
     final remaining = _estimatedConsumptionTime.difference(DateTime.now());
 
     return SizedBox(
@@ -631,9 +1040,7 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
             stepNumber: stepNumber,
             isExpired: _status == GroupOrderStatus.expired,
             showOverflowMenu: _status == GroupOrderStatus.collecting && t != null,
-            onOpenGuestView: t != null
-                ? () => context.push('/customer/mesa/${t.id}')
-                : null,
+            onOpenGuestView: t != null ? () => _openGuestPreview(t) : null,
             onCancelTable: t != null && _canCancelTable(t)
                 ? () => _cancelTable(t)
                 : null,
@@ -671,16 +1078,26 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
                                 isTimeValid: _isEstimatedTimeValid,
                                 onSelectQuickMinutes: _selectQuickMinutes,
                                 onPickCustomTime: () => _pickCustomTime(restaurant),
-                                selectedMode: _selectedMode,
+                                selectedMode: effectiveMode,
                                 onModeChanged: (m) =>
                                     setState(() => _selectedMode = m),
+                                hasActivePlanForRestaurant:
+                                    hasActivePlanForRestaurant,
+                                onBlockedHostPaysTap: () {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      behavior: SnackBarBehavior.floating,
+                                      content: Text(
+                                        'Necesitas tener un plan prepagado activo en este restaurante para invitar la mesa.',
+                                      ),
+                                    ),
+                                  );
+                                },
                                 hostRemainingLunches: hostLunches,
                                 hasInsufficientHostLunches:
                                     hasInsufficientLunches,
                                 isFull: isFull,
-                                soups: soups,
-                                mains: mains,
-                                drinks: drinks,
+                                dailyMenu: dailyMenu,
                                 dishSelection: dishSelection,
                                 onDishChanged: (d) =>
                                     setState(() => _dishSelection = d),
@@ -691,23 +1108,37 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
                             GroupOrderStatus.collecting => t == null
                                 ? const SocialLoading('Sincronizando mesa')
                                 : _StepTwoLobbyView(
-                                    table: t,
                                     totalParticipants: effectiveParty,
-                                    confirmedCount: confirmedCount,
+                                    participants: participants,
                                     remainingDuration: remaining,
-                                    hostDishSummary: dishSelection.summary,
                                     copied: _copied,
                                     busy: _busy,
-                                    onShareWhatsApp: () => _shareWhatsApp(t),
+                                    onShareWhatsApp: () =>
+                                        _shareWhatsApp(t, simSession),
                                     onCopyLink: () => _copyLink(t),
+                                    onOpenGuestPreview: () =>
+                                        _openGuestPreview(t),
+                                    onEditTableConfig: () =>
+                                        _editTableConfigInLobby(
+                                      t,
+                                      simSession,
+                                      restaurant,
+                                    ),
+                                    onEditParticipantDish: (participant) =>
+                                        _editParticipantDishInLobby(
+                                      t,
+                                      dailyMenu,
+                                      participant,
+                                    ),
                                     onCloseAndSendNow: _confirmEarlySend,
                                   ),
                             GroupOrderStatus.confirmed => t == null
                                 ? const SocialLoading('Generando QR')
                                 : _StepThreeConfirmedQrView(
                                     table: t,
-                                    confirmedCount: confirmedCount,
-                                    consolidatedDishes: _consolidateDishes(t),
+                                    participants: participants,
+                                    consolidatedDishes:
+                                        _consolidateDishes(participants),
                                     canCancel: _canCancelTable(t),
                                     busy: _busy,
                                     onDone: () {

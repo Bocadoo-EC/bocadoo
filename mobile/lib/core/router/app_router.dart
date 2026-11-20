@@ -311,7 +311,10 @@ final GoRouter appRouter = GoRouter(
       name: 'customer_mesa',
       pageBuilder: (context, state) => BottomSheetPage(
         key: state.pageKey,
-        child: TableSheet(restaurantId: state.uri.queryParameters['restaurantId']),
+        child: TableSheet(
+          restaurantId: state.uri.queryParameters['restaurantId'],
+          groupOrderId: state.uri.queryParameters['groupOrderId'],
+        ),
       ),
     ),
     GoRoute(

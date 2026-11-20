@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/config/app_mode.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/theme/app_theme.dart';
 import 'customer_controller.dart';
@@ -186,6 +187,20 @@ class _RestaurantsScreenState extends ConsumerState<RestaurantsScreen> {
               _RestaurantCard(
                 restaurant: r,
                 publicStatus: ref.watch(restaurantPublicStatusProvider(r.id)),
+                isDailyMenuUnpublished:
+                    s.todayMenuAvailabilityByRest[r.id] ==
+                        MenuAvailabilityState.sinPublicar ||
+                    (AppMode.useMock && r.todayMenu.isEmpty),
+                onUnpublishedTap: () {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      behavior: SnackBarBehavior.floating,
+                      content: Text(
+                        'Este restaurante aún no ha publicado su menú de hoy',
+                      ),
+                    ),
+                  );
+                },
                 onOpen: () => _openRestaurant(r),
                 onTable: () => context.push('/customer/mesa?restaurantId=${r.id}'),
                 onReserve: (o) => _reserve(controller, o),
@@ -608,6 +623,8 @@ class _OfferBadge extends StatelessWidget {
 class _RestaurantCard extends StatelessWidget {
   final Restaurant restaurant;
   final RestaurantPublicStatus publicStatus;
+  final bool isDailyMenuUnpublished;
+  final VoidCallback onUnpublishedTap;
   final VoidCallback onOpen;
   final VoidCallback onTable;
   final ValueChanged<RestaurantOffer> onReserve;
@@ -615,6 +632,8 @@ class _RestaurantCard extends StatelessWidget {
   const _RestaurantCard({
     required this.restaurant,
     required this.publicStatus,
+    this.isDailyMenuUnpublished = false,
+    required this.onUnpublishedTap,
     required this.onOpen,
     required this.onTable,
     required this.onReserve,
@@ -635,7 +654,8 @@ class _RestaurantCard extends StatelessWidget {
     final isMenuSoldOut = publicStatus.isSoldOutToday;
     final isClosed = publicStatus.isClosed;
     final isFull = publicStatus.isFull;
-    final canGroupOrder = !isMenuSoldOut && !isClosed;
+    final canGroupOrder = !isMenuSoldOut && !isClosed && !isDailyMenuUnpublished;
+    final canOpenMenu = !isDailyMenuUnpublished;
     final bannerCover = CoverImage(url: rLogoOrImage(r), name: r.name);
 
     return Material(
@@ -646,7 +666,7 @@ class _RestaurantCard extends StatelessWidget {
       ),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
-        onTap: onOpen,
+        onTap: canOpenMenu ? onOpen : onUnpublishedTap,
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           SizedBox(
             height: 112,
@@ -745,28 +765,90 @@ class _RestaurantCard extends StatelessWidget {
                   const _Tag(icon: Icons.confirmation_number_outlined, label: 'Plan activo'),
                 ],
               ]),
+              if (isDailyMenuUnpublished) ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: b.walletAccent.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.info_outline_rounded, size: 15, color: b.onWalletAccent),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          'Menú del día no publicado',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: b.onWalletAccent,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: 10),
               Divider(height: 1, color: colors.outlineVariant),
               const SizedBox(height: 10),
               Row(children: [
                 Expanded(
-                  child: PillAction(
-                    label: isFull
-                        ? 'Pedido grupal (Para llevar)'
-                        : 'Pedido grupal',
-                    icon: Icons.group_add_outlined,
-                    tonal: false,
-                    onPressed: canGroupOrder ? onTable : null,
-                  ),
+                  child: isDailyMenuUnpublished
+                      ? GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: onUnpublishedTap,
+                          child: IgnorePointer(
+                            child: Opacity(
+                              opacity: 0.45,
+                              child: PillAction(
+                                label: isFull
+                                    ? 'Pedido grupal (Para llevar)'
+                                    : 'Pedido grupal',
+                                icon: Icons.group_add_outlined,
+                                tonal: false,
+                                onPressed: null,
+                              ),
+                            ),
+                          ),
+                        )
+                      : PillAction(
+                          label: isFull
+                              ? 'Pedido grupal (Para llevar)'
+                              : 'Pedido grupal',
+                          icon: Icons.group_add_outlined,
+                          tonal: false,
+                          onPressed: canGroupOrder ? onTable : null,
+                        ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: PillAction(
-                    label: 'Ver menú',
-                    icon: Icons.arrow_forward,
-                    trailingIcon: true,
-                    onPressed: onOpen,
-                  ),
+                  child: isDailyMenuUnpublished
+                      ? GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: onUnpublishedTap,
+                          child: IgnorePointer(
+                            child: Opacity(
+                              opacity: 0.45,
+                              child: PillAction(
+                                label: 'Ver menú',
+                                icon: Icons.arrow_forward,
+                                trailingIcon: true,
+                                onPressed: null,
+                              ),
+                            ),
+                          ),
+                        )
+                      : PillAction(
+                          label: 'Ver menú',
+                          icon: Icons.arrow_forward,
+                          trailingIcon: true,
+                          onPressed: onOpen,
+                        ),
                 ),
               ]),
             ]),

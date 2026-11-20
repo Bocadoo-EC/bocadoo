@@ -214,7 +214,9 @@ class _TableOrderCard extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  '👥 Mesa #${table.shortId} · ${table.hostName} (${table.members} pers.)',
+                  table.hostName.startsWith('Mesa ')
+                      ? '👥 ${table.hostName} · #${table.shortId} (${table.members} pers.)'
+                      : '👥 Mesa #${table.shortId} · ${table.hostName} (${table.members} pers.)',
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(

@@ -2218,14 +2218,34 @@ class ApiOwnerRepository
         }
       }
 
-      final res = await guard(
-        () => _api.send<Map<String, dynamic>>(
-              'POST',
-              '${ApiConfig.v1}/restaurante/lleno',
-              body: {'lleno': busy},
-              restaurant: true,
-            ).then((v) => v ?? <String, dynamic>{}),
-      );
+      final nivel = switch (status) {
+        ManualOccupancyStatus.lleno => 'LLENO',
+        ManualOccupancyStatus.concurrido => 'CONCURRIDO',
+        ManualOccupancyStatus.libre || ManualOccupancyStatus.cerrado => 'LIBRE',
+      };
+
+      Map<String, dynamic> res;
+      try {
+        res = await guard(
+          () => _api.send<Map<String, dynamic>>(
+                'POST',
+                '${ApiConfig.v1}/restaurante/lleno',
+                body: {'lleno': busy, 'nivel': nivel},
+                restaurant: true,
+              ).then((v) => v ?? <String, dynamic>{}),
+        );
+      } on ApiException catch (e) {
+        // Fallback temporal si el backend aún tiene whitelist estricto sin `nivel`.
+        if (e.status != 400) rethrow;
+        res = await guard(
+          () => _api.send<Map<String, dynamic>>(
+                'POST',
+                '${ApiConfig.v1}/restaurante/lleno',
+                body: {'lleno': busy},
+                restaurant: true,
+              ).then((v) => v ?? <String, dynamic>{}),
+        );
+      }
 
       // Solo limpiar/persistir en SharedPreferences después de confirmación 200 OK del servidor.
       try {

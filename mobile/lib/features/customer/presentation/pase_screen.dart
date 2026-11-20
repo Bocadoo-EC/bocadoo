@@ -10,6 +10,8 @@ import '../../../core/config/app_mode.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/contracts/qr_parser.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../group_orders/presentation/group_order_models.dart';
+import '../../group_orders/presentation/group_order_simulation_provider.dart';
 import '../domain/feedback_rules.dart';
 import 'customer_controller.dart';
 import 'customer_widgets.dart';
@@ -176,7 +178,10 @@ class _PaseScreenState extends ConsumerState<PaseScreen>
   Widget build(BuildContext context) {
     final controller = ref.watch(customerControllerProvider);
     return ListenableBuilder(
-      listenable: controller,
+      listenable: Listenable.merge([
+        controller,
+        GroupOrderSimulationStore.instance,
+      ]),
       builder: (context, _) {
         final s = controller.state;
         if (s.redemptionCelebrationTick > _lastCelebrationTick) {
@@ -794,6 +799,18 @@ class _ActiveWalletCard extends StatelessWidget {
     final pass = state.currentPass;
     final order = state.activeOrder;
     final table = state.activeTable;
+    final simSession = table != null
+        ? (GroupOrderSimulationStore.instance.sessionById(table.id) ??
+            GroupOrderSimulationStore.instance.activeSession)
+        : null;
+    final isMesaCollecting = mode == QrMode.mesa &&
+        table != null &&
+        simSession != null &&
+        simSession.status == GroupOrderStatus.collecting;
+    final isMesaConfirmed = mode == QrMode.mesa &&
+        table != null &&
+        simSession != null &&
+        simSession.status == GroupOrderStatus.confirmed;
 
     final String title;
     final String badgeLabel;
@@ -808,10 +825,23 @@ class _ActiveWalletCard extends StatelessWidget {
       badgeFg = order.hasPlan ? b.success : b.onWalletAccent;
       shortRestaurantId = order.restaurantId;
     } else if (mode == QrMode.mesa && table != null) {
-      title = table.restaurantName;
-      badgeLabel = 'Mesa Compartida';
-      badgeBg = colors.surface;
-      badgeFg = colors.primary;
+      title = simSession != null
+          ? 'Mesa de ${simSession.hostName}'
+          : table.restaurantName;
+      if (isMesaCollecting) {
+        badgeLabel =
+            'Pendiente (${simSession.confirmedCount}/${simSession.totalParticipants})';
+        badgeBg = colors.surface;
+        badgeFg = colors.primary;
+      } else if (isMesaConfirmed) {
+        badgeLabel = '✅ Confirmado · Listo para caja';
+        badgeBg = b.successContainer;
+        badgeFg = b.success;
+      } else {
+        badgeLabel = 'Mesa Compartida';
+        badgeBg = colors.surface;
+        badgeFg = colors.primary;
+      }
       shortRestaurantId = null;
     } else if (pass != null) {
       title = pass.restaurantName;
@@ -1011,13 +1041,28 @@ class _ActiveWalletCard extends StatelessWidget {
                   );
                 }
 
-                final qrData = AppMode.useMock ? shortCode : state.qrValue;
+                if (isMesaCollecting) {
+                  return _PendingGroupTableBlock(
+                    confirmedCount: simSession.confirmedCount,
+                    totalCount: simSession.totalParticipants,
+                    restaurantName: simSession.restaurantName,
+                    onOpenMesa: () => context.push(
+                      '/customer/mesa?groupOrderId=${table.id}&restaurantId=${simSession.restaurantId}',
+                    ),
+                  );
+                }
+
+                final qrData = isMesaConfirmed
+                    ? simSession.qrPayload
+                    : (AppMode.useMock ? shortCode : state.qrValue);
                 final waitingFreshQr = !AppMode.useMock && qrData.isEmpty;
-                final displayCode = (!AppMode.useMock &&
-                        mode == QrMode.preorden &&
-                        order != null)
-                    ? '#${order.orderNumber}'
-                    : shortCode;
+                final displayCode = isMesaConfirmed
+                    ? 'Mesa #${simSession.shortCode}'
+                    : ((!AppMode.useMock &&
+                            mode == QrMode.preorden &&
+                            order != null)
+                        ? '#${order.orderNumber}'
+                        : shortCode);
                 return Column(
                   children: [
                     GestureDetector(
@@ -1133,7 +1178,9 @@ class _ActiveWalletCard extends StatelessWidget {
                     if (mode == QrMode.mesa && table != null) ...[
                       const SizedBox(height: 4),
                       TextButton(
-                        onPressed: () => context.push('/customer/mesa'),
+                        onPressed: () => context.push(
+                          '/customer/mesa?groupOrderId=${table.id}${simSession != null ? '&restaurantId=${simSession.restaurantId}' : ''}',
+                        ),
                         child: const Text('Ver mesa y compartir'),
                       ),
                     ],
@@ -1141,6 +1188,95 @@ class _ActiveWalletCard extends StatelessWidget {
                 );
               },
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PendingGroupTableBlock extends StatelessWidget {
+  const _PendingGroupTableBlock({
+    required this.confirmedCount,
+    required this.totalCount,
+    required this.restaurantName,
+    required this.onOpenMesa,
+  });
+
+  final int confirmedCount;
+  final int totalCount;
+  final String restaurantName;
+  final VoidCallback onOpenMesa;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    final b = context.bocadooColors;
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: colors.secondaryContainer.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: colors.outlineVariant),
+      ),
+      child: Column(
+        children: [
+          Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              color: b.walletAccent.withValues(alpha: 0.25),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              Icons.hourglass_top_rounded,
+              size: 28,
+              color: b.onWalletAccent,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+            decoration: BoxDecoration(
+              color: b.walletAccent.withValues(alpha: 0.25),
+              borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+            ),
+            child: Text(
+              'Pendiente de confirmación ($confirmedCount/$totalCount)',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w800,
+                color: b.onWalletAccent,
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            restaurantName,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w900,
+              color: colors.onSurface,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'El código QR de la mesa se generará automáticamente cuando todos los invitados confirmen su plato.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              height: 1.35,
+              color: colors.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 16),
+          ElevatedButton.icon(
+            onPressed: onOpenMesa,
+            icon: const Icon(Icons.group_outlined, size: 18),
+            label: const Text('Ver mesa y compartir'),
           ),
         ],
       ),

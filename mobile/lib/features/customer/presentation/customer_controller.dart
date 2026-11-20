@@ -316,7 +316,7 @@ class CustomerController extends ChangeNotifier {
     _restaurantsVisible = visible;
     if (visible) {
       _restaurantsPoller ??= LifecyclePollingController(
-        interval: const Duration(seconds: 10),
+        interval: const Duration(seconds: 5),
         onTick: refreshRestaurants,
       );
       if (!_restaurantsPoller!.isRunning) {

@@ -102,7 +102,7 @@ class _StepProgressHeader extends StatelessWidget {
                           children: [
                             Icon(Icons.open_in_new_rounded, size: 18),
                             SizedBox(width: 10),
-                            Text('Ver invitación como invitado'),
+                            Text('Ver como invitado'),
                           ],
                         ),
                       ),
@@ -156,12 +156,12 @@ class _StepOneConfigView extends StatelessWidget {
     required this.onPickCustomTime,
     required this.selectedMode,
     required this.onModeChanged,
+    required this.hasActivePlanForRestaurant,
+    required this.onBlockedHostPaysTap,
     required this.hostRemainingLunches,
     required this.hasInsufficientHostLunches,
     required this.isFull,
-    required this.soups,
-    required this.mains,
-    required this.drinks,
+    required this.dailyMenu,
     required this.dishSelection,
     required this.onDishChanged,
     required this.busy,
@@ -181,12 +181,12 @@ class _StepOneConfigView extends StatelessWidget {
   final VoidCallback onPickCustomTime;
   final TableMode selectedMode;
   final ValueChanged<TableMode> onModeChanged;
+  final bool hasActivePlanForRestaurant;
+  final VoidCallback onBlockedHostPaysTap;
   final int hostRemainingLunches;
   final bool hasInsufficientHostLunches;
   final bool isFull;
-  final List<String> soups;
-  final List<String> mains;
-  final List<String> drinks;
+  final DailyMenu dailyMenu;
   final GroupOrderDishSelection dishSelection;
   final ValueChanged<GroupOrderDishSelection> onDishChanged;
   final bool busy;
@@ -360,14 +360,25 @@ class _StepOneConfigView extends StatelessWidget {
                   Expanded(
                     child: _PaymentModeCard(
                       title: 'Yo invito la mesa',
-                      hint: 'Se descuentan $partySize almuerzos de mi plan activo.',
-                      selected: selectedMode == TableMode.hostPays,
-                      onTap: busy ? null : () => onModeChanged(TableMode.hostPays),
+                      hint: !hasActivePlanForRestaurant
+                          ? 'Requiere plan prepagado activo en este local.'
+                          : 'Se descuentan $partySize almuerzos de tu plan activo ($hostRemainingLunches disponibles).',
+                      disabledBadge: !hasActivePlanForRestaurant
+                          ? 'Primero adquiere un plan'
+                          : null,
+                      disabled: !hasActivePlanForRestaurant,
+                      selected: hasActivePlanForRestaurant &&
+                          selectedMode == TableMode.hostPays,
+                      onTap: busy
+                          ? null
+                          : (!hasActivePlanForRestaurant
+                              ? onBlockedHostPaysTap
+                              : () => onModeChanged(TableMode.hostPays)),
                     ),
                   ),
                 ],
               ),
-              if (hasInsufficientHostLunches) ...[
+              if (hasActivePlanForRestaurant && hasInsufficientHostLunches) ...[
                 const SizedBox(height: 10),
                 Container(
                   padding: const EdgeInsets.all(12),
@@ -383,7 +394,7 @@ class _StepOneConfigView extends StatelessWidget {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Tienes $hostRemainingLunches ${hostRemainingLunches == 1 ? 'almuerzo disponible' : 'almuerzos disponibles'} en tu plan y elegiste invitar a $partySize personas. Cambia la modalidad o recarga tu plan.',
+                          'Tienes $hostRemainingLunches ${hostRemainingLunches == 1 ? 'almuerzo disponible' : 'almuerzos disponibles'} en tu plan (necesitas $partySize).',
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w700,
@@ -423,16 +434,45 @@ class _StepOneConfigView extends StatelessWidget {
               ],
               const SizedBox(height: 16),
 
-              // 4. Elección del plato del anfitrión
+              // 4. Elección del plato del anfitrión + modalidad obligatoria
               const SocialLabel('Tu plato (anfitrión)'),
               const SizedBox(height: 8),
-              _CompactDishSelector(
-                soups: soups,
-                mains: mains,
-                drinks: drinks,
-                selection: dishSelection,
-                onChanged: onDishChanged,
-              ),
+              if (!dailyMenu.hasActiveDishes)
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: b.walletAccent.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: b.walletAccent.withValues(alpha: 0.45),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.restaurant_menu_rounded,
+                          size: 20, color: b.onWalletAccent),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Menú del día no publicado. Este restaurante aún no ha publicado su menú de hoy.',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: b.onWalletAccent,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else
+                GroupDailyMenuSelector(
+                  dailyMenu: dailyMenu,
+                  selection: dishSelection,
+                  onChanged: onDishChanged,
+                  enabled: !busy,
+                  lockTakeaway: isFull,
+                ),
             ],
           ),
         ),
@@ -476,27 +516,29 @@ class _StepOneConfigView extends StatelessWidget {
 
 class _StepTwoLobbyView extends StatelessWidget {
   const _StepTwoLobbyView({
-    required this.table,
     required this.totalParticipants,
-    required this.confirmedCount,
+    required this.participants,
     required this.remainingDuration,
-    required this.hostDishSummary,
     required this.copied,
     required this.busy,
     required this.onShareWhatsApp,
     required this.onCopyLink,
+    required this.onOpenGuestPreview,
+    required this.onEditTableConfig,
+    required this.onEditParticipantDish,
     required this.onCloseAndSendNow,
   });
 
-  final SharedTable table;
   final int totalParticipants;
-  final int confirmedCount;
+  final List<GroupOrderParticipant> participants;
   final Duration remainingDuration;
-  final String hostDishSummary;
   final bool copied;
   final bool busy;
   final VoidCallback onShareWhatsApp;
   final VoidCallback onCopyLink;
+  final VoidCallback onOpenGuestPreview;
+  final VoidCallback onEditTableConfig;
+  final ValueChanged<GroupOrderParticipant> onEditParticipantDish;
   final VoidCallback onCloseAndSendNow;
 
   String _formatCountdown(Duration d) {
@@ -510,6 +552,7 @@ class _StepTwoLobbyView extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     final b = context.bocadooColors;
+    final confirmedCount = participants.length.clamp(1, totalParticipants);
     final progress = (confirmedCount / totalParticipants).clamp(0.0, 1.0);
     final slots = List<int>.generate(totalParticipants, (i) => i);
 
@@ -527,19 +570,13 @@ class _StepTwoLobbyView extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Esperando elecciones: $confirmedCount de $totalParticipants listos',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w900,
-                        color: colors.onSurface,
-                      ),
-                    ),
-                  ),
-                ],
+              Text(
+                'Esperando elecciones: $confirmedCount de $totalParticipants listos',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w900,
+                  color: colors.onSurface,
+                ),
               ),
               const SizedBox(height: 10),
               ClipRRect(
@@ -568,6 +605,19 @@ class _StepTwoLobbyView extends StatelessWidget {
                     ),
                   ),
                 ],
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                  ),
+                  onPressed: busy ? null : onEditTableConfig,
+                  icon: const Icon(Icons.tune_rounded, size: 16),
+                  label: const Text('Editar datos de mesa'),
+                ),
               ),
             ],
           ),
@@ -602,7 +652,7 @@ class _StepTwoLobbyView extends StatelessWidget {
                   size: 18,
                 ),
                 label: Text(
-                  copied ? 'Copiado' : 'Copiar link',
+                  copied ? 'Link copiado' : 'Copiar link',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -627,20 +677,26 @@ class _StepTwoLobbyView extends StatelessWidget {
                 ),
               ),
             ),
-            SocialBadge(
-              label: 'Recolectando',
-              background: colors.primaryContainer,
-              foreground: colors.primary,
+            TextButton.icon(
+              style: TextButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+              ),
+              onPressed: onOpenGuestPreview,
+              icon: const Icon(Icons.person_add_alt_1_rounded, size: 16),
+              label: const Text('Ver como invitado'),
             ),
           ],
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: 8),
         for (final idx in slots) ...[
           if (idx > 0) const SizedBox(height: 8),
           _LobbyParticipantTile(
             slotIndex: idx,
-            member: idx < table.members.length ? table.members[idx] : null,
-            hostDishSummary: hostDishSummary,
+            participant: idx < participants.length ? participants[idx] : null,
+            onChangeDish: idx < participants.length && !busy
+                ? () => onEditParticipantDish(participants[idx])
+                : null,
           ),
         ],
 
@@ -664,7 +720,7 @@ class _StepTwoLobbyView extends StatelessWidget {
 class _StepThreeConfirmedQrView extends StatelessWidget {
   const _StepThreeConfirmedQrView({
     required this.table,
-    required this.confirmedCount,
+    required this.participants,
     required this.consolidatedDishes,
     required this.canCancel,
     required this.busy,
@@ -673,7 +729,7 @@ class _StepThreeConfirmedQrView extends StatelessWidget {
   });
 
   final SharedTable table;
-  final int confirmedCount;
+  final List<GroupOrderParticipant> participants;
   final List<({String name, int qty})> consolidatedDishes;
   final bool canCancel;
   final bool busy;
@@ -684,6 +740,7 @@ class _StepThreeConfirmedQrView extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     final b = context.bocadooColors;
+    final confirmedCount = participants.length;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -692,7 +749,7 @@ class _StepThreeConfirmedQrView extends StatelessWidget {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
             children: [
-              // 1. Badge de Éxito
+              // 1. Badge de Éxito + Candado de Pedido Congelado
               Center(
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
@@ -715,6 +772,39 @@ class _StepThreeConfirmedQrView extends StatelessWidget {
                             fontSize: 13,
                             fontWeight: FontWeight.w800,
                             color: b.onSuccessContainer,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: colors.secondaryContainer,
+                    borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.lock_outline_rounded,
+                        size: 14,
+                        color: colors.onSecondaryContainer,
+                      ),
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Text(
+                          'Pedido cerrado · No admite modificaciones',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: colors.onSecondaryContainer,
                           ),
                         ),
                       ),
@@ -784,7 +874,7 @@ class _StepThreeConfirmedQrView extends StatelessWidget {
               ),
               const SizedBox(height: 16),
 
-              // 3. Resumen Consolidado
+              // 3. Resumen Consolidado + Participantes
               const SocialLabel('Resumen consolidado'),
               const SizedBox(height: 8),
               Container(
@@ -836,6 +926,14 @@ class _StepThreeConfirmedQrView extends StatelessWidget {
                   ],
                 ),
               ),
+              const SizedBox(height: 12),
+              for (var i = 0; i < participants.length; i++) ...[
+                if (i > 0) const SizedBox(height: 8),
+                _LobbyParticipantTile(
+                  slotIndex: i,
+                  participant: participants[i],
+                ),
+              ],
               const SizedBox(height: 14),
 
               // 4. Pie
@@ -967,28 +1065,37 @@ class _PaymentModeCard extends StatelessWidget {
     required this.hint,
     required this.selected,
     required this.onTap,
+    this.disabled = false,
+    this.disabledBadge,
   });
 
   final String title;
   final String hint;
   final bool selected;
   final VoidCallback? onTap;
+  final bool disabled;
+  final String? disabledBadge;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
-    return Semantics(
+    final b = context.bocadooColors;
+    final card = Semantics(
       selected: selected,
       button: true,
       child: Material(
-        color: selected
-            ? colors.primaryContainer.withValues(alpha: 0.6)
-            : Theme.of(context).scaffoldBackgroundColor,
+        color: disabled
+            ? colors.surfaceContainerHighest
+            : (selected
+                ? colors.primaryContainer.withValues(alpha: 0.6)
+                : Theme.of(context).scaffoldBackgroundColor),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(18),
           side: BorderSide(
-            color: selected ? colors.primary : colors.outlineVariant,
-            width: selected ? 1.6 : 1,
+            color: !disabled && selected
+                ? colors.primary
+                : colors.outlineVariant,
+            width: !disabled && selected ? 1.6 : 1,
           ),
         ),
         child: InkWell(
@@ -1012,11 +1119,13 @@ class _PaymentModeCard extends StatelessWidget {
                       ),
                     ),
                     Icon(
-                      selected
+                      !disabled && selected
                           ? Icons.check_circle_rounded
                           : Icons.radio_button_unchecked_rounded,
                       size: 18,
-                      color: selected ? colors.primary : colors.outline,
+                      color: !disabled && selected
+                          ? colors.primary
+                          : colors.outline,
                     ),
                   ],
                 ),
@@ -1030,133 +1139,53 @@ class _PaymentModeCard extends StatelessWidget {
                     color: colors.onSurfaceVariant,
                   ),
                 ),
+                if (disabledBadge != null) ...[
+                  const SizedBox(height: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: b.walletAccent.withValues(alpha: 0.28),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      disabledBadge!,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        color: b.onWalletAccent,
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
         ),
       ),
     );
-  }
-}
-
-class _CompactDishSelector extends StatelessWidget {
-  const _CompactDishSelector({
-    required this.soups,
-    required this.mains,
-    required this.drinks,
-    required this.selection,
-    required this.onChanged,
-  });
-
-  final List<String> soups;
-  final List<String> mains;
-  final List<String> drinks;
-  final GroupOrderDishSelection selection;
-  final ValueChanged<GroupOrderDishSelection> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colorScheme;
-    Widget group(
-      String title,
-      List<String> options,
-      String? current,
-      ValueChanged<String> onPick,
-    ) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-              color: colors.onSurfaceVariant,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Wrap(
-            spacing: 8,
-            runSpacing: 6,
-            children: [
-              for (final opt in options)
-                ChoiceChip(
-                  label: Text(opt),
-                  selected: current == opt,
-                  onSelected: (_) => onPick(opt),
-                ),
-            ],
-          ),
-        ],
-      );
-    }
-
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Theme.of(context).scaffoldBackgroundColor,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: colors.outlineVariant),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          group(
-            'Sopa',
-            soups,
-            selection.soup,
-            (v) => onChanged(selection.copyWith(soup: v)),
-          ),
-          const SizedBox(height: 12),
-          group(
-            'Segundo / Opción Fit',
-            mains,
-            selection.main,
-            (v) => onChanged(selection.copyWith(main: v)),
-          ),
-          const SizedBox(height: 12),
-          group(
-            'Bebida',
-            drinks,
-            selection.drink,
-            (v) => onChanged(selection.copyWith(drink: v)),
-          ),
-        ],
-      ),
-    );
+    return disabled ? Opacity(opacity: 0.55, child: card) : card;
   }
 }
 
 class _LobbyParticipantTile extends StatelessWidget {
   const _LobbyParticipantTile({
     required this.slotIndex,
-    required this.member,
-    required this.hostDishSummary,
+    required this.participant,
+    this.onChangeDish,
   });
 
   final int slotIndex;
-  final TableMember? member;
-  final String hostDishSummary;
+  final GroupOrderParticipant? participant;
+  final VoidCallback? onChangeDish;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     final b = context.bocadooColors;
-    final confirmed = member != null;
-
-    String dishText() {
-      if (member == null) {
-        return 'Esperando elección del invitado #${slotIndex + 1}...';
-      }
-      if (member!.isHost) {
-        return hostDishSummary;
-      }
-      final parts = [
-        if ((member!.soup ?? '').isNotEmpty) member!.soup!,
-        if ((member!.main ?? '').isNotEmpty) member!.main!,
-      ];
-      return parts.isEmpty ? 'Plato elegido' : parts.join(' · ');
-    }
+    final confirmed = participant != null;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -1187,7 +1216,7 @@ class _LobbyParticipantTile extends StatelessWidget {
                   children: [
                     Flexible(
                       child: Text(
-                        confirmed ? member!.name : 'Cupo #${slotIndex + 1}',
+                        confirmed ? participant!.name : 'Cupo #${slotIndex + 1}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -1200,7 +1229,7 @@ class _LobbyParticipantTile extends StatelessWidget {
                     if (confirmed) ...[
                       const SizedBox(width: 6),
                       SocialBadge(
-                        label: member!.isHost ? 'Anfitrión' : 'Invitado',
+                        label: participant!.isHost ? 'Anfitrión' : 'Invitado',
                         background: colors.primaryContainer,
                         foreground: colors.primary,
                       ),
@@ -1209,8 +1238,10 @@ class _LobbyParticipantTile extends StatelessWidget {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  dishText(),
-                  maxLines: 1,
+                  confirmed
+                      ? participant!.selection.summary
+                      : 'Esperando elección del invitado #${slotIndex + 1}...',
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 12,
@@ -1222,13 +1253,32 @@ class _LobbyParticipantTile extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          Text(
-            confirmed ? 'Confirmado' : 'Pendiente',
-            style: TextStyle(
-              fontSize: 11.5,
-              fontWeight: FontWeight.w800,
-              color: confirmed ? b.success : colors.onSurfaceVariant,
-            ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                confirmed ? 'Confirmado' : 'Pendiente',
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w800,
+                  color: confirmed ? b.success : colors.onSurfaceVariant,
+                ),
+              ),
+              if (confirmed && onChangeDish != null)
+                TextButton(
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    minimumSize: const Size(0, 26),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  onPressed: onChangeDish,
+                  child: const Text(
+                    'Cambiar mi elección',
+                    style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800),
+                  ),
+                ),
+            ],
           ),
         ],
       ),
