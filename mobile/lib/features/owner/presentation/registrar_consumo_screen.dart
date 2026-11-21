@@ -23,12 +23,12 @@ int? _parseCents(String text) {
   return n == null || n < 0 ? null : (n * 100).round();
 }
 
-enum _FilterTab { sopa, platoFuerte, bebida }
+enum _FilterTab { almuerzo, platoFuerte, extras }
 
 const _filterTabs = [
-  (_FilterTab.sopa, 'Sopa'),
+  (_FilterTab.almuerzo, 'Almuerzo'),
   (_FilterTab.platoFuerte, 'Plato Fuerte'),
-  (_FilterTab.bebida, 'Bebida'),
+  (_FilterTab.extras, 'Extras'),
 ];
 
 class _Line {
@@ -51,6 +51,13 @@ class _Line {
   final bool isLunch;
   final bool admiteParaLlevar;
   bool paraLlevar;
+
+  String get displayLabel {
+    if (detail == null || detail!.isEmpty || detail == 'Almuerzo completo') {
+      return name == 'Almuerzo' ? 'Almuerzo completo' : name;
+    }
+    return detail!;
+  }
 
   _Line copy() => _Line(
         key: key,
@@ -100,7 +107,7 @@ class _ScannedPlanClient {
   final String? passId;
 }
 
-/// O6 · Registrar consumo (POS rápido).
+/// O6 · Registrar consumo (POS rápido de 2 pasos).
 class RegistrarConsumoScreen extends ConsumerStatefulWidget {
   const RegistrarConsumoScreen({super.key});
 
@@ -113,7 +120,7 @@ class _RegistrarConsumoScreenState
     extends ConsumerState<RegistrarConsumoScreen> {
   bool _planMode = false;
   bool _planLunchParaLlevar = false;
-  _FilterTab _filterTab = _FilterTab.sopa;
+  _FilterTab _filterTab = _FilterTab.almuerzo;
 
   final List<_Line> _directCart = [];
   final List<_Line> _planExtrasCart = [];
@@ -158,6 +165,10 @@ class _RegistrarConsumoScreenState
         if (l.key == key) l.qty += delta;
       }
     });
+  }
+
+  void _removeLine(String key) {
+    _updateCart(() => _activeCart.removeWhere((l) => l.key == key));
   }
 
   void _toggleLineParaLlevar(String key) {
@@ -234,7 +245,7 @@ class _RegistrarConsumoScreenState
     controller.reset();
   }
 
-  Future<void> _editQuickNote() async {
+  Future<String?> _editQuickNote() async {
     final ctrl = TextEditingController(text: _quickNote);
     final res = await showDialog<String>(
       context: context,
@@ -265,406 +276,18 @@ class _RegistrarConsumoScreenState
     ctrl.dispose();
     if (res != null && mounted) {
       setState(() => _quickNote = res);
+      return res;
     }
+    return null;
   }
 
-  Future<void> _openCartSheet(int takeawaySurchargeCents) async {
-    final hasPlanLunch = _planMode && _scannedPlan != null;
-    if (_activeCart.isEmpty && !hasPlanLunch) return;
-    await showModalBottomSheet<void>(
-      context: context,
-      useRootNavigator: true,
-      isScrollControlled: true,
-      showDragHandle: true,
-      backgroundColor: context.colorScheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheetState) {
-          final colors = ctx.colorScheme;
-          final b = ctx.bocadooColors;
-          final cartSubtotal =
-              _activeCart.fold<int>(0, (s, l) => s + l.unitCents * l.qty);
-          final takeawayCount = _takeawayCount;
-          final takeawayFee = takeawayCount * takeawaySurchargeCents;
-          final liveTotal = cartSubtotal + takeawayFee;
-
-          return SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          'Detalle del consumo',
-                          style: TextStyle(
-                            fontSize: 19,
-                            fontWeight: FontWeight.w900,
-                            color: colors.onSurface,
-                          ),
-                        ),
-                      ),
-                      if (_activeCart.isNotEmpty)
-                        TextButton.icon(
-                          onPressed: () {
-                            _updateCart(() => _activeCart.clear());
-                            if (!hasPlanLunch) {
-                              Navigator.of(ctx).pop();
-                            } else {
-                              setSheetState(() {});
-                            }
-                          },
-                          icon: const Icon(Icons.delete_outline_rounded, size: 18),
-                          label: const Text('Vaciar'),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  if (hasPlanLunch) ...[
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 10,
-                      ),
-                      decoration: BoxDecoration(
-                        color: b.successContainer,
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(Icons.check_circle_rounded,
-                              size: 18, color: b.success),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Almuerzo completo · Plan (${_scannedPlan!.name})',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w800,
-                                    color: b.onSuccessContainer,
-                                  ),
-                                ),
-                                if (_planLunchParaLlevar)
-                                  Text(
-                                    'Para llevar (+${_fmt(takeawaySurchargeCents)})',
-                                    style: TextStyle(
-                                      fontSize: 11.5,
-                                      fontWeight: FontWeight.w700,
-                                      color: colors.primary,
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            _fmt(_planLunchParaLlevar
-                                ? takeawaySurchargeCents
-                                : 0),
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w900,
-                              color: b.success,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          _TakeoutToggleButton(
-                            active: _planLunchParaLlevar,
-                            onTap: () {
-                              setState(() =>
-                                  _planLunchParaLlevar = !_planLunchParaLlevar);
-                              setSheetState(() {});
-                            },
-                          ),
-                        ],
-                      ),
-                    ),
-                    if (_activeCart.isNotEmpty) const SizedBox(height: 8),
-                  ],
-                  if (_activeCart.isNotEmpty)
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 260),
-                      child: ListView.separated(
-                        shrinkWrap: true,
-                        itemCount: _activeCart.length,
-                        separatorBuilder: (_, _) => const SizedBox(height: 8),
-                        itemBuilder: (_, i) {
-                          final l = _activeCart[i];
-                          final lineTotalCents = (l.unitCents +
-                                  (l.admiteParaLlevar && l.paraLlevar
-                                      ? takeawaySurchargeCents
-                                      : 0)) *
-                              l.qty;
-                          return Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 10,
-                            ),
-                            decoration: BoxDecoration(
-                              color:
-                                  colors.primaryContainer.withValues(alpha: 0.28),
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        l.name,
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w800,
-                                          color: colors.onSurface,
-                                        ),
-                                      ),
-                                      if (l.detail != null &&
-                                          l.detail!.isNotEmpty)
-                                        Text(
-                                          l.detail!,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w600,
-                                            color: colors.onSurfaceVariant,
-                                          ),
-                                        ),
-                                      if (l.admiteParaLlevar && l.paraLlevar)
-                                        Text(
-                                          'Para llevar (+${_fmt(takeawaySurchargeCents)})',
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                            fontSize: 11.5,
-                                            fontWeight: FontWeight.w700,
-                                            color: colors.primary,
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                                Text(
-                                  _fmt(lineTotalCents),
-                                  style: TextStyle(
-                                    fontSize: 13.5,
-                                    fontWeight: FontWeight.w900,
-                                    color: colors.onSurface,
-                                  ),
-                                ),
-                                if (l.admiteParaLlevar) ...[
-                                  const SizedBox(width: 6),
-                                  _TakeoutToggleButton(
-                                    active: l.paraLlevar,
-                                    onTap: () {
-                                      _toggleLineParaLlevar(l.key);
-                                      setSheetState(() {});
-                                    },
-                                  ),
-                                ],
-                                const SizedBox(width: 6),
-                                _SquareButton(
-                                  icon: Icons.remove_rounded,
-                                  tooltip: 'Quitar uno',
-                                  onTap: () {
-                                    _changeQty(l.key, -1);
-                                    if (_activeCart.isEmpty && !hasPlanLunch) {
-                                      Navigator.of(ctx).pop();
-                                    } else {
-                                      setSheetState(() {});
-                                    }
-                                  },
-                                ),
-                                SizedBox(
-                                  width: 24,
-                                  child: Text(
-                                    '${l.qty}',
-                                    textAlign: TextAlign.center,
-                                    style: TextStyle(
-                                      fontSize: 13.5,
-                                      fontWeight: FontWeight.w900,
-                                      color: colors.onSurface,
-                                    ),
-                                  ),
-                                ),
-                                _SquareButton(
-                                  icon: Icons.add_rounded,
-                                  tooltip: 'Agregar otro',
-                                  filled: true,
-                                  onTap: () {
-                                    _changeQty(l.key, 1);
-                                    setSheetState(() {});
-                                  },
-                                ),
-                              ],
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                  const SizedBox(height: 6),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton.icon(
-                      style: TextButton.styleFrom(
-                        foregroundColor: _quickNote.isNotEmpty
-                            ? colors.primary
-                            : colors.onSurfaceVariant,
-                        visualDensity: VisualDensity.compact,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 4,
-                        ),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      onPressed: () async {
-                        await _editQuickNote();
-                        if (ctx.mounted) setSheetState(() {});
-                      },
-                      icon: Icon(
-                        _quickNote.isNotEmpty
-                            ? Icons.edit_note_rounded
-                            : Icons.add_comment_outlined,
-                        size: 16,
-                      ),
-                      label: Text(
-                        _quickNote.isNotEmpty
-                            ? 'Observación: $_quickNote'
-                            : '+ Agregar observación',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                  ),
-                  Divider(height: 16, color: colors.outlineVariant),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          takeawayCount > 0
-                              ? 'Envases para llevar ($takeawayCount)'
-                              : 'Envases para llevar',
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                            color: colors.onSurfaceVariant,
-                          ),
-                        ),
-                      ),
-                      Text(
-                        _fmt(takeawayFee),
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w800,
-                          color: colors.onSurface,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          'Total a cobrar',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w900,
-                            color: colors.onSurface,
-                          ),
-                        ),
-                      ),
-                      Text(
-                        _fmt(liveTotal),
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w900,
-                          color: colors.primary,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  Future<void> _handlePrimaryAction(
-    int totalCents,
-    int totalItems,
-    int takeawaySurchargeCents,
-  ) async {
+  Future<void> _handlePrimaryAction(int takeawaySurchargeCents) async {
     if (_charging) return;
+    if (_planMode && _scannedPlan == null) return;
+    if (!_planMode && _directCart.isEmpty) return;
 
-    if (_planMode) {
-      final client = _scannedPlan;
-      if (client == null) return;
-      if (totalCents <= 0) {
-        final messenger = ScaffoldMessenger.of(context);
-        final who = client.name;
-        setState(() {
-          _scannedPlan = null;
-          _planExtrasCart.clear();
-          _planLunchParaLlevar = false;
-          _quickNote = '';
-        });
-        ref.invalidate(dailySummaryProvider);
-        showInfoSnackBar(messenger, 'Plan canjeado · $who');
-        return;
-      }
-      await _openChargeModal(
-        totalCents: totalCents,
-        itemCount: totalItems,
-        takeawayCount: _takeawayCount,
-        takeawaySurchargeCents: takeawaySurchargeCents,
-        planClient: client,
-      );
-      return;
-    }
-
-    if (_directCart.isEmpty || totalCents <= 0) return;
-    await _openChargeModal(
-      totalCents: totalCents,
-      itemCount: totalItems,
-      takeawayCount: _takeawayCount,
-      takeawaySurchargeCents: takeawaySurchargeCents,
-    );
-  }
-
-  Future<void> _openChargeModal({
-    required int totalCents,
-    required int itemCount,
-    required int takeawayCount,
-    required int takeawaySurchargeCents,
-    _ScannedPlanClient? planClient,
-  }) async {
-    if (_charging) return;
-
-    final result = await showModalBottomSheet<
-        ({OwnerPayMethod method, int changeCents})>(
+    final result =
+        await showModalBottomSheet<({OwnerPayMethod method, int changeCents})>(
       context: context,
       useRootNavigator: true,
       isScrollControlled: true,
@@ -674,24 +297,54 @@ class _RegistrarConsumoScreenState
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
       builder: (_) => _ChargeBottomSheet(
-        title: planClient != null ? 'Canjear y cobrar extras' : 'Confirmar cobro',
-        totalCents: totalCents,
-        takeawayCount: takeawayCount,
-        takeawayFeeCents: takeawayCount * takeawaySurchargeCents,
-        planClientName: planClient?.name,
-        itemCount: itemCount,
+        title: _scannedPlan != null && _planMode
+            ? 'Confirmar cobro'
+            : 'Confirmar cobro',
+        items: _activeCart,
+        hasPlanLunch: _planMode && _scannedPlan != null,
+        planClientName: _planMode ? _scannedPlan?.name : null,
+        initialPlanLunchParaLlevar: _planLunchParaLlevar,
+        takeawaySurchargeCents: takeawaySurchargeCents,
+        initialObservation: _quickNote,
+        onChangeQty: _changeQty,
+        onRemoveLine: _removeLine,
+        onToggleParaLlevar: _toggleLineParaLlevar,
+        onTogglePlanLunchParaLlevar: () {
+          setState(() => _planLunchParaLlevar = !_planLunchParaLlevar);
+        },
+        onEditObservation: _editQuickNote,
       ),
     );
 
     if (result == null || !mounted) return;
 
+    final finalCartSubtotal =
+        _activeCart.fold<int>(0, (s, l) => s + l.unitCents * l.qty);
+    final finalTakeawayCount = _takeawayCount;
+    final finalTotalCents =
+        finalCartSubtotal + (finalTakeawayCount * takeawaySurchargeCents);
+
+    if (_planMode && _scannedPlan != null && finalTotalCents <= 0) {
+      final messenger = ScaffoldMessenger.of(context);
+      final who = _scannedPlan!.name;
+      setState(() {
+        _scannedPlan = null;
+        _planExtrasCart.clear();
+        _planLunchParaLlevar = false;
+        _quickNote = '';
+      });
+      ref.invalidate(dailySummaryProvider);
+      showInfoSnackBar(messenger, 'Plan canjeado · $who');
+      return;
+    }
+
     await _submitSale(
-      totalCents: totalCents,
+      totalCents: finalTotalCents,
       method: result.method,
-      takeawayCount: takeawayCount,
+      takeawayCount: finalTakeawayCount,
       takeawaySurchargeCents: takeawaySurchargeCents,
       changeCents: result.changeCents,
-      planClient: planClient,
+      planClient: _planMode ? _scannedPlan : null,
     );
   }
 
@@ -799,21 +452,83 @@ class _RegistrarConsumoScreenState
     );
   }
 
-  List<_PosGridItem> _itemsForTab({
-    required _FilterTab tab,
+  void _back() => context.canPop() ? context.pop() : context.go('/owner/caja');
+
+  Widget _buildGridBlock({
+    required String title,
+    required List<_PosGridItem> items,
+    required String emptyLabel,
+  }) {
+    final colors = context.colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          title,
+          style: TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w900,
+            color: colors.onSurface,
+          ),
+        ),
+        const SizedBox(height: 8),
+        if (items.isEmpty)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+            decoration: BoxDecoration(
+              color: colors.surface,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: colors.outlineVariant),
+            ),
+            child: Text(
+              emptyLabel,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: colors.onSurfaceVariant,
+              ),
+            ),
+          )
+        else
+          _TwoColumnGrid(
+            children: [
+              for (final item in items)
+                _PosItemCard(
+                  item: item,
+                  qty: _qtyOf(item.key),
+                  onAdd: () => _addLine(
+                    _Line(
+                      key: item.key,
+                      name: item.lineName ?? item.name,
+                      detail: item.lineDetail,
+                      unitCents: item.priceCents,
+                      isLunch: item.isLunch,
+                      admiteParaLlevar: item.admiteParaLlevar,
+                    ),
+                  ),
+                  onIncrement: () => _changeQty(item.key, 1),
+                  onDecrement: () => _changeQty(item.key, -1),
+                ),
+            ],
+          ),
+      ],
+    );
+  }
+
+  Widget _buildTabBody({
     required DailyMenu? menu,
     required List<PermanentCatalogItem> permanentItems,
-    required int soloSoupCents,
+    required int lunchCents,
     required int soloSecondCents,
+    required int soloSoupCents,
   }) {
     final courses =
         menu != null && menu.isPublished ? menu.courses : const <DailyMenuCourse>[];
 
-    switch (tab) {
-      case _FilterTab.sopa:
-        final soups = courses.where((c) => c.category == 'Sopa').toList();
-        return [
-          for (final s in soups)
+    switch (_filterTab) {
+      case _FilterTab.almuerzo:
+        final soups = [
+          for (final s in courses.where((c) => c.category == 'Sopa'))
             _PosGridItem(
               key: 'sop|${s.id}',
               name: s.name,
@@ -828,9 +543,61 @@ class _RegistrarConsumoScreenState
               admiteParaLlevar: true,
             ),
         ];
+        final mains = [
+          for (final m in courses.where((c) => c.category == 'Fuerte'))
+            _PosGridItem(
+              key: 'seg|${m.id}',
+              name: m.name,
+              tag: 'Del día',
+              priceCents: (m.price != null && m.price! > 0)
+                  ? Money.toCents(m.price!)
+                  : soloSecondCents,
+              soldOut: m.isSoldOut,
+              lineName: 'Solo segundo',
+              lineDetail: m.name,
+              isLunch: true,
+              admiteParaLlevar: true,
+            ),
+        ];
+
+        return ListView(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 16),
+          children: [
+            if (!_planMode) ...[
+              _DirectLunchQuickCard(
+                lunchCents: lunchCents,
+                qty: _qtyOf('alm|combo'),
+                soldOut: _isLunchSoldOut(menu),
+                onAdd: () => _addLine(
+                  _Line(
+                    key: 'alm|combo',
+                    name: 'Almuerzo',
+                    detail: 'Almuerzo completo',
+                    unitCents: lunchCents,
+                    isLunch: true,
+                    admiteParaLlevar: true,
+                  ),
+                ),
+                onIncrement: () => _changeQty('alm|combo', 1),
+                onDecrement: () => _changeQty('alm|combo', -1),
+              ),
+              const SizedBox(height: 16),
+            ],
+            _buildGridBlock(
+              title: 'Sopas',
+              items: soups,
+              emptyLabel: 'Sin sopas publicadas en el menú de hoy.',
+            ),
+            const SizedBox(height: 16),
+            _buildGridBlock(
+              title: 'Segundos',
+              items: mains,
+              emptyLabel: 'Sin segundos publicados en el menú de hoy.',
+            ),
+          ],
+        );
 
       case _FilterTab.platoFuerte:
-        final mains = courses.where((c) => c.category == 'Fuerte').toList();
         final cartaItems = permanentItems
             .where((p) => p.group == PermanentCatalogGroup.carta)
             .map(
@@ -845,30 +612,44 @@ class _RegistrarConsumoScreenState
             )
             .toList();
 
-        return [
-          for (final m in mains)
-            _PosGridItem(
-              key: 'seg|${m.id}',
-              name: m.name,
-              tag: 'Del día',
-              priceCents: (m.price != null && m.price! > 0)
-                  ? Money.toCents(m.price!)
-                  : soloSecondCents,
-              soldOut: m.isSoldOut,
-              lineName: 'Solo segundo',
-              lineDetail: m.name,
-              isLunch: true,
-              admiteParaLlevar: true,
-            ),
-          ...cartaItems,
-        ];
+        if (cartaItems.isEmpty) {
+          return _EmptyTabState(
+            tab: _filterTab,
+            onGoMenu: () => context.go('/owner/menu'),
+          );
+        }
 
-      case _FilterTab.bebida:
+        return ListView(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 16),
+          children: [
+            _TwoColumnGrid(
+              children: [
+                for (final item in cartaItems)
+                  _PosItemCard(
+                    item: item,
+                    qty: _qtyOf(item.key),
+                    onAdd: () => _addLine(
+                      _Line(
+                        key: item.key,
+                        name: item.name,
+                        unitCents: item.priceCents,
+                        admiteParaLlevar: true,
+                      ),
+                    ),
+                    onIncrement: () => _changeQty(item.key, 1),
+                    onDecrement: () => _changeQty(item.key, -1),
+                  ),
+              ],
+            ),
+          ],
+        );
+
+      case _FilterTab.extras:
         final lunchJuiceNames = courses
             .where((c) => c.category == 'Jugo')
             .map((c) => c.name.trim().toLowerCase())
             .toSet();
-        return permanentItems
+        final drinks = permanentItems
             .where((p) {
               if (p.group != PermanentCatalogGroup.bebidas) return false;
               final norm = p.name.trim().toLowerCase();
@@ -888,10 +669,39 @@ class _RegistrarConsumoScreenState
               ),
             )
             .toList();
+
+        final dessertsAndExtras = permanentItems
+            .where((p) => p.group == PermanentCatalogGroup.extras)
+            .map(
+              (e) => _PosGridItem(
+                key: 'ext|${e.id}',
+                name: e.name,
+                tag: 'Extra',
+                priceCents: e.priceCents,
+                soldOut: !e.available,
+                admiteParaLlevar: false,
+              ),
+            )
+            .toList();
+
+        return ListView(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 16),
+          children: [
+            _buildGridBlock(
+              title: 'Bebidas',
+              items: drinks,
+              emptyLabel: 'Sin bebidas configuradas en Carta y Bebidas.',
+            ),
+            const SizedBox(height: 16),
+            _buildGridBlock(
+              title: 'Postres',
+              items: dessertsAndExtras,
+              emptyLabel: 'Sin postres o extras configurados en Carta y Bebidas.',
+            ),
+          ],
+        );
     }
   }
-
-  void _back() => context.canPop() ? context.pop() : context.go('/owner/caja');
 
   @override
   Widget build(BuildContext context) {
@@ -929,16 +739,6 @@ class _RegistrarConsumoScreenState
       ctaEnabled = _directCart.isNotEmpty && totalCents > 0 && !_charging;
       ctaLabel = 'Cobrar →';
     }
-
-    final lunchSoldOut = _isLunchSoldOut(menu);
-    final lunchQty = _qtyOf('alm|combo');
-    final gridItems = _itemsForTab(
-      tab: _filterTab,
-      menu: menu,
-      permanentItems: permanentItems,
-      soloSoupCents: soloSoupCents,
-      soloSecondCents: soloSecondCents,
-    );
 
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
@@ -991,83 +791,38 @@ class _RegistrarConsumoScreenState
                 ],
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  if (!_planMode)
-                    _DirectLunchQuickCard(
-                      lunchCents: lunchCents,
-                      qty: lunchQty,
-                      soldOut: lunchSoldOut,
-                      onAdd: () => _addLine(
-                        _Line(
-                          key: 'alm|combo',
-                          name: 'Almuerzo',
-                          detail: 'Almuerzo completo',
-                          unitCents: lunchCents,
-                          isLunch: true,
-                          admiteParaLlevar: true,
-                        ),
-                      ),
-                      onIncrement: () => _changeQty('alm|combo', 1),
-                      onDecrement: () => _changeQty('alm|combo', -1),
-                    )
-                  else ...[
+            if (_planMode)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
                     _PlanHeaderCard(
                       client: _scannedPlan,
                       onScan: _scanPlanClient,
                     ),
                     const SizedBox(height: 8),
-                    _PlanLunchCard(
-                      active: _scannedPlan != null,
-                    ),
+                    _PlanLunchCard(active: _scannedPlan != null),
                   ],
-                  const SizedBox(height: 10),
-                  _FilterTabBar(
-                    selected: _filterTab,
-                    onChanged: (t) => setState(() => _filterTab = t),
-                  ),
-                ],
+                ),
+              ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 6, 14, 0),
+              child: _FilterTabBar(
+                selected: _filterTab,
+                onChanged: (t) => setState(() => _filterTab = t),
               ),
             ),
             Expanded(
               child: menuAsync.isLoading && menu == null
                   ? const Center(child: CircularProgressIndicator())
-                  : gridItems.isEmpty
-                      ? _EmptyTabState(
-                          tab: _filterTab,
-                          onPublishMenu: () => context.go('/owner/menu'),
-                        )
-                      : ListView(
-                          padding: const EdgeInsets.fromLTRB(14, 12, 14, 16),
-                          children: [
-                            _TwoColumnGrid(
-                              children: [
-                                for (final item in gridItems)
-                                  _PosItemCard(
-                                    item: item,
-                                    qty: _qtyOf(item.key),
-                                    onAdd: () => _addLine(
-                                      _Line(
-                                        key: item.key,
-                                        name: item.lineName ?? item.name,
-                                        detail: item.lineDetail,
-                                        unitCents: item.priceCents,
-                                        isLunch: item.isLunch,
-                                        admiteParaLlevar: item.admiteParaLlevar,
-                                      ),
-                                    ),
-                                    onIncrement: () =>
-                                        _changeQty(item.key, 1),
-                                    onDecrement: () =>
-                                        _changeQty(item.key, -1),
-                                  ),
-                              ],
-                            ),
-                          ],
-                        ),
+                  : _buildTabBody(
+                      menu: menu,
+                      permanentItems: permanentItems,
+                      lunchCents: lunchCents,
+                      soloSecondCents: soloSecondCents,
+                      soloSoupCents: soloSoupCents,
+                    ),
             ),
           ],
         ),
@@ -1078,15 +833,8 @@ class _RegistrarConsumoScreenState
         charging: _charging,
         ctaEnabled: ctaEnabled,
         ctaLabel: ctaLabel,
-        onShowDetails: (_activeCart.isNotEmpty || hasPlanClient)
-            ? () => _openCartSheet(takeawaySurchargeCents)
-            : null,
         onPrimaryAction: ctaEnabled
-            ? () => _handlePrimaryAction(
-                  totalCents,
-                  totalItems,
-                  takeawaySurchargeCents,
-                )
+            ? () => _handlePrimaryAction(takeawaySurchargeCents)
             : null,
       ),
     );
@@ -1550,6 +1298,7 @@ class _PosItemCard extends StatelessWidget {
     final (Color tagBg, Color tagFg) = switch (item.tag) {
       'Carta' => (colors.secondaryContainer, colors.onSecondaryContainer),
       'Bebida' => (b.walletAccent.withValues(alpha: 0.32), b.onWalletAccent),
+      'Extra' => (b.successContainer, b.onSuccessContainer),
       _ => (colors.primaryContainer, colors.onPrimaryContainer),
     };
 
@@ -1729,46 +1478,6 @@ class _TwoColumnGrid extends StatelessWidget {
   }
 }
 
-class _TakeoutToggleButton extends StatelessWidget {
-  const _TakeoutToggleButton({
-    required this.active,
-    required this.onTap,
-  });
-
-  final bool active;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colorScheme;
-    return Tooltip(
-      message: active ? 'Quitar envase para llevar' : 'Marcar para llevar',
-      child: Material(
-        color: active ? colors.primary : colors.surface,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(10),
-          side: BorderSide(
-            color: active ? colors.primary : colors.outlineVariant,
-          ),
-        ),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(10),
-          onTap: onTap,
-          child: SizedBox(
-            width: 30,
-            height: 30,
-            child: Icon(
-              Icons.takeout_dining_outlined,
-              size: 16,
-              color: active ? colors.onPrimary : colors.onSurfaceVariant,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _CompactBottomBar extends StatelessWidget {
   const _CompactBottomBar({
     required this.totalItems,
@@ -1776,7 +1485,6 @@ class _CompactBottomBar extends StatelessWidget {
     required this.charging,
     required this.ctaEnabled,
     required this.ctaLabel,
-    required this.onShowDetails,
     required this.onPrimaryAction,
   });
 
@@ -1785,7 +1493,6 @@ class _CompactBottomBar extends StatelessWidget {
   final bool charging;
   final bool ctaEnabled;
   final String ctaLabel;
-  final VoidCallback? onShowDetails;
   final VoidCallback? onPrimaryAction;
 
   @override
@@ -1802,67 +1509,35 @@ class _CompactBottomBar extends StatelessWidget {
         top: false,
         bottom: true,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
           child: Row(
             children: [
               Expanded(
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(12),
-                  onTap: onShowDetails,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      vertical: 4,
-                      horizontal: 4,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      itemsLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
+                        color: colors.onSurfaceVariant,
+                      ),
                     ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Flexible(
-                              child: Text(
-                                '$itemsLabel · ',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 12.5,
-                                  fontWeight: FontWeight.w700,
-                                  color: colors.onSurfaceVariant,
-                                ),
-                              ),
-                            ),
-                            Text(
-                              'Ver detalle',
-                              style: TextStyle(
-                                fontSize: 12.5,
-                                fontWeight: FontWeight.w700,
-                                color: colors.primary,
-                              ),
-                            ),
-                            const SizedBox(width: 2),
-                            Icon(
-                              Icons.keyboard_arrow_up_rounded,
-                              size: 16,
-                              color: colors.primary,
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 1),
-                        Text(
-                          'Total: ${_fmt(totalCents)}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w900,
-                            color: colors.onSurface,
-                          ),
-                        ),
-                      ],
+                    Text(
+                      'Total: ${_fmt(totalCents)}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w900,
+                        color: colors.onSurface,
+                      ),
                     ),
-                  ),
+                  ],
                 ),
               ),
               const SizedBox(width: 10),
@@ -1870,7 +1545,7 @@ class _CompactBottomBar extends StatelessWidget {
                 onPressed: ctaEnabled ? onPrimaryAction : null,
                 style: FilledButton.styleFrom(
                   minimumSize: const Size(116, 44),
-                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
                   shape: RoundedRectangleBorder(
                     borderRadius:
                         BorderRadius.circular(AppTheme.buttonRadius),
@@ -1890,7 +1565,7 @@ class _CompactBottomBar extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                          fontSize: 13.5,
+                          fontSize: 14,
                           fontWeight: FontWeight.w900,
                         ),
                       ),
@@ -1906,19 +1581,31 @@ class _CompactBottomBar extends StatelessWidget {
 class _ChargeBottomSheet extends StatefulWidget {
   const _ChargeBottomSheet({
     required this.title,
-    required this.totalCents,
-    required this.takeawayCount,
-    required this.takeawayFeeCents,
-    required this.itemCount,
+    required this.items,
+    required this.hasPlanLunch,
+    required this.initialPlanLunchParaLlevar,
+    required this.takeawaySurchargeCents,
+    required this.initialObservation,
+    required this.onChangeQty,
+    required this.onRemoveLine,
+    required this.onToggleParaLlevar,
+    required this.onTogglePlanLunchParaLlevar,
+    required this.onEditObservation,
     this.planClientName,
   });
 
   final String title;
-  final int totalCents;
-  final int takeawayCount;
-  final int takeawayFeeCents;
-  final int itemCount;
+  final List<_Line> items;
+  final bool hasPlanLunch;
+  final bool initialPlanLunchParaLlevar;
+  final int takeawaySurchargeCents;
+  final String initialObservation;
   final String? planClientName;
+  final void Function(String key, int delta) onChangeQty;
+  final void Function(String key) onRemoveLine;
+  final void Function(String key) onToggleParaLlevar;
+  final VoidCallback onTogglePlanLunchParaLlevar;
+  final Future<String?> Function() onEditObservation;
 
   @override
   State<_ChargeBottomSheet> createState() => _ChargeBottomSheetState();
@@ -1927,6 +1614,9 @@ class _ChargeBottomSheet extends StatefulWidget {
 class _ChargeBottomSheetState extends State<_ChargeBottomSheet> {
   OwnerPayMethod _method = OwnerPayMethod.efectivo;
   final TextEditingController _cash = TextEditingController();
+  bool _expanded = false;
+  late bool _planLunchParaLlevar = widget.initialPlanLunchParaLlevar;
+  late String _observation = widget.initialObservation;
 
   @override
   void dispose() {
@@ -1934,11 +1624,84 @@ class _ChargeBottomSheetState extends State<_ChargeBottomSheet> {
     super.dispose();
   }
 
+  int get _takeawayCount {
+    var count = widget.items
+        .where((l) => l.admiteParaLlevar && l.paraLlevar)
+        .fold<int>(0, (s, l) => s + l.qty);
+    if (widget.hasPlanLunch && _planLunchParaLlevar) count += 1;
+    return count;
+  }
+
+  int get _takeawayFeeCents => _takeawayCount * widget.takeawaySurchargeCents;
+
+  int get _effectiveTotalCents {
+    final subtotal =
+        widget.items.fold<int>(0, (s, l) => s + l.unitCents * l.qty);
+    return subtotal + _takeawayFeeCents;
+  }
+
+  int get _totalItemsCount =>
+      widget.items.fold<int>(0, (s, l) => s + l.qty) +
+      (widget.hasPlanLunch ? 1 : 0);
+
+  String get _orderPreview {
+    final parts = <String>[
+      if (widget.hasPlanLunch) '1x Almuerzo (Plan)',
+      for (final l in widget.items) '${l.qty}x ${l.displayLabel}',
+    ];
+    return parts.join(', ');
+  }
+
+  Widget _takeoutChip({
+    required bool active,
+    required VoidCallback onTap,
+  }) {
+    final colors = context.colorScheme;
+    return Material(
+      color: active ? colors.primary : colors.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(10),
+        side: BorderSide(
+          color: active ? colors.primary : colors.outlineVariant,
+        ),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.shopping_bag_outlined,
+                size: 15,
+                color: active ? colors.onPrimary : colors.onSurfaceVariant,
+              ),
+              const SizedBox(width: 5),
+              Text(
+                'Para llevar +${_fmt(widget.takeawaySurchargeCents)}',
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w800,
+                  color: active ? colors.onPrimary : colors.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     final b = context.bocadooColors;
-    final effectiveTotal = widget.totalCents;
+    final effectiveTotal = _effectiveTotalCents;
+    final itemCount = _totalItemsCount;
+    final takeawayCount = _takeawayCount;
+    final takeawayFee = _takeawayFeeCents;
     final isCash = _method == OwnerPayMethod.efectivo && effectiveTotal > 0;
     final receivedCents = isCash ? _parseCents(_cash.text) : null;
     final invalid =
@@ -1947,7 +1710,8 @@ class _ChargeBottomSheetState extends State<_ChargeBottomSheet> {
         isCash && receivedCents != null && receivedCents < effectiveTotal;
     final changeCents =
         receivedCents == null ? 0 : receivedCents - effectiveTotal;
-    final canConfirm = !isCash || (!invalid && !shortfall);
+    final canConfirm =
+        (itemCount > 0) && (!isCash || (!invalid && !shortfall));
     final bills =
         [5, 10, 20].where((v) => v * 100 >= effectiveTotal).toList();
 
@@ -1984,66 +1748,366 @@ class _ChargeBottomSheetState extends State<_ChargeBottomSheet> {
                 ],
               ),
               const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: colors.primaryContainer.withValues(alpha: 0.4),
-                  borderRadius: BorderRadius.circular(18),
-                ),
+              Material(
+                color: colors.primaryContainer.withValues(alpha: 0.4),
+                borderRadius: BorderRadius.circular(18),
+                clipBehavior: Clip.antiAlias,
                 child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            widget.itemCount == 1
-                                ? '1 ítem en consumo'
-                                : '${widget.itemCount} ítems en consumo',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
-                              color: colors.onSurfaceVariant,
+                    InkWell(
+                      onTap: () => setState(() => _expanded = !_expanded),
+                      child: Padding(
+                        padding: const EdgeInsets.all(14),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    itemCount == 1
+                                        ? '1 ítem en consumo'
+                                        : '$itemCount ítems en consumo',
+                                    style: TextStyle(
+                                      fontSize: 13.5,
+                                      fontWeight: FontWeight.w800,
+                                      color: colors.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ),
+                                Text(
+                                  _fmt(effectiveTotal),
+                                  style: TextStyle(
+                                    fontSize: 26,
+                                    fontWeight: FontWeight.w900,
+                                    color: colors.primary,
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                Icon(
+                                  _expanded
+                                      ? Icons.keyboard_arrow_up_rounded
+                                      : Icons.keyboard_arrow_down_rounded,
+                                  size: 22,
+                                  color: colors.primary,
+                                ),
+                              ],
+                            ),
+                            if (_orderPreview.isNotEmpty) ...[
+                              const SizedBox(height: 4),
+                              Text(
+                                _orderPreview,
+                                maxLines: _expanded ? 3 : 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: colors.onSurface,
+                                ),
+                              ),
+                            ],
+                            if (widget.planClientName != null) ...[
+                              const SizedBox(height: 4),
+                              Text(
+                                'Plan activo · ${widget.planClientName} (Almuerzo \$0,00)',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: b.success,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                    AnimatedCrossFade(
+                      firstChild: const SizedBox.shrink(),
+                      secondChild: Container(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                        decoration: BoxDecoration(
+                          border: Border(
+                            top: BorderSide(
+                              color: colors.outlineVariant.withValues(alpha: 0.6),
                             ),
                           ),
                         ),
-                        Text(
-                          _fmt(effectiveTotal),
-                          style: TextStyle(
-                            fontSize: 28,
-                            fontWeight: FontWeight.w900,
-                            color: colors.primary,
-                          ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            const SizedBox(height: 10),
+                            if (widget.hasPlanLunch) ...[
+                              Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: colors.surface,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            'Almuerzo completo · Plan',
+                                            style: TextStyle(
+                                              fontSize: 13.5,
+                                              fontWeight: FontWeight.w800,
+                                              color: colors.onSurface,
+                                            ),
+                                          ),
+                                        ),
+                                        Text(
+                                          _fmt(_planLunchParaLlevar
+                                              ? widget.takeawaySurchargeCents
+                                              : 0),
+                                          style: TextStyle(
+                                            fontSize: 13.5,
+                                            fontWeight: FontWeight.w900,
+                                            color: b.success,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 8),
+                                    _takeoutChip(
+                                      active: _planLunchParaLlevar,
+                                      onTap: () {
+                                        widget.onTogglePlanLunchParaLlevar();
+                                        setState(() {
+                                          _planLunchParaLlevar =
+                                              !_planLunchParaLlevar;
+                                        });
+                                      },
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              if (widget.items.isNotEmpty)
+                                const SizedBox(height: 8),
+                            ],
+                            for (final l in widget.items) ...[
+                              Container(
+                                margin: const EdgeInsets.only(bottom: 8),
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: colors.surface,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                l.name,
+                                                maxLines: 2,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: TextStyle(
+                                                  fontSize: 13.5,
+                                                  fontWeight: FontWeight.w800,
+                                                  color: colors.onSurface,
+                                                ),
+                                              ),
+                                              if (l.detail != null &&
+                                                  l.detail!.isNotEmpty)
+                                                Text(
+                                                  l.detail!,
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    fontWeight: FontWeight.w600,
+                                                    color:
+                                                        colors.onSurfaceVariant,
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Text(
+                                          _fmt((l.unitCents +
+                                                  (l.admiteParaLlevar &&
+                                                          l.paraLlevar
+                                                      ? widget
+                                                          .takeawaySurchargeCents
+                                                      : 0)) *
+                                              l.qty),
+                                          style: TextStyle(
+                                            fontSize: 13.5,
+                                            fontWeight: FontWeight.w900,
+                                            color: colors.onSurface,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 4),
+                                        IconButton(
+                                          tooltip: 'Eliminar ítem',
+                                          visualDensity: VisualDensity.compact,
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(
+                                            minWidth: 28,
+                                            minHeight: 28,
+                                          ),
+                                          onPressed: () {
+                                            widget.onRemoveLine(l.key);
+                                            if (widget.items.isEmpty &&
+                                                !widget.hasPlanLunch) {
+                                              Navigator.of(context).pop();
+                                            } else {
+                                              setState(() {});
+                                            }
+                                          },
+                                          icon: Icon(
+                                            Icons.delete_outline_rounded,
+                                            size: 18,
+                                            color: b.danger,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Row(
+                                      children: [
+                                        if (l.admiteParaLlevar)
+                                          Expanded(
+                                            child: Align(
+                                              alignment: Alignment.centerLeft,
+                                              child: _takeoutChip(
+                                                active: l.paraLlevar,
+                                                onTap: () {
+                                                  widget
+                                                      .onToggleParaLlevar(l.key);
+                                                  setState(() {});
+                                                },
+                                              ),
+                                            ),
+                                          )
+                                        else
+                                          const Spacer(),
+                                        const SizedBox(width: 8),
+                                        _SquareButton(
+                                          icon: Icons.remove_rounded,
+                                          tooltip: 'Quitar uno',
+                                          onTap: () {
+                                            widget.onChangeQty(l.key, -1);
+                                            if (widget.items.isEmpty &&
+                                                !widget.hasPlanLunch) {
+                                              Navigator.of(context).pop();
+                                            } else {
+                                              setState(() {});
+                                            }
+                                          },
+                                        ),
+                                        SizedBox(
+                                          width: 26,
+                                          child: Text(
+                                            '${l.qty}',
+                                            textAlign: TextAlign.center,
+                                            style: TextStyle(
+                                              fontSize: 13.5,
+                                              fontWeight: FontWeight.w900,
+                                              color: colors.onSurface,
+                                            ),
+                                          ),
+                                        ),
+                                        _SquareButton(
+                                          icon: Icons.add_rounded,
+                                          tooltip: 'Agregar otro',
+                                          filled: true,
+                                          onTap: () {
+                                            widget.onChangeQty(l.key, 1);
+                                            setState(() {});
+                                          },
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: TextButton.icon(
+                                style: TextButton.styleFrom(
+                                  foregroundColor: _observation.isNotEmpty
+                                      ? colors.primary
+                                      : colors.onSurfaceVariant,
+                                  visualDensity: VisualDensity.compact,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 4,
+                                    vertical: 4,
+                                  ),
+                                  tapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                ),
+                                onPressed: () async {
+                                  final updated =
+                                      await widget.onEditObservation();
+                                  if (updated != null && mounted) {
+                                    setState(() => _observation = updated);
+                                  }
+                                },
+                                icon: Icon(
+                                  _observation.isNotEmpty
+                                      ? Icons.edit_note_rounded
+                                      : Icons.add_comment_outlined,
+                                  size: 16,
+                                ),
+                                label: Text(
+                                  _observation.isNotEmpty
+                                      ? 'Observación: $_observation'
+                                      : '+ Agregar observación',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            if (takeawayCount > 0) ...[
+                              const SizedBox(height: 6),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      'Envases para llevar ($takeawayCount)',
+                                      style: TextStyle(
+                                        fontSize: 12.5,
+                                        fontWeight: FontWeight.w700,
+                                        color: colors.onSurfaceVariant,
+                                      ),
+                                    ),
+                                  ),
+                                  Text(
+                                    _fmt(takeawayFee),
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w800,
+                                      color: colors.onSurface,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ],
                         ),
-                      ],
+                      ),
+                      crossFadeState: _expanded
+                          ? CrossFadeState.showSecond
+                          : CrossFadeState.showFirst,
+                      duration: const Duration(milliseconds: 180),
                     ),
-                    if (widget.takeawayCount > 0) ...[
-                      const SizedBox(height: 4),
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          'Incluye ${widget.takeawayCount} envase(s) para llevar (+${_fmt(widget.takeawayFeeCents)})',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            color: colors.onSurfaceVariant,
-                          ),
-                        ),
-                      ),
-                    ],
-                    if (widget.planClientName != null) ...[
-                      const SizedBox(height: 4),
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          'Plan activo · ${widget.planClientName} (Almuerzo \$0,00)',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            color: b.success,
-                          ),
-                        ),
-                      ),
-                    ],
                   ],
                 ),
               ),
@@ -2355,19 +2419,19 @@ class _SquareButton extends StatelessWidget {
 class _EmptyTabState extends StatelessWidget {
   const _EmptyTabState({
     required this.tab,
-    required this.onPublishMenu,
+    required this.onGoMenu,
   });
 
   final _FilterTab tab;
-  final VoidCallback onPublishMenu;
+  final VoidCallback onGoMenu;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     final label = switch (tab) {
-      _FilterTab.sopa => 'No hay sopas publicadas hoy',
-      _FilterTab.platoFuerte => 'No hay platos fuertes disponibles',
-      _FilterTab.bebida => 'No hay bebidas configuradas',
+      _FilterTab.almuerzo => 'No hay menú del día publicado hoy',
+      _FilterTab.platoFuerte => 'No hay platos a la carta disponibles',
+      _FilterTab.extras => 'No hay bebidas ni extras configurados',
     };
 
     return Center(
@@ -2396,8 +2460,8 @@ class _EmptyTabState extends StatelessWidget {
                 ),
                 const SizedBox(height: 10),
                 FilledButton.tonal(
-                  onPressed: onPublishMenu,
-                  child: const Text('Publicar menú de hoy'),
+                  onPressed: onGoMenu,
+                  child: const Text('Ir a Menú'),
                 ),
               ],
             ),

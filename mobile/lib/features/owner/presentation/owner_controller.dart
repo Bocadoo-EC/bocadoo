@@ -1068,6 +1068,18 @@ class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
       description: 'Jugo natural para compartir',
     ),
     PermanentCatalogItem(
+      id: 'perm_ext_flan',
+      name: 'Flan de coco',
+      priceCents: 100,
+      group: PermanentCatalogGroup.extras,
+    ),
+    PermanentCatalogItem(
+      id: 'perm_ext_tres_leches',
+      name: 'Porción tres leches',
+      priceCents: 150,
+      group: PermanentCatalogGroup.extras,
+    ),
+    PermanentCatalogItem(
       id: 'perm_ext_aguacate',
       name: 'Porción de aguacate',
       priceCents: 75,
