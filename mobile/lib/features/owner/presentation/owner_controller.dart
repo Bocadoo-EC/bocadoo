@@ -889,3 +889,347 @@ class OwnerController extends Notifier<OwnerState> {
     return ok;
   }
 }
+
+/// Precios fijos del menú ejecutivo (Ajustes -> Menú de hoy -> POS).
+@immutable
+class ExecutivePrices {
+  const ExecutivePrices({
+    this.lunch = 3.00,
+    this.soloSecond = 2.50,
+    this.soloSoup = 1.50,
+    this.takeawaySurcharge = 0.25,
+  });
+
+  final double lunch;
+  final double soloSecond;
+  final double soloSoup;
+  final double takeawaySurcharge;
+
+  ExecutivePrices copyWith({
+    double? lunch,
+    double? soloSecond,
+    double? soloSoup,
+    double? takeawaySurcharge,
+  }) {
+    return ExecutivePrices(
+      lunch: lunch ?? this.lunch,
+      soloSecond: soloSecond ?? this.soloSecond,
+      soloSoup: soloSoup ?? this.soloSoup,
+      takeawaySurcharge: takeawaySurcharge ?? this.takeawaySurcharge,
+    );
+  }
+}
+
+class ExecutivePricesNotifier extends Notifier<ExecutivePrices> {
+  double? _lunchOverride;
+  double _soloSecond = 2.50;
+  double _soloSoup = 1.50;
+  double _takeawaySurcharge = 0.25;
+
+  @override
+  ExecutivePrices build() {
+    final serverLunch = ref.watch(lunchPriceProvider).value;
+    final lunch = _lunchOverride ??
+        (serverLunch != null && serverLunch > 0 ? serverLunch : 3.00);
+    return ExecutivePrices(
+      lunch: lunch,
+      soloSecond: _soloSecond,
+      soloSoup: _soloSoup,
+      takeawaySurcharge: _takeawaySurcharge,
+    );
+  }
+
+  void setPrices({
+    required double lunch,
+    required double soloSecond,
+    required double soloSoup,
+    required double takeawaySurcharge,
+  }) {
+    _lunchOverride = lunch;
+    _soloSecond = soloSecond;
+    _soloSoup = soloSoup;
+    _takeawaySurcharge = takeawaySurcharge;
+    state = ExecutivePrices(
+      lunch: lunch,
+      soloSecond: soloSecond,
+      soloSoup: soloSoup,
+      takeawaySurcharge: takeawaySurcharge,
+    );
+  }
+}
+
+final executivePricesProvider =
+    NotifierProvider<ExecutivePricesNotifier, ExecutivePrices>(
+  ExecutivePricesNotifier.new,
+);
+
+/// Categorías del catálogo fijo permanente (`Carta y Bebidas`).
+enum PermanentCatalogGroup { carta, bebidas, extras }
+
+@immutable
+class PermanentCatalogItem {
+  const PermanentCatalogItem({
+    required this.id,
+    required this.name,
+    required this.priceCents,
+    required this.group,
+    this.available = true,
+    this.description = '',
+  });
+
+  final String id;
+  final String name;
+  final int priceCents;
+  final PermanentCatalogGroup group;
+  final bool available;
+  final String description;
+
+  PermanentCatalogItem copyWith({
+    String? id,
+    String? name,
+    int? priceCents,
+    PermanentCatalogGroup? group,
+    bool? available,
+    String? description,
+  }) {
+    return PermanentCatalogItem(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      priceCents: priceCents ?? this.priceCents,
+      group: group ?? this.group,
+      available: available ?? this.available,
+      description: description ?? this.description,
+    );
+  }
+}
+
+@immutable
+class PermanentCatalogState {
+  const PermanentCatalogState({
+    this.items = const [],
+    this.dirty = false,
+  });
+
+  final List<PermanentCatalogItem> items;
+  final bool dirty;
+}
+
+class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
+  static const _defaultItems = <PermanentCatalogItem>[
+    PermanentCatalogItem(
+      id: 'perm_carta_churrasco',
+      name: 'Churrasco',
+      priceCents: 550,
+      group: PermanentCatalogGroup.carta,
+      description: 'Carne, huevo, papas fritas y ensalada',
+    ),
+    PermanentCatalogItem(
+      id: 'perm_carta_seco',
+      name: 'Seco de pollo',
+      priceCents: 450,
+      group: PermanentCatalogGroup.carta,
+      description: 'Con arroz amarillo y maduro',
+    ),
+    PermanentCatalogItem(
+      id: 'perm_carta_lomo',
+      name: 'Lomo saltado',
+      priceCents: 500,
+      group: PermanentCatalogGroup.carta,
+      description: 'Res salteada con cebolla, tomate y papas',
+    ),
+    PermanentCatalogItem(
+      id: 'perm_beb_cola',
+      name: 'Cola personal',
+      priceCents: 75,
+      group: PermanentCatalogGroup.bebidas,
+      description: '350 ml',
+    ),
+    PermanentCatalogItem(
+      id: 'perm_beb_agua',
+      name: 'Agua sin gas',
+      priceCents: 60,
+      group: PermanentCatalogGroup.bebidas,
+      description: '500 ml',
+    ),
+    PermanentCatalogItem(
+      id: 'perm_beb_jarra',
+      name: 'Jarra de jugo',
+      priceCents: 250,
+      group: PermanentCatalogGroup.bebidas,
+      description: 'Jugo natural para compartir',
+    ),
+    PermanentCatalogItem(
+      id: 'perm_ext_aguacate',
+      name: 'Porción de aguacate',
+      priceCents: 75,
+      group: PermanentCatalogGroup.extras,
+    ),
+    PermanentCatalogItem(
+      id: 'perm_ext_huevo',
+      name: 'Huevo frito',
+      priceCents: 50,
+      group: PermanentCatalogGroup.extras,
+    ),
+    PermanentCatalogItem(
+      id: 'perm_ext_arroz',
+      name: 'Porción de arroz',
+      priceCents: 50,
+      group: PermanentCatalogGroup.extras,
+    ),
+  ];
+
+  final Map<String, int> _priceOverrides = {};
+  final Map<String, bool> _availableOverrides = {};
+  final List<PermanentCatalogItem> _addedItems = [];
+  bool _dirty = false;
+  int _seq = 1;
+
+  @override
+  PermanentCatalogState build() {
+    final posCatalog = ref.watch(catalogProvider).value ?? const <CatalogItem>[];
+    final dishes = ref.watch(catalogDishesProvider).value ?? const <CatalogDish>[];
+    final todayMenu = ref.watch(posMenuProvider).value;
+
+    final lunchJuices = <String>{
+      if (todayMenu != null)
+        for (final c in todayMenu.courses)
+          if (c.category == 'Jugo') c.name.trim().toLowerCase(),
+    };
+
+    final merged = <PermanentCatalogItem>[];
+    final seenNames = <String>{};
+
+    void addCandidate(PermanentCatalogItem raw) {
+      final norm = '${raw.group.name}|${raw.name.trim().toLowerCase()}';
+      if (!seenNames.add(norm)) return;
+      merged.add(
+        raw.copyWith(
+          priceCents: _priceOverrides[raw.id] ?? raw.priceCents,
+          available: _availableOverrides[raw.id] ?? raw.available,
+        ),
+      );
+    }
+
+    for (final item in posCatalog) {
+      final group = switch (item.category) {
+        PosCategory.carta => PermanentCatalogGroup.carta,
+        PosCategory.bebidas => PermanentCatalogGroup.bebidas,
+        PosCategory.extras => PermanentCatalogGroup.extras,
+        PosCategory.almuerzos || PosCategory.desayunos => null,
+      };
+      if (group == null) continue;
+      final normName = item.name.trim().toLowerCase();
+      if (group == PermanentCatalogGroup.bebidas &&
+          (lunchJuices.contains(normName) ||
+              normName.contains('vaso de jugo') ||
+              normName.contains('jugo incluido'))) {
+        continue;
+      }
+      addCandidate(
+        PermanentCatalogItem(
+          id: item.id,
+          name: item.name,
+          priceCents: Money.toCents(item.price),
+          group: group,
+          available: true,
+          description: item.description,
+        ),
+      );
+    }
+
+    for (final d in dishes) {
+      if (d.kind != DishKind.carta) continue;
+      addCandidate(
+        PermanentCatalogItem(
+          id: d.id,
+          name: d.name,
+          priceCents: Money.toCents(d.price ?? 4.50),
+          group: PermanentCatalogGroup.carta,
+          available: !d.archived,
+          description: d.description,
+        ),
+      );
+    }
+
+    for (final added in _addedItems) {
+      addCandidate(added);
+    }
+
+    for (final g in PermanentCatalogGroup.values) {
+      if (merged.where((e) => e.group == g).isEmpty) {
+        for (final def in _defaultItems.where((d) => d.group == g)) {
+          addCandidate(def);
+        }
+      }
+    }
+
+    return PermanentCatalogState(items: merged, dirty: _dirty);
+  }
+
+  void addItem({
+    required String name,
+    required int priceCents,
+    required PermanentCatalogGroup group,
+    bool available = true,
+    String description = '',
+  }) {
+    final item = PermanentCatalogItem(
+      id: 'local_${group.name}_${_seq++}',
+      name: name.trim(),
+      priceCents: priceCents,
+      group: group,
+      available: available,
+      description: description.trim(),
+    );
+    _addedItems.add(item);
+    _dirty = true;
+    state = PermanentCatalogState(
+      items: [...state.items, item],
+      dirty: true,
+    );
+  }
+
+  void updatePrice(String id, int priceCents) {
+    _priceOverrides[id] = priceCents;
+    for (var i = 0; i < _addedItems.length; i++) {
+      if (_addedItems[i].id == id) {
+        _addedItems[i] = _addedItems[i].copyWith(priceCents: priceCents);
+      }
+    }
+    _dirty = true;
+    state = PermanentCatalogState(
+      items: [
+        for (final item in state.items)
+          item.id == id ? item.copyWith(priceCents: priceCents) : item,
+      ],
+      dirty: true,
+    );
+  }
+
+  void setAvailable(String id, bool available) {
+    _availableOverrides[id] = available;
+    for (var i = 0; i < _addedItems.length; i++) {
+      if (_addedItems[i].id == id) {
+        _addedItems[i] = _addedItems[i].copyWith(available: available);
+      }
+    }
+    _dirty = true;
+    state = PermanentCatalogState(
+      items: [
+        for (final item in state.items)
+          item.id == id ? item.copyWith(available: available) : item,
+      ],
+      dirty: true,
+    );
+  }
+
+  void saveChanges() {
+    _dirty = false;
+    state = PermanentCatalogState(items: state.items, dirty: false);
+  }
+}
+
+final permanentCatalogProvider =
+    NotifierProvider<PermanentCatalogNotifier, PermanentCatalogState>(
+  PermanentCatalogNotifier.new,
+);

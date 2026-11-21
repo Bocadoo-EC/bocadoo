@@ -13,10 +13,6 @@ import '../domain/models/daily_menu.dart';
 import 'owner_controller.dart';
 import 'owner_widgets.dart';
 
-const _defaultSoloSoupCents = 150;
-const _defaultSoloMainCents = 250;
-const _takeawaySurchargeCents = 25;
-
 String _fmt(int cents) =>
     '\$${(cents / 100).toStringAsFixed(2).replaceAll('.', ',')}';
 
@@ -95,60 +91,6 @@ class _ScannedPlanClient {
   final int remainingLunches;
   final String? passId;
 }
-
-const _fallbackCartaItems = [
-  _PosGridItem(
-    key: 'fb_carta_churrasco',
-    name: 'Churrasco',
-    tag: 'Carta',
-    priceCents: 450,
-  ),
-  _PosGridItem(
-    key: 'fb_carta_seco',
-    name: 'Seco de pollo',
-    tag: 'Carta',
-    priceCents: 375,
-  ),
-  _PosGridItem(
-    key: 'fb_carta_lomo',
-    name: 'Lomo saltado',
-    tag: 'Carta',
-    priceCents: 475,
-  ),
-  _PosGridItem(
-    key: 'fb_carta_pechuga',
-    name: 'Pechuga a la plancha',
-    tag: 'Carta',
-    priceCents: 400,
-  ),
-];
-
-const _fallbackDrinkItems = [
-  _PosGridItem(
-    key: 'fb_beb_cola',
-    name: 'Cola personal',
-    tag: 'Bebida',
-    priceCents: 75,
-  ),
-  _PosGridItem(
-    key: 'fb_beb_agua',
-    name: 'Agua sin gas',
-    tag: 'Bebida',
-    priceCents: 60,
-  ),
-  _PosGridItem(
-    key: 'fb_beb_jarra',
-    name: 'Jarra de jugo',
-    tag: 'Bebida',
-    priceCents: 250,
-  ),
-  _PosGridItem(
-    key: 'fb_beb_limonada',
-    name: 'Limonada natural',
-    tag: 'Bebida',
-    priceCents: 100,
-  ),
-];
 
 /// O6 · Registrar consumo (POS rápido).
 class RegistrarConsumoScreen extends ConsumerStatefulWidget {
@@ -297,7 +239,7 @@ class _RegistrarConsumoScreenState
     }
   }
 
-  Future<void> _openCartSheet() async {
+  Future<void> _openCartSheet(int takeawaySurchargeCents) async {
     final hasPlanLunch = _planMode && _scannedPlan != null;
     if (_activeCart.isEmpty && !hasPlanLunch) return;
     await showModalBottomSheet<void>(
@@ -316,7 +258,7 @@ class _RegistrarConsumoScreenState
           final cartSubtotal =
               _activeCart.fold<int>(0, (s, l) => s + l.unitCents * l.qty);
           final takeawayFee = (_paraLlevar && (hasPlanLunch || _activeCart.isNotEmpty))
-              ? _takeawaySurchargeCents
+              ? takeawaySurchargeCents
               : 0;
           final liveTotal = cartSubtotal + takeawayFee;
 
@@ -552,7 +494,11 @@ class _RegistrarConsumoScreenState
     );
   }
 
-  Future<void> _handlePrimaryAction(int totalCents, int totalItems) async {
+  Future<void> _handlePrimaryAction(
+    int totalCents,
+    int totalItems,
+    int takeawaySurchargeCents,
+  ) async {
     if (_charging) return;
 
     if (_planMode) {
@@ -574,6 +520,7 @@ class _RegistrarConsumoScreenState
       await _openChargeModal(
         totalCents: totalCents,
         itemCount: totalItems,
+        takeawaySurchargeCents: takeawaySurchargeCents,
         planClient: client,
       );
       return;
@@ -583,12 +530,14 @@ class _RegistrarConsumoScreenState
     await _openChargeModal(
       totalCents: totalCents,
       itemCount: totalItems,
+      takeawaySurchargeCents: takeawaySurchargeCents,
     );
   }
 
   Future<void> _openChargeModal({
     required int totalCents,
     required int itemCount,
+    required int takeawaySurchargeCents,
     _ScannedPlanClient? planClient,
   }) async {
     if (_charging) return;
@@ -606,6 +555,7 @@ class _RegistrarConsumoScreenState
       builder: (_) => _ChargeBottomSheet(
         title: planClient != null ? 'Canjear y cobrar extras' : 'Confirmar cobro',
         totalCents: totalCents,
+        takeawaySurchargeCents: takeawaySurchargeCents,
         planClientName: planClient?.name,
         itemCount: itemCount,
         initialTakeaway: _paraLlevar,
@@ -633,6 +583,7 @@ class _RegistrarConsumoScreenState
       totalCents: result.effectiveTotalCents,
       method: result.method,
       paraLlevar: result.paraLlevar,
+      takeawaySurchargeCents: takeawaySurchargeCents,
       changeCents: result.changeCents,
       planClient: planClient,
     );
@@ -642,6 +593,7 @@ class _RegistrarConsumoScreenState
     required int totalCents,
     required OwnerPayMethod method,
     required bool paraLlevar,
+    required int takeawaySurchargeCents,
     required int changeCents,
     _ScannedPlanClient? planClient,
   }) async {
@@ -667,10 +619,10 @@ class _RegistrarConsumoScreenState
           qty: l.qty,
           isLunch: l.isLunch,
         ),
-      if (paraLlevar)
+      if (paraLlevar && takeawaySurchargeCents > 0)
         PosSaleLine(
           name: 'Para llevar',
-          unitPrice: Money.fromCents(_takeawaySurchargeCents),
+          unitPrice: Money.fromCents(takeawaySurchargeCents),
           qty: 1,
         ),
     ];
@@ -740,7 +692,9 @@ class _RegistrarConsumoScreenState
   List<_PosGridItem> _itemsForTab({
     required _FilterTab tab,
     required DailyMenu? menu,
-    required List<CatalogItem> catalog,
+    required List<PermanentCatalogItem> permanentItems,
+    required int soloSoupCents,
+    required int soloSecondCents,
   }) {
     final courses =
         menu != null && menu.isPublished ? menu.courses : const <DailyMenuCourse>[];
@@ -756,7 +710,7 @@ class _RegistrarConsumoScreenState
               tag: 'Del día',
               priceCents: (s.price != null && s.price! > 0)
                   ? Money.toCents(s.price!)
-                  : _defaultSoloSoupCents,
+                  : soloSoupCents,
               soldOut: s.isSoldOut,
               lineName: 'Solo sopa',
               lineDetail: s.name,
@@ -766,21 +720,18 @@ class _RegistrarConsumoScreenState
 
       case _FilterTab.platoFuerte:
         final mains = courses.where((c) => c.category == 'Fuerte').toList();
-        final fromCatalog =
-            catalog.where((c) => c.category == PosCategory.carta).toList();
-        final cartaItems = fromCatalog.isNotEmpty
-            ? [
-                for (final item in fromCatalog)
-                  _PosGridItem(
-                    key: 'carta|${item.id}',
-                    name: item.name,
-                    tag: 'Carta',
-                    priceCents: Money.toCents(item.price) > 0
-                        ? Money.toCents(item.price)
-                        : 400,
-                  ),
-              ]
-            : _fallbackCartaItems;
+        final cartaItems = permanentItems
+            .where((p) => p.group == PermanentCatalogGroup.carta)
+            .map(
+              (item) => _PosGridItem(
+                key: 'carta|${item.id}',
+                name: item.name,
+                tag: 'Carta',
+                priceCents: item.priceCents,
+                soldOut: !item.available,
+              ),
+            )
+            .toList();
 
         return [
           for (final m in mains)
@@ -790,7 +741,7 @@ class _RegistrarConsumoScreenState
               tag: 'Del día',
               priceCents: (m.price != null && m.price! > 0)
                   ? Money.toCents(m.price!)
-                  : _defaultSoloMainCents,
+                  : soloSecondCents,
               soldOut: m.isSoldOut,
               lineName: 'Solo segundo',
               lineDetail: m.name,
@@ -804,32 +755,25 @@ class _RegistrarConsumoScreenState
             .where((c) => c.category == 'Jugo')
             .map((c) => c.name.trim().toLowerCase())
             .toSet();
-        final sellableCatalogDrinks = catalog.where((c) {
-          if (c.category != PosCategory.bebidas) return false;
-          final norm = c.name.trim().toLowerCase();
-          if (lunchJuiceNames.contains(norm)) return false;
-          if (norm.contains('vaso de jugo') ||
-              norm.contains('jugo incluido') ||
-              norm.contains('jugo del día')) {
-            return false;
-          }
-          return true;
-        }).toList();
-
-        if (sellableCatalogDrinks.isNotEmpty) {
-          return [
-            for (final d in sellableCatalogDrinks)
-              _PosGridItem(
+        return permanentItems
+            .where((p) {
+              if (p.group != PermanentCatalogGroup.bebidas) return false;
+              final norm = p.name.trim().toLowerCase();
+              return !lunchJuiceNames.contains(norm) &&
+                  !norm.contains('vaso de jugo') &&
+                  !norm.contains('jugo incluido') &&
+                  !norm.contains('jugo del día');
+            })
+            .map(
+              (d) => _PosGridItem(
                 key: 'beb|${d.id}',
                 name: d.name,
                 tag: 'Bebida',
-                priceCents: Money.toCents(d.price) > 0
-                    ? Money.toCents(d.price)
-                    : 100,
+                priceCents: d.priceCents,
+                soldOut: !d.available,
               ),
-          ];
-        }
-        return _fallbackDrinkItems;
+            )
+            .toList();
     }
   }
 
@@ -838,11 +782,14 @@ class _RegistrarConsumoScreenState
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
-    final lunchCents =
-        Money.toCents(ref.watch(lunchPriceProvider).value ?? 3.0);
+    final prices = ref.watch(executivePricesProvider);
+    final lunchCents = Money.toCents(prices.lunch);
+    final soloSecondCents = Money.toCents(prices.soloSecond);
+    final soloSoupCents = Money.toCents(prices.soloSoup);
+    final takeawaySurchargeCents = Money.toCents(prices.takeawaySurcharge);
     final menuAsync = ref.watch(posMenuProvider);
     final menu = menuAsync.value;
-    final catalog = ref.watch(catalogProvider).value ?? const <CatalogItem>[];
+    final permanentItems = ref.watch(permanentCatalogProvider).items;
 
     final hasPlanClient = _planMode && _scannedPlan != null;
     final cartSubtotalCents =
@@ -850,7 +797,7 @@ class _RegistrarConsumoScreenState
     final takeawayApplied =
         _paraLlevar && (hasPlanClient || _directCart.isNotEmpty);
     final totalCents =
-        cartSubtotalCents + (takeawayApplied ? _takeawaySurchargeCents : 0);
+        cartSubtotalCents + (takeawayApplied ? takeawaySurchargeCents : 0);
     final totalItems =
         _activeCart.fold<int>(0, (s, l) => s + l.qty) + (hasPlanClient ? 1 : 0);
 
@@ -876,7 +823,9 @@ class _RegistrarConsumoScreenState
     final gridItems = _itemsForTab(
       tab: _filterTab,
       menu: menu,
-      catalog: catalog,
+      permanentItems: permanentItems,
+      soloSoupCents: soloSoupCents,
+      soloSecondCents: soloSecondCents,
     );
 
     return Scaffold(
@@ -1011,6 +960,7 @@ class _RegistrarConsumoScreenState
       ),
       bottomNavigationBar: _CompactBottomBar(
         paraLlevar: _paraLlevar,
+        takeawaySurchargeCents: takeawaySurchargeCents,
         onToggleParaLlevar: (v) => setState(() => _paraLlevar = v),
         quickNote: _quickNote,
         onEditNote: _editQuickNote,
@@ -1019,10 +969,15 @@ class _RegistrarConsumoScreenState
         charging: _charging,
         ctaEnabled: ctaEnabled,
         ctaLabel: ctaLabel,
-        onShowDetails:
-            (_activeCart.isNotEmpty || hasPlanClient) ? _openCartSheet : null,
+        onShowDetails: (_activeCart.isNotEmpty || hasPlanClient)
+            ? () => _openCartSheet(takeawaySurchargeCents)
+            : null,
         onPrimaryAction: ctaEnabled
-            ? () => _handlePrimaryAction(totalCents, totalItems)
+            ? () => _handlePrimaryAction(
+                  totalCents,
+                  totalItems,
+                  takeawaySurchargeCents,
+                )
             : null,
       ),
     );
@@ -1668,6 +1623,7 @@ class _TwoColumnGrid extends StatelessWidget {
 class _CompactBottomBar extends StatelessWidget {
   const _CompactBottomBar({
     required this.paraLlevar,
+    required this.takeawaySurchargeCents,
     required this.onToggleParaLlevar,
     required this.quickNote,
     required this.onEditNote,
@@ -1681,6 +1637,7 @@ class _CompactBottomBar extends StatelessWidget {
   });
 
   final bool paraLlevar;
+  final int takeawaySurchargeCents;
   final ValueChanged<bool> onToggleParaLlevar;
   final String quickNote;
   final VoidCallback onEditNote;
@@ -1723,7 +1680,9 @@ class _CompactBottomBar extends StatelessWidget {
                             ? colors.onPrimaryContainer
                             : colors.onSurfaceVariant,
                       ),
-                      label: Text('Para llevar (+${_fmt(_takeawaySurchargeCents)})'),
+                      label: Text(
+                        'Para llevar (+${_fmt(takeawaySurchargeCents)})',
+                      ),
                       visualDensity: VisualDensity.compact,
                       selected: paraLlevar,
                       onSelected: onToggleParaLlevar,
@@ -1846,6 +1805,7 @@ class _ChargeBottomSheet extends StatefulWidget {
   const _ChargeBottomSheet({
     required this.title,
     required this.totalCents,
+    required this.takeawaySurchargeCents,
     required this.itemCount,
     required this.initialTakeaway,
     this.planClientName,
@@ -1853,6 +1813,7 @@ class _ChargeBottomSheet extends StatefulWidget {
 
   final String title;
   final int totalCents;
+  final int takeawaySurchargeCents;
   final int itemCount;
   final bool initialTakeaway;
   final String? planClientName;
@@ -1875,7 +1836,9 @@ class _ChargeBottomSheetState extends State<_ChargeBottomSheet> {
   int get _effectiveTotalCents {
     final delta = _paraLlevar == widget.initialTakeaway
         ? 0
-        : (_paraLlevar ? _takeawaySurchargeCents : -_takeawaySurchargeCents);
+        : (_paraLlevar
+            ? widget.takeawaySurchargeCents
+            : -widget.takeawaySurchargeCents);
     return (widget.totalCents + delta).clamp(0, 9999999);
   }
 
@@ -2054,7 +2017,7 @@ class _ChargeBottomSheetState extends State<_ChargeBottomSheet> {
                 onChanged: (v) => setState(() => _paraLlevar = v),
                 contentPadding: const EdgeInsets.symmetric(horizontal: 4),
                 title: Text(
-                  'Para llevar (+${_fmt(_takeawaySurchargeCents)})',
+                  'Para llevar (+${_fmt(widget.takeawaySurchargeCents)})',
                   style: TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.w800,

@@ -113,7 +113,7 @@ class OwnerSettingsScreen extends ConsumerWidget {
                 const SizedBox(height: 12),
                 const _StoreOpenCard(),
                 const SizedBox(height: 12),
-                const _SingleLunchPriceCard(),
+                const _ExecutivePricesCard(),
               ],
               const SizedBox(height: 12),
               const _Card(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -704,43 +704,77 @@ class _LocalCard extends ConsumerWidget {
   }
 }
 
-class _SingleLunchPriceCard extends ConsumerStatefulWidget {
-  const _SingleLunchPriceCard();
+class _ExecutivePricesCard extends ConsumerStatefulWidget {
+  const _ExecutivePricesCard();
 
   @override
-  ConsumerState<_SingleLunchPriceCard> createState() =>
-      _SingleLunchPriceCardState();
+  ConsumerState<_ExecutivePricesCard> createState() =>
+      _ExecutivePricesCardState();
 }
 
-class _SingleLunchPriceCardState extends ConsumerState<_SingleLunchPriceCard> {
-  final _ctrl = TextEditingController();
+class _ExecutivePricesCardState extends ConsumerState<_ExecutivePricesCard> {
+  final _lunchCtrl = TextEditingController();
+  final _secondCtrl = TextEditingController();
+  final _soupCtrl = TextEditingController();
+  final _takeawayCtrl = TextEditingController();
   bool _seeded = false;
   bool _saving = false;
 
   @override
   void dispose() {
-    _ctrl.dispose();
+    _lunchCtrl.dispose();
+    _secondCtrl.dispose();
+    _soupCtrl.dispose();
+    _takeawayCtrl.dispose();
     super.dispose();
   }
 
+  double? _parsePrice(TextEditingController c) =>
+      double.tryParse(c.text.trim().replaceAll(',', '.'));
+
   Future<void> _save() async {
     final messenger = ScaffoldMessenger.of(context);
-    final price = double.tryParse(_ctrl.text.trim().replaceAll(',', '.'));
-    if (price == null || price <= 0) {
+    final lunch = _parsePrice(_lunchCtrl);
+    final soloSecond = _parsePrice(_secondCtrl);
+    final soloSoup = _parsePrice(_soupCtrl);
+    final takeaway = _parsePrice(_takeawayCtrl);
+
+    if (lunch == null ||
+        lunch <= 0 ||
+        soloSecond == null ||
+        soloSecond <= 0 ||
+        soloSoup == null ||
+        soloSoup <= 0 ||
+        takeaway == null ||
+        takeaway < 0) {
       messenger.showSnackBar(
-        const SnackBar(content: Text('Ingresa un precio válido, ej. 3.00.')),
+        const SnackBar(
+          content: Text('Ingresa precios válidos en los 4 campos (ej. 3.00).'),
+        ),
       );
       return;
     }
-    if (AppMode.useMock) {
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Precio actualizado en modo demo.')),
-      );
-      return;
-    }
+
     setState(() => _saving = true);
+    ref.read(executivePricesProvider.notifier).setPrices(
+          lunch: lunch,
+          soloSecond: soloSecond,
+          soloSoup: soloSoup,
+          takeawaySurcharge: takeaway,
+        );
+
+    if (AppMode.useMock) {
+      if (mounted) {
+        setState(() => _saving = false);
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Precios actualizados en modo demo.')),
+        );
+      }
+      return;
+    }
+
     final repo = ref.read(apiOwnerRepositoryProvider);
-    final ok = await repo.updateSingleLunchPriceAndActivate(price);
+    final ok = await repo.updateSingleLunchPriceAndActivate(lunch);
     if (!mounted) return;
     setState(() => _saving = false);
     if (ok) {
@@ -748,65 +782,109 @@ class _SingleLunchPriceCardState extends ConsumerState<_SingleLunchPriceCard> {
       ref.invalidate(localInfoProvider);
       messenger.showSnackBar(
         const SnackBar(
-          content: Text('Precio guardado y local activado para comensales.'),
+          content: Text('Precios del menú ejecutivo actualizados.'),
         ),
       );
     } else {
       messenger.showSnackBar(
         SnackBar(
           content: Text(
-            repo.consumeLastError() ?? 'No se pudo guardar el precio.',
+            repo.consumeLastError() ??
+                'No se pudo guardar el precio del almuerzo en el servidor.',
           ),
         ),
       );
     }
   }
 
+  Widget _priceField(
+    String label,
+    TextEditingController ctrl, {
+    required String hint,
+  }) {
+    return TextField(
+      controller: ctrl,
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      decoration: InputDecoration(
+        labelText: label,
+        hintText: hint,
+        prefixText: '\$ ',
+        isDense: true,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
-    final current = ref.watch(lunchPriceProvider).value;
-    if (!_seeded && current != null && current > 0) {
-      _ctrl.text = current.toStringAsFixed(2);
+    final current = ref.watch(executivePricesProvider);
+    if (!_seeded) {
+      _lunchCtrl.text = current.lunch.toStringAsFixed(2);
+      _secondCtrl.text = current.soloSecond.toStringAsFixed(2);
+      _soupCtrl.text = current.soloSoup.toStringAsFixed(2);
+      _takeawayCtrl.text = current.takeawaySurcharge.toStringAsFixed(2);
       _seeded = true;
     }
+
     return _Card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const OwnerSectionLabel('Precio del almuerzo suelto'),
+          const OwnerSectionLabel('Precios del menú ejecutivo'),
           const SizedBox(height: 6),
           Text(
-            'Necesario para mostrar tu local a los comensales.',
+            'Se reflejan de inmediato en Menú de hoy y Registrar consumo.',
             style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w500,
               color: colors.onSurfaceVariant,
             ),
           ),
-          const SizedBox(height: 10),
-          Row(children: [
-            Expanded(
-              child: TextField(
-                controller: _ctrl,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(
-                  hintText: 'Ej. 3.00',
-                  prefixText: '\$ ',
-                  isDense: true,
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: _priceField(
+                  'Almuerzo completo',
+                  _lunchCtrl,
+                  hint: '3.00',
                 ),
               ),
-            ),
-            const SizedBox(width: 10),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                minimumSize: const Size(0, 48),
-                padding: const EdgeInsets.symmetric(horizontal: 18),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _priceField(
+                  'Solo segundo',
+                  _secondCtrl,
+                  hint: '2.50',
+                ),
               ),
-              onPressed: _saving ? null : _save,
-              child: Text(_saving ? 'Guardando...' : 'Guardar'),
-            ),
-          ]),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: _priceField(
+                  'Solo sopa',
+                  _soupCtrl,
+                  hint: '1.50',
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _priceField(
+                  'Recargo para llevar',
+                  _takeawayCtrl,
+                  hint: '0.25',
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          ElevatedButton(
+            onPressed: _saving ? null : _save,
+            child: Text(_saving ? 'Guardando...' : 'Guardar precios'),
+          ),
         ],
       ),
     );
