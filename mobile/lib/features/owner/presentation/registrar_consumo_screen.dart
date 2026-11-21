@@ -39,6 +39,8 @@ class _Line {
     this.detail,
     this.qty = 1,
     this.isLunch = false,
+    this.admiteParaLlevar = false,
+    this.paraLlevar = false,
   });
 
   final String key;
@@ -47,6 +49,8 @@ class _Line {
   final int unitCents;
   int qty;
   final bool isLunch;
+  final bool admiteParaLlevar;
+  bool paraLlevar;
 
   _Line copy() => _Line(
         key: key,
@@ -55,6 +59,8 @@ class _Line {
         detail: detail,
         qty: qty,
         isLunch: isLunch,
+        admiteParaLlevar: admiteParaLlevar,
+        paraLlevar: paraLlevar,
       );
 }
 
@@ -68,6 +74,7 @@ class _PosGridItem {
     this.lineName,
     this.lineDetail,
     this.isLunch = false,
+    this.admiteParaLlevar = false,
   });
 
   final String key;
@@ -78,6 +85,7 @@ class _PosGridItem {
   final String? lineName;
   final String? lineDetail;
   final bool isLunch;
+  final bool admiteParaLlevar;
 }
 
 class _ScannedPlanClient {
@@ -104,7 +112,7 @@ class RegistrarConsumoScreen extends ConsumerStatefulWidget {
 class _RegistrarConsumoScreenState
     extends ConsumerState<RegistrarConsumoScreen> {
   bool _planMode = false;
-  bool _paraLlevar = false;
+  bool _planLunchParaLlevar = false;
   _FilterTab _filterTab = _FilterTab.sopa;
 
   final List<_Line> _directCart = [];
@@ -115,6 +123,16 @@ class _RegistrarConsumoScreenState
   bool _charging = false;
 
   List<_Line> get _activeCart => _planMode ? _planExtrasCart : _directCart;
+
+  int get _takeawayCount {
+    var count = _activeCart
+        .where((l) => l.admiteParaLlevar && l.paraLlevar)
+        .fold<int>(0, (s, l) => s + l.qty);
+    if (_planMode && _scannedPlan != null && _planLunchParaLlevar) {
+      count += 1;
+    }
+    return count;
+  }
 
   void _updateCart(void Function() change) {
     setState(() {
@@ -138,6 +156,16 @@ class _RegistrarConsumoScreenState
     _updateCart(() {
       for (final l in _activeCart) {
         if (l.key == key) l.qty += delta;
+      }
+    });
+  }
+
+  void _toggleLineParaLlevar(String key) {
+    _updateCart(() {
+      for (final l in _activeCart) {
+        if (l.key == key && l.admiteParaLlevar) {
+          l.paraLlevar = !l.paraLlevar;
+        }
       }
     });
   }
@@ -185,6 +213,7 @@ class _RegistrarConsumoScreenState
           remainingLunches: r.remainingLunches ?? 0,
           passId: r.passId,
         );
+        _planLunchParaLlevar = false;
       });
       controller.reset();
       ref.invalidate(dailySummaryProvider);
@@ -210,14 +239,14 @@ class _RegistrarConsumoScreenState
     final res = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Nota rápida'),
+        title: const Text('Observación de cocina'),
         content: TextField(
           controller: ctrl,
           autofocus: true,
-          maxLength: 32,
+          maxLength: 48,
           textCapitalization: TextCapitalization.sentences,
           decoration: const InputDecoration(
-            hintText: 'Ej: Sin ají, Juan, para retirar…',
+            hintText: 'Ej: Sin ají, Juan, sin cebolla…',
           ),
           onSubmitted: (v) => Navigator.of(ctx).pop(v.trim()),
         ),
@@ -257,9 +286,8 @@ class _RegistrarConsumoScreenState
           final b = ctx.bocadooColors;
           final cartSubtotal =
               _activeCart.fold<int>(0, (s, l) => s + l.unitCents * l.qty);
-          final takeawayFee = (_paraLlevar && (hasPlanLunch || _activeCart.isNotEmpty))
-              ? takeawaySurchargeCents
-              : 0;
+          final takeawayCount = _takeawayCount;
+          final takeawayFee = takeawayCount * takeawaySurchargeCents;
           final liveTotal = cartSubtotal + takeawayFee;
 
           return SafeArea(
@@ -313,24 +341,50 @@ class _RegistrarConsumoScreenState
                               size: 18, color: b.success),
                           const SizedBox(width: 8),
                           Expanded(
-                            child: Text(
-                              'Almuerzo completo · Plan (${_scannedPlan!.name})',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w800,
-                                color: b.onSuccessContainer,
-                              ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Almuerzo completo · Plan (${_scannedPlan!.name})',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w800,
+                                    color: b.onSuccessContainer,
+                                  ),
+                                ),
+                                if (_planLunchParaLlevar)
+                                  Text(
+                                    'Para llevar (+${_fmt(takeawaySurchargeCents)})',
+                                    style: TextStyle(
+                                      fontSize: 11.5,
+                                      fontWeight: FontWeight.w700,
+                                      color: colors.primary,
+                                    ),
+                                  ),
+                              ],
                             ),
                           ),
+                          const SizedBox(width: 6),
                           Text(
-                            _fmt(0),
+                            _fmt(_planLunchParaLlevar
+                                ? takeawaySurchargeCents
+                                : 0),
                             style: TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.w900,
                               color: b.success,
                             ),
+                          ),
+                          const SizedBox(width: 8),
+                          _TakeoutToggleButton(
+                            active: _planLunchParaLlevar,
+                            onTap: () {
+                              setState(() =>
+                                  _planLunchParaLlevar = !_planLunchParaLlevar);
+                              setSheetState(() {});
+                            },
                           ),
                         ],
                       ),
@@ -346,6 +400,11 @@ class _RegistrarConsumoScreenState
                         separatorBuilder: (_, _) => const SizedBox(height: 8),
                         itemBuilder: (_, i) {
                           final l = _activeCart[i];
+                          final lineTotalCents = (l.unitCents +
+                                  (l.admiteParaLlevar && l.paraLlevar
+                                      ? takeawaySurchargeCents
+                                      : 0)) *
+                              l.qty;
                           return Container(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 12,
@@ -385,19 +444,40 @@ class _RegistrarConsumoScreenState
                                             color: colors.onSurfaceVariant,
                                           ),
                                         ),
+                                      if (l.admiteParaLlevar && l.paraLlevar)
+                                        Text(
+                                          'Para llevar (+${_fmt(takeawaySurchargeCents)})',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            fontSize: 11.5,
+                                            fontWeight: FontWeight.w700,
+                                            color: colors.primary,
+                                          ),
+                                        ),
                                     ],
                                   ),
                                 ),
-                                const SizedBox(width: 8),
+                                const SizedBox(width: 6),
                                 Text(
-                                  _fmt(l.unitCents * l.qty),
+                                  _fmt(lineTotalCents),
                                   style: TextStyle(
-                                    fontSize: 14,
+                                    fontSize: 13.5,
                                     fontWeight: FontWeight.w900,
                                     color: colors.onSurface,
                                   ),
                                 ),
-                                const SizedBox(width: 8),
+                                if (l.admiteParaLlevar) ...[
+                                  const SizedBox(width: 6),
+                                  _TakeoutToggleButton(
+                                    active: l.paraLlevar,
+                                    onTap: () {
+                                      _toggleLineParaLlevar(l.key);
+                                      setSheetState(() {});
+                                    },
+                                  ),
+                                ],
+                                const SizedBox(width: 6),
                                 _SquareButton(
                                   icon: Icons.remove_rounded,
                                   tooltip: 'Quitar uno',
@@ -411,12 +491,12 @@ class _RegistrarConsumoScreenState
                                   },
                                 ),
                                 SizedBox(
-                                  width: 26,
+                                  width: 24,
                                   child: Text(
                                     '${l.qty}',
                                     textAlign: TextAlign.center,
                                     style: TextStyle(
-                                      fontSize: 14,
+                                      fontSize: 13.5,
                                       fontWeight: FontWeight.w900,
                                       color: colors.onSurface,
                                     ),
@@ -437,32 +517,70 @@ class _RegistrarConsumoScreenState
                         },
                       ),
                     ),
-                  if (takeawayFee > 0) ...[
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            'Para llevar',
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                              color: colors.onSurfaceVariant,
-                            ),
-                          ),
+                  const SizedBox(height: 6),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      style: TextButton.styleFrom(
+                        foregroundColor: _quickNote.isNotEmpty
+                            ? colors.primary
+                            : colors.onSurfaceVariant,
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 4,
                         ),
-                        Text(
-                          _fmt(takeawayFee),
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w800,
-                            color: colors.onSurface,
-                          ),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      onPressed: () async {
+                        await _editQuickNote();
+                        if (ctx.mounted) setSheetState(() {});
+                      },
+                      icon: Icon(
+                        _quickNote.isNotEmpty
+                            ? Icons.edit_note_rounded
+                            : Icons.add_comment_outlined,
+                        size: 16,
+                      ),
+                      label: Text(
+                        _quickNote.isNotEmpty
+                            ? 'Observación: $_quickNote'
+                            : '+ Agregar observación',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
                         ),
-                      ],
+                      ),
                     ),
-                  ],
-                  const SizedBox(height: 12),
+                  ),
+                  Divider(height: 16, color: colors.outlineVariant),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          takeawayCount > 0
+                              ? 'Envases para llevar ($takeawayCount)'
+                              : 'Envases para llevar',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: colors.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        _fmt(takeawayFee),
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800,
+                          color: colors.onSurface,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
                   Row(
                     children: [
                       Expanded(
@@ -510,7 +628,7 @@ class _RegistrarConsumoScreenState
         setState(() {
           _scannedPlan = null;
           _planExtrasCart.clear();
-          _paraLlevar = false;
+          _planLunchParaLlevar = false;
           _quickNote = '';
         });
         ref.invalidate(dailySummaryProvider);
@@ -520,6 +638,7 @@ class _RegistrarConsumoScreenState
       await _openChargeModal(
         totalCents: totalCents,
         itemCount: totalItems,
+        takeawayCount: _takeawayCount,
         takeawaySurchargeCents: takeawaySurchargeCents,
         planClient: client,
       );
@@ -530,6 +649,7 @@ class _RegistrarConsumoScreenState
     await _openChargeModal(
       totalCents: totalCents,
       itemCount: totalItems,
+      takeawayCount: _takeawayCount,
       takeawaySurchargeCents: takeawaySurchargeCents,
     );
   }
@@ -537,13 +657,14 @@ class _RegistrarConsumoScreenState
   Future<void> _openChargeModal({
     required int totalCents,
     required int itemCount,
+    required int takeawayCount,
     required int takeawaySurchargeCents,
     _ScannedPlanClient? planClient,
   }) async {
     if (_charging) return;
 
     final result = await showModalBottomSheet<
-        ({OwnerPayMethod method, bool paraLlevar, int changeCents, int effectiveTotalCents})>(
+        ({OwnerPayMethod method, int changeCents})>(
       context: context,
       useRootNavigator: true,
       isScrollControlled: true,
@@ -555,34 +676,19 @@ class _RegistrarConsumoScreenState
       builder: (_) => _ChargeBottomSheet(
         title: planClient != null ? 'Canjear y cobrar extras' : 'Confirmar cobro',
         totalCents: totalCents,
-        takeawaySurchargeCents: takeawaySurchargeCents,
+        takeawayCount: takeawayCount,
+        takeawayFeeCents: takeawayCount * takeawaySurchargeCents,
         planClientName: planClient?.name,
         itemCount: itemCount,
-        initialTakeaway: _paraLlevar,
       ),
     );
 
     if (result == null || !mounted) return;
-    setState(() => _paraLlevar = result.paraLlevar);
-
-    if (result.effectiveTotalCents <= 0 && planClient != null) {
-      final messenger = ScaffoldMessenger.of(context);
-      final who = planClient.name;
-      setState(() {
-        _scannedPlan = null;
-        _planExtrasCart.clear();
-        _paraLlevar = false;
-        _quickNote = '';
-      });
-      ref.invalidate(dailySummaryProvider);
-      showInfoSnackBar(messenger, 'Plan canjeado · $who');
-      return;
-    }
 
     await _submitSale(
-      totalCents: result.effectiveTotalCents,
+      totalCents: totalCents,
       method: result.method,
-      paraLlevar: result.paraLlevar,
+      takeawayCount: takeawayCount,
       takeawaySurchargeCents: takeawaySurchargeCents,
       changeCents: result.changeCents,
       planClient: planClient,
@@ -592,19 +698,22 @@ class _RegistrarConsumoScreenState
   Future<void> _submitSale({
     required int totalCents,
     required OwnerPayMethod method,
-    required bool paraLlevar,
+    required int takeawayCount,
     required int takeawaySurchargeCents,
     required int changeCents,
     _ScannedPlanClient? planClient,
   }) async {
     final snapshot = _activeCart.map((l) => l.copy()).toList();
     if (totalCents <= 0) return;
-    if (snapshot.isEmpty && !paraLlevar) return;
+    if (snapshot.isEmpty && takeawayCount == 0) return;
 
     final itemCount =
         snapshot.fold<int>(0, (s, l) => s + l.qty) + (planClient != null ? 1 : 0);
-    final modality = paraLlevar
-        ? (_quickNote.isNotEmpty ? 'Para llevar ($_quickNote)' : 'Para llevar')
+    final hasTakeaway = takeawayCount > 0;
+    final modality = hasTakeaway
+        ? (_quickNote.isNotEmpty
+            ? 'Para llevar ($takeawayCount · $_quickNote)'
+            : 'Para llevar ($takeawayCount)')
         : (_quickNote.isNotEmpty ? _quickNote : 'En local');
     final baseLabel =
         planClient != null ? 'Plan ${planClient.name} · $modality' : modality;
@@ -613,17 +722,17 @@ class _RegistrarConsumoScreenState
     final saleLines = <PosSaleLine>[
       for (final l in snapshot)
         PosSaleLine(
-          name: l.name,
+          name: l.paraLlevar ? '${l.name} (Para llevar)' : l.name,
           detail: l.detail,
           unitPrice: Money.fromCents(l.unitCents),
           qty: l.qty,
           isLunch: l.isLunch,
         ),
-      if (paraLlevar && takeawaySurchargeCents > 0)
+      if (hasTakeaway && takeawaySurchargeCents > 0)
         PosSaleLine(
-          name: 'Para llevar',
+          name: 'Envases para llevar',
           unitPrice: Money.fromCents(takeawaySurchargeCents),
-          qty: 1,
+          qty: takeawayCount,
         ),
     ];
 
@@ -651,15 +760,16 @@ class _RegistrarConsumoScreenState
 
     container.invalidate(dailySummaryProvider);
     final savedPlanMode = _planMode;
+    final savedPlanLunchParaLlevar = _planLunchParaLlevar;
     setState(() {
       if (savedPlanMode) {
         _planExtrasCart.clear();
         _scannedPlan = null;
+        _planLunchParaLlevar = false;
       } else {
         _directCart.clear();
       }
       _quickNote = '';
-      _paraLlevar = false;
     });
 
     final prefix = planClient != null ? 'Canjeado y cobrado' : 'Cobrado';
@@ -678,12 +788,12 @@ class _RegistrarConsumoScreenState
               ..clear()
               ..addAll(snapshot);
             _scannedPlan = planClient;
+            _planLunchParaLlevar = savedPlanLunchParaLlevar;
           } else {
             _directCart
               ..clear()
               ..addAll(snapshot);
           }
-          _paraLlevar = paraLlevar;
         });
       },
     );
@@ -715,6 +825,7 @@ class _RegistrarConsumoScreenState
               lineName: 'Solo sopa',
               lineDetail: s.name,
               isLunch: true,
+              admiteParaLlevar: true,
             ),
         ];
 
@@ -729,6 +840,7 @@ class _RegistrarConsumoScreenState
                 tag: 'Carta',
                 priceCents: item.priceCents,
                 soldOut: !item.available,
+                admiteParaLlevar: true,
               ),
             )
             .toList();
@@ -746,6 +858,7 @@ class _RegistrarConsumoScreenState
               lineName: 'Solo segundo',
               lineDetail: m.name,
               isLunch: true,
+              admiteParaLlevar: true,
             ),
           ...cartaItems,
         ];
@@ -771,6 +884,7 @@ class _RegistrarConsumoScreenState
                 tag: 'Bebida',
                 priceCents: d.priceCents,
                 soldOut: !d.available,
+                admiteParaLlevar: false,
               ),
             )
             .toList();
@@ -794,10 +908,8 @@ class _RegistrarConsumoScreenState
     final hasPlanClient = _planMode && _scannedPlan != null;
     final cartSubtotalCents =
         _activeCart.fold<int>(0, (s, l) => s + l.unitCents * l.qty);
-    final takeawayApplied =
-        _paraLlevar && (hasPlanClient || _directCart.isNotEmpty);
     final totalCents =
-        cartSubtotalCents + (takeawayApplied ? takeawaySurchargeCents : 0);
+        cartSubtotalCents + (_takeawayCount * takeawaySurchargeCents);
     final totalItems =
         _activeCart.fold<int>(0, (s, l) => s + l.qty) + (hasPlanClient ? 1 : 0);
 
@@ -896,6 +1008,7 @@ class _RegistrarConsumoScreenState
                           detail: 'Almuerzo completo',
                           unitCents: lunchCents,
                           isLunch: true,
+                          admiteParaLlevar: true,
                         ),
                       ),
                       onIncrement: () => _changeQty('alm|combo', 1),
@@ -943,6 +1056,7 @@ class _RegistrarConsumoScreenState
                                         detail: item.lineDetail,
                                         unitCents: item.priceCents,
                                         isLunch: item.isLunch,
+                                        admiteParaLlevar: item.admiteParaLlevar,
                                       ),
                                     ),
                                     onIncrement: () =>
@@ -959,11 +1073,6 @@ class _RegistrarConsumoScreenState
         ),
       ),
       bottomNavigationBar: _CompactBottomBar(
-        paraLlevar: _paraLlevar,
-        takeawaySurchargeCents: takeawaySurchargeCents,
-        onToggleParaLlevar: (v) => setState(() => _paraLlevar = v),
-        quickNote: _quickNote,
-        onEditNote: _editQuickNote,
         totalItems: totalItems,
         totalCents: totalCents,
         charging: _charging,
@@ -1620,13 +1729,48 @@ class _TwoColumnGrid extends StatelessWidget {
   }
 }
 
+class _TakeoutToggleButton extends StatelessWidget {
+  const _TakeoutToggleButton({
+    required this.active,
+    required this.onTap,
+  });
+
+  final bool active;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    return Tooltip(
+      message: active ? 'Quitar envase para llevar' : 'Marcar para llevar',
+      child: Material(
+        color: active ? colors.primary : colors.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: BorderSide(
+            color: active ? colors.primary : colors.outlineVariant,
+          ),
+        ),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: onTap,
+          child: SizedBox(
+            width: 30,
+            height: 30,
+            child: Icon(
+              Icons.takeout_dining_outlined,
+              size: 16,
+              color: active ? colors.onPrimary : colors.onSurfaceVariant,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _CompactBottomBar extends StatelessWidget {
   const _CompactBottomBar({
-    required this.paraLlevar,
-    required this.takeawaySurchargeCents,
-    required this.onToggleParaLlevar,
-    required this.quickNote,
-    required this.onEditNote,
     required this.totalItems,
     required this.totalCents,
     required this.charging,
@@ -1636,11 +1780,6 @@ class _CompactBottomBar extends StatelessWidget {
     required this.onPrimaryAction,
   });
 
-  final bool paraLlevar;
-  final int takeawaySurchargeCents;
-  final ValueChanged<bool> onToggleParaLlevar;
-  final String quickNote;
-  final VoidCallback onEditNote;
   final int totalItems;
   final int totalCents;
   final bool charging;
@@ -1663,135 +1802,98 @@ class _CompactBottomBar extends StatelessWidget {
         top: false,
         bottom: true,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+          child: Row(
             children: [
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: [
-                    FilterChip(
-                      avatar: Icon(
-                        Icons.takeout_dining_outlined,
-                        size: 16,
-                        color: paraLlevar
-                            ? colors.onPrimaryContainer
-                            : colors.onSurfaceVariant,
-                      ),
-                      label: Text(
-                        'Para llevar (+${_fmt(takeawaySurchargeCents)})',
-                      ),
-                      visualDensity: VisualDensity.compact,
-                      selected: paraLlevar,
-                      onSelected: onToggleParaLlevar,
+              Expanded(
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(12),
+                  onTap: onShowDetails,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 4,
+                      horizontal: 4,
                     ),
-                    const SizedBox(width: 8),
-                    ActionChip(
-                      avatar: Icon(
-                        Icons.edit_note_rounded,
-                        size: 16,
-                        color: quickNote.isNotEmpty
-                            ? colors.primary
-                            : colors.onSurfaceVariant,
-                      ),
-                      label: Text(
-                        quickNote.isNotEmpty ? quickNote : 'Nota',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      visualDensity: VisualDensity.compact,
-                      onPressed: onEditNote,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(12),
-                      onTap: onShowDetails,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          vertical: 4,
-                          horizontal: 2,
-                        ),
-                        child: Column(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
                           mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  itemsLabel,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w700,
-                                    color: colors.onSurfaceVariant,
-                                  ),
+                            Flexible(
+                              child: Text(
+                                '$itemsLabel · ',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: colors.onSurfaceVariant,
                                 ),
-                                if (onShowDetails != null) ...[
-                                  const SizedBox(width: 2),
-                                  Icon(
-                                    Icons.expand_less_rounded,
-                                    size: 16,
-                                    color: colors.primary,
-                                  ),
-                                ],
-                              ],
+                              ),
                             ),
                             Text(
-                              'Total: ${_fmt(totalCents)}',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
+                              'Ver detalle',
                               style: TextStyle(
-                                fontSize: 15.5,
-                                fontWeight: FontWeight.w900,
-                                color: colors.onSurface,
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w700,
+                                color: colors.primary,
                               ),
+                            ),
+                            const SizedBox(width: 2),
+                            Icon(
+                              Icons.keyboard_arrow_up_rounded,
+                              size: 16,
+                              color: colors.primary,
                             ),
                           ],
                         ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  FilledButton(
-                    onPressed: ctaEnabled ? onPrimaryAction : null,
-                    style: FilledButton.styleFrom(
-                      minimumSize: const Size(116, 44),
-                      padding: const EdgeInsets.symmetric(horizontal: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius:
-                            BorderRadius.circular(AppTheme.buttonRadius),
-                      ),
-                    ),
-                    child: charging
-                        ? SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2.2,
-                              color: colors.onPrimary,
-                            ),
-                          )
-                        : Text(
-                            ctaLabel,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 13.5,
-                              fontWeight: FontWeight.w900,
-                            ),
+                        const SizedBox(height: 1),
+                        Text(
+                          'Total: ${_fmt(totalCents)}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w900,
+                            color: colors.onSurface,
                           ),
+                        ),
+                      ],
+                    ),
                   ),
-                ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              FilledButton(
+                onPressed: ctaEnabled ? onPrimaryAction : null,
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size(116, 44),
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius:
+                        BorderRadius.circular(AppTheme.buttonRadius),
+                  ),
+                ),
+                child: charging
+                    ? SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.2,
+                          color: colors.onPrimary,
+                        ),
+                      )
+                    : Text(
+                        ctaLabel,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
               ),
             ],
           ),
@@ -1805,17 +1907,17 @@ class _ChargeBottomSheet extends StatefulWidget {
   const _ChargeBottomSheet({
     required this.title,
     required this.totalCents,
-    required this.takeawaySurchargeCents,
+    required this.takeawayCount,
+    required this.takeawayFeeCents,
     required this.itemCount,
-    required this.initialTakeaway,
     this.planClientName,
   });
 
   final String title;
   final int totalCents;
-  final int takeawaySurchargeCents;
+  final int takeawayCount;
+  final int takeawayFeeCents;
   final int itemCount;
-  final bool initialTakeaway;
   final String? planClientName;
 
   @override
@@ -1824,7 +1926,6 @@ class _ChargeBottomSheet extends StatefulWidget {
 
 class _ChargeBottomSheetState extends State<_ChargeBottomSheet> {
   OwnerPayMethod _method = OwnerPayMethod.efectivo;
-  late bool _paraLlevar = widget.initialTakeaway;
   final TextEditingController _cash = TextEditingController();
 
   @override
@@ -1833,20 +1934,11 @@ class _ChargeBottomSheetState extends State<_ChargeBottomSheet> {
     super.dispose();
   }
 
-  int get _effectiveTotalCents {
-    final delta = _paraLlevar == widget.initialTakeaway
-        ? 0
-        : (_paraLlevar
-            ? widget.takeawaySurchargeCents
-            : -widget.takeawaySurchargeCents);
-    return (widget.totalCents + delta).clamp(0, 9999999);
-  }
-
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     final b = context.bocadooColors;
-    final effectiveTotal = _effectiveTotalCents;
+    final effectiveTotal = widget.totalCents;
     final isCash = _method == OwnerPayMethod.efectivo && effectiveTotal > 0;
     final receivedCents = isCash ? _parseCents(_cash.text) : null;
     final invalid =
@@ -1924,6 +2016,20 @@ class _ChargeBottomSheetState extends State<_ChargeBottomSheet> {
                         ),
                       ],
                     ),
+                    if (widget.takeawayCount > 0) ...[
+                      const SizedBox(height: 4),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          'Incluye ${widget.takeawayCount} envase(s) para llevar (+${_fmt(widget.takeawayFeeCents)})',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: colors.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    ],
                     if (widget.planClientName != null) ...[
                       const SizedBox(height: 4),
                       Align(
@@ -2011,30 +2117,8 @@ class _ChargeBottomSheetState extends State<_ChargeBottomSheet> {
                   ],
                 ),
               ],
-              const SizedBox(height: 12),
-              SwitchListTile.adaptive(
-                value: _paraLlevar,
-                onChanged: (v) => setState(() => _paraLlevar = v),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-                title: Text(
-                  'Para llevar (+${_fmt(widget.takeawaySurchargeCents)})',
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w800,
-                    color: colors.onSurface,
-                  ),
-                ),
-                subtitle: Text(
-                  'Opcional · Marca si el cliente retira el pedido',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: colors.onSurfaceVariant,
-                  ),
-                ),
-              ),
               if (isCash) ...[
-                const SizedBox(height: 6),
+                const SizedBox(height: 12),
                 Row(
                   children: [
                     Expanded(
@@ -2105,9 +2189,7 @@ class _ChargeBottomSheetState extends State<_ChargeBottomSheet> {
                 onPressed: canConfirm
                     ? () => Navigator.of(context).pop((
                           method: _method,
-                          paraLlevar: _paraLlevar,
                           changeCents: changeCents > 0 ? changeCents : 0,
-                          effectiveTotalCents: effectiveTotal,
                         ))
                     : null,
                 icon: const Icon(Icons.check_circle_outline_rounded),
