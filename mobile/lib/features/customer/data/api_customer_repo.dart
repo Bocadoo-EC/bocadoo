@@ -1534,6 +1534,7 @@ class ApiCustomerRepository implements ICustomerRepository {
         availableNow: estado == 'VIGENTE' && stockLeft > 0,
         appliesToday: estado == 'VIGENTE',
         reservable: false,
+        endsAt: DateTime.tryParse((o['expiraEn'] ?? '').toString()),
       ));
     }
 

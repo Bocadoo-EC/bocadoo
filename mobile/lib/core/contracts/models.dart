@@ -454,6 +454,10 @@ class RestaurantOffer {
   final bool appliesToday;
   final bool reservable;
 
+  /// Instante en que termina la oferta flash (`expiraEn` del backend).
+  /// `null` si el origen no lo informa: entonces no hay cronómetro.
+  final DateTime? endsAt;
+
   const RestaurantOffer({
     required this.id,
     required this.restaurantId,
@@ -465,7 +469,33 @@ class RestaurantOffer {
     this.availableNow = true,
     this.appliesToday = true,
     this.reservable = false,
+    this.endsAt,
   });
+
+  /// Oferta flash (de hoy) aún vigente y con cupos en el instante [now].
+  bool isActiveFlashAt(DateTime now) =>
+      appliesToday &&
+      availableNow &&
+      (endsAt == null || endsAt!.isAfter(now));
+
+  /// Oferta flash vigente u oferta programada (semanal): cuenta para el
+  /// filtro "Ofertas". Una flash vencida deja de contar.
+  bool isLiveAt(DateTime now) =>
+      !appliesToday || endsAt == null || endsAt!.isAfter(now);
+
+  RestaurantOffer withEndsAt(DateTime? value) => RestaurantOffer(
+        id: id,
+        restaurantId: restaurantId,
+        title: title,
+        badge: badge,
+        price: price,
+        originalPrice: originalPrice,
+        slotsLeft: slotsLeft,
+        availableNow: availableNow,
+        appliesToday: appliesToday,
+        reservable: reservable,
+        endsAt: value,
+      );
 }
 
 /// Plan que un local publica para que el comensal lo solicite.

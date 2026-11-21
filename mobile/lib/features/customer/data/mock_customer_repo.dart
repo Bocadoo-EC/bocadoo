@@ -133,12 +133,19 @@ class MockCustomerRepository implements ICustomerRepository {
       ];
     }
     final effectiveOpen = _store.storeOpenByRest[r.id] ?? r.isOpen;
+    final liveOffers = [
+      for (final o in r.offers)
+        if (o.appliesToday && o.endsAt == null)
+          o.withEndsAt(_mockOfferEndsAt(o.id))
+        else
+          o,
+    ];
     final filteredOffers = avail == MenuAvailabilityState.agotadoTotal
         ? [
-            for (final o in r.offers)
+            for (final o in liveOffers)
               if (!o.appliesToday) o,
           ]
-        : r.offers;
+        : liveOffers;
     if (!r.hasLocation) {
       return r.copyWith(
         occupancy: effectiveOcc,
@@ -647,6 +654,17 @@ class MockCustomerRepository implements ICustomerRepository {
     PlanTemplate(id: 'p-r4-mensual', restaurantId: 'r4', type: 'Mensual', name: 'Mensual USFQ', lunches: 20, priceCents: 6800, validityDays: 35),
   ];
 
+  /// Fin simulado de cada oferta flash mock (estable durante la sesión).
+  static final Map<String, DateTime> _mockOfferEnds = {};
+
+  static DateTime _mockOfferEndsAt(String offerId) {
+    final minutes = 20 + (offerId.hashCode.abs() % 40);
+    return _mockOfferEnds.putIfAbsent(
+      offerId,
+      () => DateTime.now().add(Duration(minutes: minutes)),
+    );
+  }
+
   static const List<Restaurant> _allRestaurants = [
     Restaurant(
       id: 'r1',
@@ -775,6 +793,17 @@ class MockCustomerRepository implements ICustomerRepository {
       takeawaySurcharge: 0.35,
       imageUrl:
           'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80',
+      offers: [
+        RestaurantOffer(
+          id: 'of-r4-1',
+          restaurantId: 'r4',
+          title: 'Lomo saltado con jugo',
+          badge: 'Flash · Quedan 8 cupos',
+          price: 2.99,
+          originalPrice: 3.75,
+          slotsLeft: 8,
+        ),
+      ],
       todayMenu: [
         MenuItem(id: 'r4-s1', name: 'Sopa campesina de lenteja con queso', category: 'Sopa', isVeggie: true),
         MenuItem(id: 'r4-m1', name: 'Lomo saltado criollo con papas rústicas', category: 'Plato Fuerte', price: 3.75),

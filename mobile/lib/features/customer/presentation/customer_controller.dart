@@ -23,8 +23,20 @@ enum CustomerStatus { initial, loading, success, error }
 /// Qué QR muestra Mi Pase. El orden es la prioridad por defecto.
 enum QrMode { preorden, mesa, plan }
 
-/// Filtros de Dónde comer. Se combinan entre sí (Y).
-enum RestaurantFilter { near, withPlan, free, offers }
+/// Filtros de Dónde comer.
+///
+/// `near` es un filtro de zona (Planes/Mapa) que se combina con todo. Los
+/// accesos rápidos ([fastService], [available], [withPlan], [offers]) son
+/// excluyentes entre sí: tocar uno activo lo desactiva.
+enum RestaurantFilter { near, fastService, available, withPlan, offers }
+
+/// Filtros de acceso rápido de Dónde comer (excluyentes entre sí).
+const quickAccessFilters = {
+  RestaurantFilter.fastService,
+  RestaurantFilter.available,
+  RestaurantFilter.withPlan,
+  RestaurantFilter.offers,
+};
 
 /// Banner de deshacer visible durante unos segundos.
 @immutable
@@ -138,9 +150,59 @@ class CustomerUiState {
         QrMode.plan => currentPass?.qrToken ?? '',
       };
 
+  /// Estado público efectivo del local (aforo, agotado, cerrado) para el feed.
+  RestaurantPublicStatus publicStatusFor(Restaurant r) {
+    var menuAvail = menuAvailabilityFor(r.id);
+    if (r.isMenuSoldOutToday) menuAvail = MenuAvailabilityState.agotadoTotal;
+    return resolveRestaurantPublicStatus(
+      menuAvailability: menuAvail,
+      manual: parseManualOccupancy(r.occupancy),
+      isOpen: r.isOpen,
+      fullUntil: r.fullUntil,
+      ignoreClock: true,
+    );
+  }
+
+  /// `true` si el local publicó su menú del día (aunque esté agotado).
+  bool hasPublishedMenu(Restaurant r) =>
+      menuAvailabilityFor(r.id) != MenuAvailabilityState.sinPublicar &&
+      !(AppMode.useMock && r.todayMenu.isEmpty);
+
+  /// El comensal tiene un plan prepagado activo en este local.
+  bool userHasActivePlan(Restaurant r) => r.hasPlan || passFor(r.id) != null;
+
+  /// Local con menú publicado, no agotado y abierto.
+  bool _isOrderable(Restaurant r) {
+    final st = publicStatusFor(r);
+    return hasPublishedMenu(r) && !st.isSoldOutToday && !st.isClosed;
+  }
+
+  /// Prioridad de orden: Libre → Medio → Lleno → agotado / sin menú / cerrado.
+  int _rankFor(Restaurant r) {
+    if (!_isOrderable(r)) return 3;
+    return switch (publicStatusFor(r).effective) {
+      RestaurantEffectiveStatus.libre => 0,
+      RestaurantEffectiveStatus.concurrido => 1,
+      RestaurantEffectiveStatus.lleno => 2,
+      _ => 3,
+    };
+  }
+
+  /// Ofertas flash activas de todos los locales (con cupos y sin vencer).
+  List<(Restaurant, RestaurantOffer)> activeFlashOffers([DateTime? at]) {
+    final now = at ?? DateTime.now();
+    return [
+      for (final r in restaurants)
+        if (!publicStatusFor(r).isSoldOutToday && !publicStatusFor(r).isClosed)
+          for (final o in r.offers)
+            if (o.isActiveFlashAt(now)) (r, o),
+    ];
+  }
+
   List<Restaurant> get filteredRestaurants {
     final q = searchQuery.trim().toLowerCase();
-    return restaurants.where((r) {
+    final now = DateTime.now();
+    final matches = restaurants.where((r) {
       if (q.isNotEmpty) {
         final matchesText = r.name.toLowerCase().contains(q) ||
             r.featuredDish.toLowerCase().contains(q) ||
@@ -162,26 +224,39 @@ class CustomerUiState {
         );
         if (meters > searchRadiusMeters!) return false;
       }
-      if (filters.contains(RestaurantFilter.withPlan) && !r.hasPlan) {
+      // Atención rápida: Libre/Medio, o Lleno solo si el usuario tiene plan.
+      if (filters.contains(RestaurantFilter.fastService)) {
+        if (!_isOrderable(r)) return false;
+        final effective = publicStatusFor(r).effective;
+        final openSeats = effective == RestaurantEffectiveStatus.libre ||
+            effective == RestaurantEffectiveStatus.concurrido;
+        final vipFull = effective == RestaurantEffectiveStatus.lleno &&
+            userHasActivePlan(r);
+        if (!openSeats && !vipFull) return false;
+      }
+      // Disponibles: menú publicado y no agotado (Libre, Medio y Lleno).
+      if (filters.contains(RestaurantFilter.available) && !_isOrderable(r)) {
         return false;
       }
-      if (filters.contains(RestaurantFilter.free)) {
-        final effective = resolveRestaurantPublicStatus(
-          menuAvailability: menuAvailabilityFor(r.id),
-          manual: parseManualOccupancy(r.occupancy),
-          isOpen: r.isOpen,
-          fullUntil: r.fullUntil,
-          ignoreClock: true,
-        ).effective;
-        if (effective != RestaurantEffectiveStatus.libre) {
-          return false;
-        }
+      // Con mi plan: sin importar el aforo.
+      if (filters.contains(RestaurantFilter.withPlan) && !userHasActivePlan(r)) {
+        return false;
       }
-      if (filters.contains(RestaurantFilter.offers) && !r.hasOffer) {
+      // Ofertas: al menos una flash vigente o una oferta semanal.
+      if (filters.contains(RestaurantFilter.offers) &&
+          !r.offers.any((o) => o.isLiveAt(now))) {
         return false;
       }
       return true;
     }).toList();
+
+    // Orden estable por aforo (conserva el orden de cercanía dentro de cada grupo).
+    final indexed = [for (var i = 0; i < matches.length; i++) (i, matches[i])]
+      ..sort((a, b) {
+        final byRank = _rankFor(a.$2).compareTo(_rankFor(b.$2));
+        return byRank != 0 ? byRank : a.$1.compareTo(b.$1);
+      });
+    return [for (final e in indexed) e.$2];
   }
 
   CustomerPass? passFor(String restaurantId) {
@@ -1124,7 +1199,13 @@ class CustomerController extends ChangeNotifier {
 
   void toggleFilter(RestaurantFilter filter) {
     final next = {..._state.filters};
-    if (!next.remove(filter)) next.add(filter);
+    if (!next.remove(filter)) {
+      // Los accesos rápidos son excluyentes: activar uno apaga los demás.
+      if (quickAccessFilters.contains(filter)) {
+        next.removeAll(quickAccessFilters);
+      }
+      next.add(filter);
+    }
     _emit(_state.copyWith(filters: next));
   }
 

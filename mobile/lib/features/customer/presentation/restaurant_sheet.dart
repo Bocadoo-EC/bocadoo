@@ -113,7 +113,8 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
       soupId: _breakfastMode ? null : _soupId,
       mainId: _breakfastMode ? null : _mainId,
       breakfastId: _breakfastMode ? _breakfastId : null,
-      takeaway: _takeaway,
+      // Salón lleno: el pedido siempre es para llevar.
+      takeaway: _takeaway || ref.read(restaurantPublicStatusProvider(r.id)).isFull,
       estimatedArrival: _resolveArrivalHhmm(),
     );
     if (!mounted) return;
@@ -191,6 +192,9 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
         .where((b) => b.id == _breakfastId && !b.isSoldOut)
         .firstOrNull;
     final publicStatus = ref.watch(restaurantPublicStatusProvider(r.id));
+    // Lleno = solo para llevar: se fuerza la modalidad y se bloquea "comer aquí".
+    final forceTakeaway = publicStatus.isFull;
+    final takeaway = forceTakeaway || _takeaway;
     final isClosed = publicStatus.isClosed;
     final menuSoldOutAll = publicStatus.isSoldOutToday ||
         (breakfastMode
@@ -290,14 +294,49 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
                   _IncludedBox(juice: r.juice, dessert: r.dessert),
                 ],
                 const SizedBox(height: 16),
+                if (forceTakeaway) ...[
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: context.bocadooColors.dangerContainer,
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          Icons.info_outline_rounded,
+                          size: 18,
+                          color: context.bocadooColors.onDangerContainer,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Este local tiene el salón lleno por los próximos '
+                            'minutos. Puedes ordenar solo para llevar y retirar '
+                            'rápido en caja.',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: context.bocadooColors.onDangerContainer,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                ],
                 Row(
                   children: [
                     Expanded(
                       child: _ChoiceButton(
                         label: 'Para comer aquí',
                         icon: Icons.restaurant_rounded,
-                        selected: !_takeaway,
-                        onTap: () => setState(() => _takeaway = false),
+                        selected: !takeaway,
+                        onTap: forceTakeaway
+                            ? null
+                            : () => setState(() => _takeaway = false),
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -306,7 +345,7 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
                         label:
                             'Para llevar (+ ${formatMoney(r.takeawaySurcharge)})',
                         icon: Icons.takeout_dining_outlined,
-                        selected: _takeaway,
+                        selected: takeaway,
                         onTap: () => setState(() => _takeaway = true),
                       ),
                     ),
@@ -396,7 +435,7 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
                           ? Money.toCents(chosenBreakfast?.price ?? r.singleLunchPrice)
                           : Money.toCents(r.singleLunchPrice);
                       final surchargeCents =
-                          _takeaway ? Money.toCents(r.takeawaySurcharge) : 0;
+                          takeaway ? Money.toCents(r.takeawaySurcharge) : 0;
                       final totalCents =
                           hasPlanHere ? 0 : baseCents + surchargeCents;
                       return Column(
@@ -896,7 +935,9 @@ class _ChoiceButton extends StatelessWidget {
   final String label;
   final IconData icon;
   final bool selected;
-  final VoidCallback onTap;
+
+  /// `null` deshabilita la opción (opacidad 0.5, no seleccionable).
+  final VoidCallback? onTap;
 
   const _ChoiceButton({
     required this.label,
@@ -909,7 +950,9 @@ class _ChoiceButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     final fg = selected ? colors.onPrimaryContainer : colors.onSurface;
-    return Material(
+    return Opacity(
+      opacity: onTap == null ? 0.5 : 1,
+      child: Material(
       color: selected ? colors.primaryContainer : colors.surface,
       shape: StadiumBorder(
         side: BorderSide(
@@ -947,6 +990,7 @@ class _ChoiceButton extends StatelessWidget {
           ),
         ),
       ),
+    ),
     );
   }
 }

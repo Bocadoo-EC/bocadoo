@@ -13,6 +13,7 @@ import '../../customer/presentation/customer_widgets.dart'
 import '../../customer/presentation/social_widgets.dart';
 import 'group_order_models.dart';
 import 'group_order_simulation_provider.dart';
+import 'widgets/daily_menu_accordion_selector.dart';
 
 /// Selector compartido de menú diario + modalidad obligatoria (Paso 1 e Invitado).
 class GroupDailyMenuSelector extends StatelessWidget {
@@ -33,82 +34,14 @@ class GroupDailyMenuSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.colorScheme;
-
-    Widget chipGroup(
-      String title,
-      List<String> options,
-      String? current,
-      ValueChanged<String> onPick,
-    ) {
-      if (options.isEmpty) return const SizedBox.shrink();
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-              color: colors.onSurfaceVariant,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Wrap(
-            spacing: 8,
-            runSpacing: 6,
-            children: [
-              for (final opt in options)
-                ChoiceChip(
-                  label: Text(opt),
-                  selected: current == opt,
-                  onSelected: enabled ? (_) => onPick(opt) : null,
-                ),
-            ],
-          ),
-        ],
-      );
-    }
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: Theme.of(context).scaffoldBackgroundColor,
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: colors.outlineVariant),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (dailyMenu.soups.isNotEmpty) ...[
-                chipGroup(
-                  'Sopa',
-                  dailyMenu.soups,
-                  selection.soup,
-                  (v) => onChanged(selection.copyWith(soup: v)),
-                ),
-                const SizedBox(height: 12),
-              ],
-              if (dailyMenu.mains.isNotEmpty) ...[
-                chipGroup(
-                  'Segundo / Opción Fit',
-                  dailyMenu.mains,
-                  selection.main,
-                  (v) => onChanged(selection.copyWith(main: v)),
-                ),
-                const SizedBox(height: 12),
-              ],
-              chipGroup(
-                'Bebida',
-                dailyMenu.drinks,
-                selection.drink,
-                (v) => onChanged(selection.copyWith(drink: v)),
-              ),
-            ],
-          ),
+        DailyMenuAccordionSelector(
+          dailyMenu: dailyMenu,
+          selection: selection,
+          onChanged: onChanged,
+          enabled: enabled,
         ),
         const SizedBox(height: 12),
         const SocialLabel('Modalidad de consumo'),
@@ -194,12 +127,7 @@ class _GuestGroupOrderScreenState extends ConsumerState<GuestGroupOrderScreen> {
     if (localSession != null) {
       _session = localSession;
       _menu = localSession.dailyMenu;
-      _selection = GroupOrderDishSelection(
-        soup: localSession.dailyMenu.soups.firstOrNull,
-        main: localSession.dailyMenu.mains.firstOrNull,
-        drink: localSession.dailyMenu.drinks.firstOrNull,
-        takeaway: false,
-      );
+      _selection = const GroupOrderDishSelection();
       setState(() => _loading = false);
       return;
     }
@@ -231,12 +159,7 @@ class _GuestGroupOrderScreenState extends ConsumerState<GuestGroupOrderScreen> {
       setState(() {
         _remoteTable = table;
         _menu = menu;
-        _selection = GroupOrderDishSelection(
-          soup: menu.soups.firstOrNull,
-          main: menu.mains.firstOrNull,
-          drink: menu.drinks.firstOrNull,
-          takeaway: false,
-        );
+        _selection = const GroupOrderDishSelection();
         _loading = false;
       });
     } catch (_) {
@@ -274,7 +197,7 @@ class _GuestGroupOrderScreenState extends ConsumerState<GuestGroupOrderScreen> {
           final updated = await ref.read(customerRepositoryProvider).joinTable(
                 _session?.tableId ?? _remoteTable!.id,
                 name: guestName,
-                soup: _selection.soup ?? '',
+                soup: _selection.cleanSoup ?? '',
                 main: _selection.main ?? '',
                 takeaway: _selection.takeaway,
               );
@@ -341,6 +264,8 @@ class _GuestGroupOrderScreenState extends ConsumerState<GuestGroupOrderScreen> {
     final notFound = !_loading && !_failed && session == null && remote == null;
     final isFrozen = session?.isOrderFrozen ?? false;
     final menu = _menu;
+    final canConfirm =
+        !_submitting && menu != null && _selection.isCompleteFor(menu);
 
     return Scaffold(
       backgroundColor: colors.surface,
@@ -518,7 +443,7 @@ class _GuestGroupOrderScreenState extends ConsumerState<GuestGroupOrderScreen> {
 
                             // 4. CTA único
                             ElevatedButton(
-                              onPressed: _submitting ? null : _confirmAndJoin,
+                              onPressed: canConfirm ? _confirmAndJoin : null,
                               child: _submitting
                                   ? SizedBox(
                                       width: 22,

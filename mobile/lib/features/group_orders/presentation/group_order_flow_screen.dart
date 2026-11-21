@@ -182,7 +182,7 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
               id: p.id,
               name: p.name,
               isHost: p.isHost,
-              soup: p.selection.soup,
+              soup: p.selection.cleanSoup,
               main: p.selection.main,
               takeaway: p.selection.takeaway,
             ),
@@ -304,18 +304,10 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
   void _syncDefaultDishes(Restaurant? r) {
     final menu = _dailyMenuFor(r);
     final isFull = _isRestaurantFull(r?.id);
-    _dishSelection = GroupOrderDishSelection(
-      soup: menu.soups.contains(_dishSelection.soup)
-          ? _dishSelection.soup
-          : menu.soups.firstOrNull,
-      main: menu.mains.contains(_dishSelection.main)
-          ? _dishSelection.main
-          : menu.mains.firstOrNull,
-      drink: menu.drinks.contains(_dishSelection.drink)
-          ? _dishSelection.drink
-          : menu.drinks.firstOrNull,
-      takeaway: isFull ? true : _dishSelection.takeaway,
-    );
+    // Sin preselección: solo se descartan elecciones que ya no están publicadas.
+    _dishSelection = _dishSelection
+        .sanitizedFor(menu)
+        .copyWith(takeaway: isFull ? true : _dishSelection.takeaway);
   }
 
   DateTime _dateTimeFromHhmm(String hhmm) {
@@ -385,7 +377,12 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
     final rid = _restaurantId;
     final restaurant = _restaurantFor(rid);
     final menu = _dailyMenuFor(restaurant);
-    if (rid == null || !_isEstimatedTimeValid || !menu.hasActiveDishes) return;
+    if (rid == null ||
+        !_isEstimatedTimeValid ||
+        !menu.hasActiveDishes ||
+        !_dishSelection.isCompleteFor(menu)) {
+      return;
+    }
 
     final hostLunches = _hostRemainingLunches(rid);
     if (_selectedMode == TableMode.hostPays && hostLunches < _partySize) {
@@ -740,7 +737,9 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
                   ),
                   const SizedBox(height: 16),
                   ElevatedButton(
-                    onPressed: () => Navigator.of(ctx).pop(draft),
+                    onPressed: draft.isCompleteFor(menu)
+                        ? () => Navigator.of(ctx).pop(draft)
+                        : null,
                     child: const Text('Guardar elección'),
                   ),
                 ],
@@ -999,12 +998,10 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
     final canSubmitStep1 = rid != null &&
         _isEstimatedTimeValid &&
         !hasInsufficientLunches &&
-        dailyMenu.hasActiveDishes;
+        dailyMenu.hasActiveDishes &&
+        _dishSelection.isCompleteFor(dailyMenu);
 
-    final dishSelection = GroupOrderDishSelection(
-      soup: _dishSelection.soup ?? dailyMenu.soups.firstOrNull,
-      main: _dishSelection.main ?? dailyMenu.mains.firstOrNull,
-      drink: _dishSelection.drink ?? dailyMenu.drinks.firstOrNull,
+    final dishSelection = _dishSelection.copyWith(
       takeaway: isFull ? true : _dishSelection.takeaway,
     );
 

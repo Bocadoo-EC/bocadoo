@@ -122,10 +122,12 @@ class GroupOrderSimulationStore extends ChangeNotifier {
             for (final p in s.participants)
               PendingTableMemberDish(
                 memberName: p.name,
-                soup: p.selection.soup,
+                soup: p.selection.cleanSoup,
                 main: [
                   if ((p.selection.main ?? '').isNotEmpty) p.selection.main!,
-                  if ((p.selection.drink ?? '').isNotEmpty) p.selection.drink!,
+                  ?p.selection.cleanDrink,
+                  if ((p.selection.dessert ?? '').isNotEmpty)
+                    p.selection.dessert!,
                 ].join(' · '),
                 takeaway: p.selection.takeaway,
                 hasPlan: p.paidByPlan,
