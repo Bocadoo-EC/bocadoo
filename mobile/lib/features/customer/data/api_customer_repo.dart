@@ -257,6 +257,15 @@ class ApiCustomerRepository implements ICustomerRepository {
   @override
   Future<CustomerPass?> getCachedPass() async {
     final pass = await _passCache.getPass();
+    final sessionUid = _session?.userId;
+    if (pass != null &&
+        sessionUid != null &&
+        sessionUid.isNotEmpty &&
+        pass.userId.isNotEmpty &&
+        pass.userId != sessionUid) {
+      await _passCache.clear();
+      return null;
+    }
     if (pass != null && pass.id.isNotEmpty && pass.restaurantId.isNotEmpty) {
       _restaurantByPassId[pass.id] = pass.restaurantId;
     }

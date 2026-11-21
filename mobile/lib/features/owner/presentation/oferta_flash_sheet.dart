@@ -1,19 +1,41 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../../core/config/api_capabilities.dart';
 import '../../../core/config/app_mode.dart';
+import '../../../core/contracts/models.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/utils/formatters.dart';
+import '../../customer/presentation/widgets/flash_offers_sync.dart';
 import '../domain/models/cash_models.dart';
+import '../../group_orders/presentation/group_order_models.dart' as go;
+import '../../group_orders/presentation/widgets/daily_menu_accordion_selector.dart';
+import '../domain/models/daily_menu.dart';
 import 'owner_controller.dart';
 import 'owner_format.dart';
 import 'owner_widgets.dart';
 
-const _soloPlateDiscount = 0.50;
 const _weekDays = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+const _fixedLimitChips = [
+  TimeOfDay(hour: 13, minute: 30),
+  TimeOfDay(hour: 14, minute: 0),
+  TimeOfDay(hour: 14, minute: 30),
+];
+const _minLeadMinutes = 10;
+const _stepTitles = ['¿Qué vas a liquidar?', 'Descuento y cupos', 'Vigencia'];
 
-/// O11 · Oferta flash: liquidación de hoy o promo programada en horas muertas.
+// TODO: Reemplazar por los precios "solo segundo" y "solo sopa" configurados en
+// el menú del día cuando el backend los exponga (hoy solo existe el almuerzo).
+const _soloMainDiscount = 0.50;
+const _soloSoupDiscount = 1.00;
+const _minComboPrice = 0.50;
+
+bool _isSentinel(String? v) => v == null || v.startsWith('Sin ');
+
+/// O11 · Oferta flash: un plato por oferta (stepper de 3 pasos) o promo
+/// programada en horas muertas. Un local puede publicar N ofertas flash.
 class FlashOfferSheet extends ConsumerStatefulWidget {
   const FlashOfferSheet({super.key});
 
@@ -24,11 +46,19 @@ class FlashOfferSheet extends ConsumerStatefulWidget {
 class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
   OfferKind _kind = OfferKind.flash;
 
-  bool _menuDeHoy = true;
-  int? _flashDiscount = 10;
-  int _flashSlots = 10;
-  String _until = '14:00';
+  // Flash · paso 1
+  int _step = 0;
+  go.GroupOrderDishSelection _sel = const go.GroupOrderDishSelection();
 
+  // Flash · paso 2
+  int? _flashDiscount = 10;
+  int? _flashSlots = 10;
+  final _slotsOther = TextEditingController();
+
+  // Flash · paso 3
+  TimeOfDay? _until;
+
+  // Promo programada
   final _title = TextEditingController();
   final Set<int> _days = {2, 4};
   TimeOfDay _from = const TimeOfDay(hour: 16, minute: 0);
@@ -42,6 +72,7 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
 
   @override
   void dispose() {
+    _slotsOther.dispose();
     _title.dispose();
     _manual.dispose();
     super.dispose();
@@ -49,16 +80,134 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
 
   bool get _isFlash => _kind == OfferKind.flash;
 
-  int get _discount {
-    final preset = _isFlash ? _flashDiscount : _progDiscount;
-    if (preset != null) return preset;
-    return (int.tryParse(_manual.text) ?? 0).clamp(0, 90);
-  }
-
   static String _hhmm(TimeOfDay t) =>
       '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 
   static int _minutes(TimeOfDay t) => t.hour * 60 + t.minute;
+
+  int _discountOf(int? preset) {
+    if (preset != null) return preset;
+    return (int.tryParse(_manual.text) ?? 0).clamp(0, 90);
+  }
+
+  int get _discount => _discountOf(_isFlash ? _flashDiscount : _progDiscount);
+
+  int get _slots {
+    if (!_isFlash) return _progSlots;
+    return _flashSlots ?? (int.tryParse(_slotsOther.text) ?? 0);
+  }
+
+  // ── Menú de hoy ──────────────────────────────────────────────────────────
+
+  List<DailyMenuCourse> _coursesOf(DailyMenu? menu, String category) {
+    if (menu == null || !menu.isPublished) return const [];
+    return [
+      for (final c in menu.courses)
+        if (!c.isSoldOut && c.category.trim().toLowerCase() == category) c,
+    ];
+  }
+
+  go.DailyMenu _toSelectorMenu(DailyMenu menu) {
+    List<String> names(String category) =>
+        [for (final c in _coursesOf(menu, category)) c.name];
+    final mains = names('fuerte');
+    return go.DailyMenu(
+      restaurantId: menu.restaurantId,
+      restaurantName: '',
+      soups: names('sopa'),
+      mains: mains,
+      drinks: [...names('jugo'), ...names('bebida')],
+      desserts: names('postre'),
+      mainTags: {
+        for (final m in mains)
+          if (m.toLowerCase().contains('fit')) m: 'Fit',
+      },
+      isPublished: true,
+    );
+  }
+
+  bool get _hasSoup => !_isSentinel(_sel.soup);
+  bool get _hasMain => !_isSentinel(_sel.main);
+
+  /// Ítems elegidos, sin "Sin sopa" / "Sin segundo" / "Sin bebida" / "Sin postre".
+  List<String> get _chosenItems => [
+        for (final v in [_sel.soup, _sel.main, _sel.drink, _sel.dessert])
+          if (!_isSentinel(v)) v!,
+      ];
+
+  String get _comboTitle {
+    final t = _chosenItems.join(' + ');
+    return t.length <= 80 ? t : '${t.substring(0, 79)}…';
+  }
+
+  /// Sopa + segundo = almuerzo completo; solo segundo o solo sopa descuentan
+  /// del precio del almuerzo (bebida y postre no tienen precio propio).
+  double _basePrice(double lunch) {
+    final double base;
+    if (_hasSoup && _hasMain) {
+      base = lunch;
+    } else if (_hasMain) {
+      base = lunch - _soloMainDiscount;
+    } else {
+      base = lunch - _soloSoupDiscount;
+    }
+    return base < _minComboPrice ? _minComboPrice : base;
+  }
+
+  String? _dishIdFor(DailyMenu? menu) {
+    final name = _hasMain ? _sel.main : _sel.soup;
+    final category = _hasMain ? 'fuerte' : 'sopa';
+    return _coursesOf(menu, category).where((c) => c.name == name).firstOrNull?.dishId;
+  }
+
+  // ── Vigencia ─────────────────────────────────────────────────────────────
+
+  /// Hora local de Ecuador (marcada como UTC para comparar solo hora de pared).
+  static DateTime get _ecNow => EcuadorTime.now();
+
+  static DateTime _atToday(TimeOfDay t) {
+    final n = _ecNow;
+    return DateTime.utc(n.year, n.month, n.day, t.hour, t.minute);
+  }
+
+  static bool _isValidLimit(TimeOfDay t) =>
+      _atToday(t).isAfter(_ecNow.add(const Duration(minutes: _minLeadMinutes)));
+
+  /// 13:30 / 14:00 / 14:30 mientras sigan vigentes; si ya pasaron, tres
+  /// intervalos de 30 min a partir de la próxima media hora disponible.
+  static List<TimeOfDay> _limitChips() {
+    final fixed = [for (final t in _fixedLimitChips) if (_isValidLimit(t)) t];
+    if (fixed.isNotEmpty) return fixed;
+    final threshold = _ecNow.add(const Duration(minutes: _minLeadMinutes));
+    final first = DateTime.utc(
+      threshold.year,
+      threshold.month,
+      threshold.day,
+      threshold.hour,
+      threshold.minute < 30 ? 30 : 60,
+    );
+    return [
+      for (var i = 0; i < 3; i++)
+        if (first.add(Duration(minutes: 30 * i)).day == threshold.day)
+          TimeOfDay.fromDateTime(first.add(Duration(minutes: 30 * i))),
+    ];
+  }
+
+  Future<void> _pickLimit() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _until ?? TimeOfDay.fromDateTime(_ecNow.add(const Duration(minutes: 30))),
+    );
+    if (picked == null || !mounted) return;
+    if (!_isValidLimit(picked)) {
+      setState(() => _error = 'Elige una hora al menos $_minLeadMinutes minutos después de ahora');
+      return;
+    }
+    setState(() {
+      _until = picked;
+      _error = null;
+    });
+  }
 
   Future<void> _pickTime(bool from) async {
     final picked = await showTimePicker(context: context, initialTime: from ? _from : _to);
@@ -72,7 +221,50 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
     });
   }
 
-  Future<void> _publish(double basePrice) async {
+  // ── Flujo del stepper ────────────────────────────────────────────────────
+
+  bool _validateStep(double? base) {
+    if (_step == 0) return _hasSoup || _hasMain;
+    if (_step == 1) {
+      final discount = _discount;
+      if (discount <= 0) {
+        setState(() => _error = 'Elige un descuento');
+        return false;
+      }
+      if (base == null || base * (100 - discount) / 100 >= base) {
+        setState(() => _error = 'El precio de oferta debe ser menor al precio normal');
+        return false;
+      }
+      final slots = _slots;
+      if (slots < 1 || slots > 1000) {
+        setState(() => _error = 'Los cupos deben estar entre 1 y 1000');
+        return false;
+      }
+      return true;
+    }
+    return true;
+  }
+
+  void _next(double? base) {
+    FocusScope.of(context).unfocus();
+    if (!_validateStep(base)) return;
+    setState(() {
+      _error = null;
+      _step += 1;
+    });
+  }
+
+  void _back() {
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _error = null;
+      _step -= 1;
+    });
+  }
+
+  // ── Publicación ──────────────────────────────────────────────────────────
+
+  Future<void> _publish({required double base, String? dishId}) async {
     final discount = _discount;
     if (discount <= 0) {
       setState(() => _error = 'Elige un descuento');
@@ -86,16 +278,44 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
       setState(() => _error = 'La hora de inicio debe ser antes del final');
       return;
     }
-    final price = (basePrice * (100 - discount) / 100 * 100).roundToDouble() / 100;
-    final slots = _isFlash ? _flashSlots : _progSlots;
+    final until = _until;
+    if (_isFlash && until == null) {
+      setState(() => _error = 'Elige hasta qué hora vale la oferta');
+      return;
+    }
+    if (_isFlash && !_isValidLimit(until!)) {
+      setState(() => _error = 'La hora límite debe ser al menos $_minLeadMinutes minutos después de ahora');
+      return;
+    }
+
+    final price = (base * (100 - discount) / 100 * 100).roundToDouble() / 100;
+    final slots = _slots;
+    final dishName = _comboTitle;
+
+    if (_isFlash) {
+      final active = ref.read(activeOffersProvider).value ?? const <FlashOffer>[];
+      final duplicated = active.any(
+        (o) =>
+            o.kind == OfferKind.flash &&
+            o.title.trim().toLowerCase() == dishName.toLowerCase(),
+      );
+      if (duplicated) {
+        setState(() => _error = 'Ya tienes una oferta activa para "$dishName"');
+        return;
+      }
+    }
+
     final offer = _isFlash
         ? FlashOffer(
             kind: OfferKind.flash,
-            title: _menuDeHoy ? 'Menú de hoy' : 'Plato suelto',
+            title: dishName,
+            dishId: dishId,
             discountPercent: discount,
             slots: slots,
+            slotsTotal: slots,
             price: price,
-            validUntil: _until,
+            originalPrice: base,
+            validUntil: _hhmm(until!),
           )
         : FlashOffer(
             kind: OfferKind.programada,
@@ -117,9 +337,9 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
     final container = ProviderScope.containerOf(context, listen: false);
     final repo = ref.read(ownerCashRepositoryProvider);
     final rid = ref.read(ownerRestaurantIdProvider);
-    final ok = await repo.publishOffer(rid, offer);
+    final offerId = await repo.publishOffer(rid, offer);
     if (!mounted) return;
-    if (!ok) {
+    if (offerId == null) {
       final apiErr = AppMode.useMock
           ? null
           : ref.read(apiOwnerRepositoryProvider).consumeLastError();
@@ -129,33 +349,63 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
       });
       return;
     }
-    container.invalidate(activeOfferProvider);
+    container.invalidate(activeOffersProvider);
+    if (_isFlash && until != null) {
+      final now = DateTime.now();
+      final endsAt = DateTime(
+        now.year,
+        now.month,
+        now.day,
+        until.hour,
+        until.minute,
+      );
+      FlashOffersLiveSync.instance.notifyPublished(
+        restaurantId: rid,
+        offer: RestaurantOffer(
+          id: offerId,
+          restaurantId: rid,
+          title: dishName,
+          badge: discount > 0 ? '-$discount% · $dishName' : dishName,
+          price: price,
+          originalPrice: base,
+          slotsLeft: slots,
+          availableNow: true,
+          appliesToday: true,
+          reservable: false,
+          endsAt: endsAt,
+        ),
+      );
+    }
     navigator.pop(true);
-    showUndoSnackBar(messenger, label: 'Oferta publicada ($slots cupos)', onUndo: () async {
-      await repo.cancelOffer(rid);
-      container.invalidate(activeOfferProvider);
-    });
-  }
-
-  Future<void> _cancelActive() async {
-    final messenger = ScaffoldMessenger.of(context);
-    final navigator = Navigator.of(context);
-    final container = ProviderScope.containerOf(context, listen: false);
-    await ref.read(ownerCashRepositoryProvider).cancelOffer(ref.read(ownerRestaurantIdProvider));
-    if (!mounted) return;
-    container.invalidate(activeOfferProvider);
-    navigator.pop(true);
-    showInfoSnackBar(messenger, 'Oferta cancelada sin costo');
+    showUndoSnackBar(
+      messenger,
+      label: _isFlash ? '$dishName · $slots cupos publicados' : 'Promo publicada ($slots cupos)',
+      onUndo: () async {
+        await repo.cancelOffer(rid, offerId: offerId);
+        FlashOffersLiveSync.instance.notifyRemoved(
+          restaurantId: rid,
+          offerId: offerId,
+        );
+        container.invalidate(activeOffersProvider);
+      },
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     final lunchPrice = ref.watch(lunchPriceProvider).value ?? 3.0;
-    final active = ref.watch(activeOfferProvider).value;
-    final base = _isFlash && !_menuDeHoy ? lunchPrice - _soloPlateDiscount : lunchPrice;
+    final menuAsync = ref.watch(posMenuProvider);
+    final menu = menuAsync.value;
+    final menuLoaded = menuAsync.hasValue || menuAsync.hasError;
+    final menuOk = (menu?.isPublished ?? false) &&
+        (_coursesOf(menu, 'sopa').isNotEmpty || _coursesOf(menu, 'fuerte').isNotEmpty);
+    final blocked = _isFlash && menuLoaded && !menuOk;
+
+    final double base = _isFlash ? _basePrice(lunchPrice) : lunchPrice;
     final discount = _discount;
     final newPrice = base * (100 - discount) / 100;
+    final lastStep = _step == _stepTitles.length - 1;
 
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
@@ -180,23 +430,6 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
               icon: const Icon(Icons.close_rounded),
             ),
           ]),
-          if (active != null) ...[
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
-              decoration: BoxDecoration(
-                color: colors.primaryContainer,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Row(children: [
-                Expanded(
-                  child: Text('Activa: ${active.title} · ${active.slots} cupos a ${OwnerFormat.money(active.price)}',
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: colors.onPrimaryContainer)),
-                ),
-                TextButton(onPressed: _cancelActive, child: const Text('Cancelar oferta')),
-              ]),
-            ),
-          ],
           if (ApiCapabilities.flashScheduledOffer) ...[
             const SizedBox(height: 14),
             Container(
@@ -235,113 +468,257 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
             ),
           ],
           const SizedBox(height: 10),
-          Text(
-            _isFlash
-                ? 'Vende hoy lo que te sobró: tu plato o combo con descuento, por pocos cupos y hasta una hora de hoy.'
-                : 'Atrae clientes en los días y horas de poco movimiento. Se repite cada semana durante 30 días.',
-            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, height: 1.35, color: colors.onSurfaceVariant),
-          ),
-          const SizedBox(height: 14),
-          if (_isFlash) ..._flashFields() else ..._scheduledFields(),
-          const SizedBox(height: 14),
-          _Label(
-            'Descuento',
-            trailing: Text.rich(TextSpan(children: [
-              TextSpan(
-                text: OwnerFormat.money(base),
-                style: TextStyle(color: colors.onSurfaceVariant, decoration: TextDecoration.lineThrough),
-              ),
-              TextSpan(
-                text: '  ${OwnerFormat.money(newPrice)} · -$discount%',
-                style: TextStyle(color: colors.primary, fontWeight: FontWeight.w800),
-              ),
-            ]), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-          ),
-          _OptionRow(
-            options: [
-              for (final d in _isFlash ? const [10, 20] : const [10, 20, 30]) ('-$d %', d),
-              ('Manual', null),
-            ],
-            selected: _isFlash ? _flashDiscount : _progDiscount,
-            onSelect: (v) => setState(() {
-              if (_isFlash) {
-                _flashDiscount = v;
-              } else {
-                _progDiscount = v;
-              }
-              _error = null;
-            }),
-          ),
-          if ((_isFlash ? _flashDiscount : _progDiscount) == null) ...[
-            const SizedBox(height: 8),
-            TextField(
-              controller: _manual,
-              keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(2)],
-              onChanged: (_) => setState(() {}),
-              decoration: const InputDecoration(labelText: 'Descuento en %', suffixText: '%'),
+          if (blocked)
+            _BlockedMenuNotice(onGoToMenu: () {
+              final router = GoRouter.of(context);
+              Navigator.of(context).pop();
+              router.go('/owner/menu');
+            })
+          else if (_isFlash && !menuLoaded)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 32),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (_isFlash) ...[
+            _StepHeader(step: _step, titles: _stepTitles),
+            const SizedBox(height: 14),
+            if (_step == 0) ..._stepOne(menu!, base),
+            if (_step == 1) ..._stepTwo(base: base, newPrice: newPrice),
+            if (_step == 2) ..._stepThree(dishName: _comboTitle, base: base, newPrice: newPrice),
+          ] else ...[
+            Text(
+              'Atrae clientes en los días y horas de poco movimiento. Se repite cada semana durante 30 días.',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, height: 1.35, color: colors.onSurfaceVariant),
             ),
-          ],
-          const SizedBox(height: 8),
-          _InfoBox('Precio de oferta: ${OwnerFormat.money(newPrice)} por plato', centered: true),
-          const SizedBox(height: 14),
-          const _Label('Cupos disponibles'),
-          _OptionRow(
-            options: [for (final s in _isFlash ? const [5, 10, 15] : const [10, 20, 30]) ('$s cupos', s)],
-            selected: _isFlash ? _flashSlots : _progSlots,
-            onSelect: (v) => setState(() {
-              if (_isFlash) {
-                _flashSlots = v!;
-              } else {
-                _progSlots = v!;
-              }
-            }),
-          ),
-          const SizedBox(height: 14),
-          if (_isFlash) ...[
-            const _Label('Válida hasta'),
+            const SizedBox(height: 14),
+            ..._scheduledFields(),
+            const SizedBox(height: 14),
+            _discountSection(base: base, newPrice: newPrice, presets: const [10, 20, 30]),
+            const SizedBox(height: 14),
+            const _Label('Cupos disponibles'),
             _OptionRow(
-              options: const [('13:30', 0), ('14:00', 1), ('14:30', 2)],
-              selected: const ['13:30', '14:00', '14:30'].indexOf(_until),
-              onSelect: (v) => setState(() => _until = const ['13:30', '14:00', '14:30'][v!]),
+              options: [for (final s in const [10, 20, 30]) ('$s cupos', s)],
+              selected: _progSlots,
+              onSelect: (v) => setState(() => _progSlots = v!),
             ),
-          ] else
+            const SizedBox(height: 14),
             const _InfoBox('La promo queda vigente 30 días. Puedes cancelarla cuando quieras.'),
+          ],
           if (_error != null) ...[
             const SizedBox(height: 10),
             Text(_error!,
                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: context.bocadooColors.danger)),
           ],
           const SizedBox(height: 16),
-          ElevatedButton(
-            onPressed: _sending ? null : () => _publish(base),
-            child: Text(_isFlash ? 'Publicar oferta' : 'Publicar promo programada'),
-          ),
+          if (blocked || (_isFlash && !menuLoaded))
+            const SizedBox.shrink()
+          else if (!_isFlash)
+            ElevatedButton(
+              onPressed: _sending ? null : () => _publish(base: lunchPrice),
+              child: const Text('Publicar promo programada'),
+            )
+          else
+            Row(children: [
+              if (_step > 0) ...[
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _sending ? null : _back,
+                    child: const Text('Atrás'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+              ],
+              Expanded(
+                flex: 2,
+                child: ElevatedButton(
+                  onPressed: _sending || (_step == 0 && !(_hasSoup || _hasMain))
+                      ? null
+                      : lastStep
+                          ? () => _publish(base: base, dishId: _dishIdFor(menu))
+                          : () => _next(base),
+                  child: Text(lastStep ? 'Publicar oferta flash' : 'Siguiente'),
+                ),
+              ),
+            ]),
         ]),
       ),
     );
   }
 
-  List<Widget> _flashFields() => [
-        const _Label('Qué ofreces'),
-        Row(children: [
-          Expanded(
-            child: OwnerChoice(
-              label: 'Menú de hoy',
-              selected: _menuDeHoy,
-              onTap: () => setState(() => _menuDeHoy = true),
-            ),
+  // ── Paso 1 · ¿Qué del menú de hoy vas a liquidar? ──────────────────────
+
+  List<Widget> _stepOne(DailyMenu menu, double base) {
+    final colors = context.colorScheme;
+    final canPrice = _hasSoup || _hasMain;
+    return [
+      Text(
+        'Arma 1 oferta con los platos de tu menú de hoy. Elige al menos una sopa o un segundo.',
+        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, height: 1.35, color: colors.onSurfaceVariant),
+      ),
+      const SizedBox(height: 12),
+      DailyMenuAccordionSelector(
+        flashMode: true,
+        dailyMenu: _toSelectorMenu(menu),
+        selection: _sel,
+        onChanged: (next) => setState(() {
+          _sel = next;
+          _error = null;
+        }),
+      ),
+      const SizedBox(height: 10),
+      _InfoBox(
+        canPrice
+            ? '$_comboTitle\nPrecio base: ${OwnerFormat.money(base)}'
+            : 'Elige una sopa o un segundo para continuar',
+      ),
+    ];
+  }
+
+  // ── Paso 2 · Descuento y cupos ──────────────────────────────────────────
+
+  List<Widget> _stepTwo({required double? base, required double? newPrice}) {
+    return [
+      _discountSection(base: base, newPrice: newPrice, presets: const [10, 20]),
+      const SizedBox(height: 14),
+      const _Label('Cupos disponibles'),
+      Wrap(spacing: 8, runSpacing: 8, children: [
+        for (final s in const [5, 10, 15])
+          _ChipChoice(
+            label: '$s cupos',
+            selected: _flashSlots == s,
+            onTap: () => setState(() {
+              _flashSlots = s;
+              _error = null;
+            }),
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: OwnerChoice(
-              label: 'Plato suelto',
-              selected: !_menuDeHoy,
-              onTap: () => setState(() => _menuDeHoy = false),
-            ),
+        _ChipChoice(
+          label: 'Otro',
+          selected: _flashSlots == null,
+          onTap: () => setState(() {
+            _flashSlots = null;
+            _error = null;
+          }),
+        ),
+      ]),
+      if (_flashSlots == null) ...[
+        const SizedBox(height: 8),
+        TextField(
+          controller: _slotsOther,
+          keyboardType: TextInputType.number,
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(4)],
+          onChanged: (_) => setState(() {}),
+          decoration: const InputDecoration(labelText: 'Cantidad de cupos', suffixText: 'cupos'),
+        ),
+      ],
+    ];
+  }
+
+  Widget _discountSection({
+    required double? base,
+    required double? newPrice,
+    required List<int> presets,
+  }) {
+    final colors = context.colorScheme;
+    final selected = _isFlash ? _flashDiscount : _progDiscount;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      _Label(
+        'Descuento',
+        trailing: base == null || newPrice == null
+            ? null
+            : Text.rich(
+                TextSpan(children: [
+                  TextSpan(
+                    text: OwnerFormat.money(base),
+                    style: TextStyle(color: colors.onSurfaceVariant, decoration: TextDecoration.lineThrough),
+                  ),
+                  TextSpan(
+                    text: '  ${OwnerFormat.money(newPrice)} · -$_discount%',
+                    style: TextStyle(color: colors.primary, fontWeight: FontWeight.w800),
+                  ),
+                ]),
+                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+              ),
+      ),
+      _OptionRow(
+        options: [for (final d in presets) ('-$d %', d), ('Manual', null)],
+        selected: selected,
+        onSelect: (v) => setState(() {
+          if (_isFlash) {
+            _flashDiscount = v;
+          } else {
+            _progDiscount = v;
+          }
+          _error = null;
+        }),
+      ),
+      if (selected == null) ...[
+        const SizedBox(height: 8),
+        TextField(
+          controller: _manual,
+          keyboardType: TextInputType.number,
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(2)],
+          onChanged: (_) => setState(() {}),
+          decoration: const InputDecoration(labelText: 'Descuento en %', suffixText: '%'),
+        ),
+      ],
+      if (newPrice != null) ...[
+        const SizedBox(height: 8),
+        _InfoBox('Precio de oferta: ${OwnerFormat.money(newPrice)} por plato', centered: true),
+      ],
+    ]);
+  }
+
+  // ── Paso 3 · Vigencia y vista previa ────────────────────────────────────
+
+  List<Widget> _stepThree({
+    required String dishName,
+    required double? base,
+    required double? newPrice,
+  }) {
+    final chips = _limitChips();
+    final until = _until;
+    final customSelected = until != null && !chips.contains(until);
+    return [
+      const _Label('Válida hasta'),
+      Wrap(spacing: 8, runSpacing: 8, children: [
+        for (final t in chips)
+          _ChipChoice(
+            label: _hhmm(t),
+            selected: until == t,
+            onTap: () => setState(() {
+              _until = t;
+              _error = null;
+            }),
           ),
-        ]),
-      ];
+        _ChipChoice(
+          label: customSelected ? _hhmm(until) : 'Elegir hora',
+          icon: Icons.schedule_rounded,
+          selected: customSelected,
+          onTap: _pickLimit,
+        ),
+      ]),
+      const SizedBox(height: 6),
+      Text(
+        'Debe ser al menos $_minLeadMinutes minutos desde ahora.',
+        style: TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+          color: context.colorScheme.onSurfaceVariant,
+        ),
+      ),
+      const SizedBox(height: 14),
+      const _Label('Así la verá el comensal'),
+      _OfferPreview(
+        dishName: dishName,
+        originalPrice: base,
+        price: newPrice,
+        slots: _slots,
+        until: until,
+      ),
+    ];
+  }
+
+  // ── Promo programada ────────────────────────────────────────────────────
 
   List<Widget> _scheduledFields() {
     final colors = context.colorScheme;
@@ -392,6 +769,160 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
         Expanded(child: _TimeField(label: 'Hasta', value: _hhmm(_to), onTap: () => _pickTime(false))),
       ]),
     ];
+  }
+}
+
+class _StepHeader extends StatelessWidget {
+  const _StepHeader({required this.step, required this.titles});
+
+  final int step;
+  final List<String> titles;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Row(children: [
+        for (var i = 0; i < titles.length; i++) ...[
+          if (i > 0) const SizedBox(width: 6),
+          Expanded(
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              height: 4,
+              decoration: BoxDecoration(
+                color: i <= step ? colors.primary : colors.outlineVariant,
+                borderRadius: BorderRadius.circular(99),
+              ),
+            ),
+          ),
+        ],
+      ]),
+      const SizedBox(height: 10),
+      Text(
+        'Paso ${step + 1} de ${titles.length}',
+        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: colors.onSurfaceVariant),
+      ),
+      const SizedBox(height: 2),
+      Text(
+        titles[step],
+        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: colors.onSurface),
+      ),
+    ]);
+  }
+}
+
+class _BlockedMenuNotice extends StatelessWidget {
+  const _BlockedMenuNotice({required this.onGoToMenu});
+
+  final VoidCallback onGoToMenu;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      const SizedBox(height: 8),
+      Icon(Icons.restaurant_menu_rounded, size: 36, color: colors.onSurfaceVariant),
+      const SizedBox(height: 12),
+      Text(
+        'Primero publica tu menú del día para crear una oferta flash',
+        textAlign: TextAlign.center,
+        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: colors.onSurface),
+      ),
+      const SizedBox(height: 16),
+      ElevatedButton(onPressed: onGoToMenu, child: const Text('Ir a mi menú')),
+    ]);
+  }
+}
+
+class _ChipChoice extends StatelessWidget {
+  const _ChipChoice({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.icon,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  final IconData? icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minWidth: 84),
+      child: OwnerChoice(label: label, icon: icon, selected: selected, onTap: onTap),
+    );
+  }
+}
+
+class _OfferPreview extends StatelessWidget {
+  const _OfferPreview({
+    required this.dishName,
+    required this.originalPrice,
+    required this.price,
+    required this.slots,
+    required this.until,
+  });
+
+  final String dishName;
+  final double? originalPrice;
+  final double? price;
+  final int slots;
+  final TimeOfDay? until;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: colors.primaryContainer.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: colors.primary.withValues(alpha: 0.25)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(color: colors.primary, borderRadius: BorderRadius.circular(999)),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.bolt_rounded, size: 13, color: colors.onPrimary),
+            const SizedBox(width: 2),
+            Text('OFERTA FLASH',
+                style: TextStyle(
+                    fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.3, color: colors.onPrimary)),
+          ]),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          dishName.isEmpty ? 'Tu plato' : dishName,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: colors.onSurface),
+        ),
+        const SizedBox(height: 4),
+        Text.rich(
+          TextSpan(children: [
+            if (originalPrice != null)
+              TextSpan(
+                text: OwnerFormat.money(originalPrice!),
+                style: TextStyle(color: colors.onSurfaceVariant, decoration: TextDecoration.lineThrough),
+              ),
+            if (price != null)
+              TextSpan(
+                text: '  ${OwnerFormat.money(price!)}',
+                style: TextStyle(color: colors.primary, fontWeight: FontWeight.w900),
+              ),
+          ]),
+          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'Quedan $slots cupos${until == null ? '' : ' · Hasta ${_FlashOfferSheetState._hhmm(until!)}'}',
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: colors.onSurfaceVariant),
+        ),
+      ]),
+    );
   }
 }
 

@@ -65,7 +65,7 @@ class MockOwnerRepository
   final Map<String, String> _lastBatchByPassId = {};
   final Map<String, String> _pendingBatchIdByPassId = {};
 
-  FlashOffer? _activeOffer;
+  FlashOffer? _scheduledOffer;
   bool _shiftClosed = false;
   bool _weeklySummary = true;
 
@@ -988,23 +988,95 @@ class MockOwnerRepository
     return saleId;
   }
 
+  static const _scheduledOfferId = 'programada';
+
   @override
-  Future<FlashOffer?> getActiveOffer(String restaurantId) async {
+  bool get supportsOfferPause => true;
+
+  @override
+  Future<List<FlashOffer>> getActiveOffers(String restaurantId) async {
     await _simulateLatency();
-    return _activeOffer;
+    final now = _clock();
+    return [
+      for (final o in _store.flashOffers)
+        if (o.restaurantId == DemoStore.ownerRestaurantId &&
+            o.slotsLeft > 0 &&
+            o.endsAt.isAfter(now))
+          FlashOffer(
+            id: o.id,
+            kind: OfferKind.flash,
+            title: o.dishName,
+            dishId: o.dishId,
+            discountPercent: o.discountPercent,
+            slots: o.slotsLeft,
+            slotsTotal: o.slotsTotal,
+            price: o.price,
+            originalPrice: o.originalPrice,
+            endsAt: o.endsAt,
+            paused: o.paused,
+          ),
+      ?_scheduledOffer,
+    ];
   }
 
   @override
-  Future<bool> publishOffer(String restaurantId, FlashOffer offer) async {
+  Future<String?> publishOffer(String restaurantId, FlashOffer offer) async {
     await _simulateLatency();
-    _activeOffer = offer;
+    if (offer.kind == OfferKind.programada) {
+      _scheduledOffer = FlashOffer(
+        id: _scheduledOfferId,
+        kind: OfferKind.programada,
+        title: offer.title,
+        discountPercent: offer.discountPercent,
+        slots: offer.slots,
+        price: offer.price,
+        days: offer.days,
+        fromMinutes: offer.fromMinutes,
+        toMinutes: offer.toMinutes,
+      );
+      return _scheduledOfferId;
+    }
+    final until = offer.validUntil;
+    if (until == null || until.isEmpty) return null;
+    final id = _store.nextOfferId();
+    _store.flashOffers.add(DemoFlashOffer(
+      id: id,
+      restaurantId: DemoStore.ownerRestaurantId,
+      dishName: offer.title,
+      dishId: offer.dishId,
+      price: offer.price,
+      originalPrice: offer.originalPrice ?? offer.price,
+      slotsTotal: offer.slots,
+      endsAt: EcuadorTime.todayAtUtc(until),
+    ));
+    _store.changed();
+    return id;
+  }
+
+  @override
+  Future<bool> cancelOffer(String restaurantId, {String? offerId}) async {
+    await _simulateLatency();
+    if (offerId == _scheduledOfferId) _scheduledOffer = null;
+    _store.flashOffers.removeWhere(
+      (o) =>
+          o.restaurantId == DemoStore.ownerRestaurantId &&
+          (offerId == null || o.id == offerId),
+    );
+    _store.changed();
     return true;
   }
 
   @override
-  Future<bool> cancelOffer(String restaurantId) async {
+  Future<bool> setOfferPaused(
+    String restaurantId,
+    String offerId, {
+    required bool paused,
+  }) async {
     await _simulateLatency();
-    _activeOffer = null;
+    final offer = _store.flashOffers.where((o) => o.id == offerId).firstOrNull;
+    if (offer == null) return false;
+    offer.paused = paused;
+    _store.changed();
     return true;
   }
 

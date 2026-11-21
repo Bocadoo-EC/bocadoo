@@ -34,6 +34,10 @@ const String kNoSoupOption = 'Sin sopa';
 /// Opción fija "sin bebida" del selector de menú diario.
 const String kNoDrinkOption = 'Sin bebida';
 
+/// Solo en ofertas flash del Dueño (un combo puede omitir segundo o postre).
+const String kNoMainOption = 'Sin segundo';
+const String kNoDessertOption = 'Sin postre';
+
 /// Fuente única de verdad del menú publicado del día para un restaurante.
 @immutable
 class DailyMenu {

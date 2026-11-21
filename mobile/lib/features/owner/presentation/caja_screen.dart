@@ -12,6 +12,7 @@ import '../domain/models/cash_models.dart';
 import '../domain/models/extras_models.dart';
 import 'owner_controller.dart';
 import 'owner_format.dart';
+import 'flash_offers_manager.dart';
 import 'owner_widgets.dart';
 import 'scan_result_screen.dart';
 
@@ -467,7 +468,7 @@ class _CajaBody extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colorScheme;
     final b = context.bocadooColors;
-    final offer = ref.watch(activeOfferProvider).value;
+    final activeOffers = ref.watch(activeOffersProvider).value ?? const <FlashOffer>[];
     final tables = ref.watch(pendingTablesProvider).value ?? const <PendingTable>[];
     final planRequests =
         ref.watch(planRequestsProvider).value ?? const <OwnerPlanRequest>[];
@@ -537,12 +538,9 @@ class _CajaBody extends ConsumerWidget {
             enabled: !scanLocked,
             onTap: scanLocked ? null : () => openScannerFlow(context, ref),
           ),
-          if (offer != null) ...[
+          if (activeOffers.isNotEmpty) ...[
             const SizedBox(height: 12),
-            _OfferBanner(
-              text: '${offer.slots} cupos a ${OwnerFormat.money(offer.price)}',
-              onTap: () => context.push('/owner/oferta-flash'),
-            ),
+            FlashOffersManager(onCreate: () => context.push('/owner/oferta-flash')),
           ],
           const SizedBox(height: 12),
           ElevatedButton.icon(
@@ -933,41 +931,6 @@ class _ScanCard extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-class _OfferBanner extends StatelessWidget {
-  const _OfferBanner({required this.text, required this.onTap});
-
-  final String text;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colorScheme;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
-      decoration: BoxDecoration(
-        color: colors.primaryContainer,
-        borderRadius: BorderRadius.circular(18),
-      ),
-      child: Row(children: [
-        CircleAvatar(
-          radius: 15,
-          backgroundColor: colors.primary,
-          child: Icon(Icons.bolt_rounded, size: 16, color: colors.onPrimary),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Oferta flash activa',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: colors.onSurface)),
-            Text(text, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: colors.primary)),
-          ]),
-        ),
-        TextButton(onPressed: onTap, child: const Text('Ver')),
-      ]),
     );
   }
 }

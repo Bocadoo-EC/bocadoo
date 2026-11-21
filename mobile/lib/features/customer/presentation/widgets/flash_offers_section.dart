@@ -5,26 +5,30 @@ import 'package:material_ui/material_ui.dart';
 import '../../../../core/contracts/models.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../customer_widgets.dart';
+import 'flash_offer_card.dart';
 
-/// Módulo adaptativo de Ofertas Flash de "Dónde comer".
+/// Módulo adaptativo de Ofertas Flash de "Dónde comer" (cada oferta = 1 plato).
 ///
-/// - 0 ofertas activas: no renderiza nada.
-/// - 1 oferta: tarjeta compacta con cronómetro regresivo.
-/// - 2 o más: encabezado "Ofertas flash del día (N)" + carrusel horizontal.
+/// - 0 ofertas activas: no ocupa espacio.
+/// - 1 oferta: tarjeta del plato con precio tachado, cupos, cronómetro y
+///   "Pedir ya →".
+/// - 2 o más: tarjeta resumen compacta con "Ver todas →" hacia la pantalla
+///   de Ofertas Flash.
 ///
-/// Un único `Timer.periodic(1s)` alimenta el cronómetro de cada tarjeta (cada
-/// una calcula su propio tiempo restante). Al llegar a 00:00 la oferta se
-/// quita sola de la lista, sin esperar a un refresco de red.
+/// Un único `Timer.periodic(1s)` alimenta los cronómetros. Al llegar a 00:00 o
+/// a 0 cupos la oferta sale sola de la lista, sin esperar un refresco de red.
 class FlashOffersSection extends StatefulWidget {
   const FlashOffersSection({
     super.key,
     required this.offers,
-    required this.onOpenRestaurant,
+    required this.onOrder,
+    required this.onSeeAll,
   });
 
   /// Ofertas flash candidatas; el widget descarta las que ya vencieron.
   final List<(Restaurant, RestaurantOffer)> offers;
-  final ValueChanged<Restaurant> onOpenRestaurant;
+  final void Function(Restaurant, RestaurantOffer) onOrder;
+  final VoidCallback onSeeAll;
 
   @override
   State<FlashOffersSection> createState() => _FlashOffersSectionState();
@@ -74,212 +78,141 @@ class _FlashOffersSectionState extends State<FlashOffersSection> {
     ];
     if (live.isEmpty) return const SizedBox.shrink();
 
-    if (live.length == 1) {
-      final (r, o) = live.first;
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 16),
-        child: _FlashOfferCard(
-          restaurant: r,
-          offer: o,
-          now: _now,
-          onTap: () => widget.onOpenRestaurant(r),
-        ),
-      );
-    }
-
-    final colors = context.colorScheme;
-    final cardWidth =
-        (MediaQuery.sizeOf(context).width * 0.8).clamp(240.0, 320.0);
-
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.bolt_rounded, size: 18, color: colors.primary),
-              const SizedBox(width: 4),
-              Expanded(
-                child: Text(
-                  'Ofertas flash del día (${live.length})',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w900,
-                    color: colors.onSurface,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          SizedBox(
-            height: 124,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: live.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 10),
-              itemBuilder: (_, i) {
-                final (r, o) = live[i];
-                return SizedBox(
-                  width: cardWidth,
-                  child: _FlashOfferCard(
-                    key: ValueKey(o.id),
-                    restaurant: r,
-                    offer: o,
-                    now: _now,
-                    onTap: () => widget.onOpenRestaurant(r),
-                  ),
-                );
-              },
+      child: live.length == 1
+          ? FlashOfferCard(
+              restaurant: live.first.$1,
+              offer: live.first.$2,
+              now: _now,
+              ctaLabel: 'Reclamar oferta',
+              onTap: () => widget.onOrder(live.first.$1, live.first.$2),
+            )
+          : _FlashSummaryCard(
+              offers: [for (final e in live) e.$2],
+              now: _now,
+              onSeeAll: widget.onSeeAll,
             ),
-          ),
-        ],
-      ),
     );
   }
 }
 
-String _formatRemaining(Duration d) {
-  final safe = d.isNegative ? Duration.zero : d;
-  final mm = safe.inMinutes.toString().padLeft(2, '0');
-  final ss = (safe.inSeconds % 60).toString().padLeft(2, '0');
-  return '$mm:$ss';
-}
-
-class _FlashOfferCard extends StatelessWidget {
-  const _FlashOfferCard({
-    super.key,
-    required this.restaurant,
-    required this.offer,
+/// Tarjeta resumen (≥ 2 ofertas): precio mínimo y próximo vencimiento.
+class _FlashSummaryCard extends StatelessWidget {
+  const _FlashSummaryCard({
+    required this.offers,
     required this.now,
-    required this.onTap,
+    required this.onSeeAll,
   });
 
-  final Restaurant restaurant;
-  final RestaurantOffer offer;
+  final List<RestaurantOffer> offers;
   final DateTime now;
-  final VoidCallback onTap;
+  final VoidCallback onSeeAll;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     final b = context.bocadooColors;
-    final endsAt = offer.endsAt;
-    final price = offer.price;
 
-    return Material(
-      color: Colors.transparent,
-      borderRadius: BorderRadius.circular(20),
-      clipBehavior: Clip.antiAlias,
-      child: Ink(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              colors.primaryContainer,
-              b.walletAccent.withValues(alpha: 0.35),
-            ],
+    final prices = [for (final o in offers) ?o.price];
+    final minPrice = prices.isEmpty ? null : prices.reduce((a, c) => a < c ? a : c);
+    final remainings = [for (final o in offers) ?o.endsAt?.difference(now)];
+    final soonest = remainings.isEmpty
+        ? null
+        : remainings.reduce((a, c) => a < c ? a : c);
+
+    final parts = [
+      if (minPrice != null) 'Almuerzos desde ${formatMoney(minPrice)}',
+      if (soonest != null) 'Próxima vence en ${formatFlashRemaining(soonest)}',
+    ];
+
+    return Semantics(
+      button: true,
+      label: '${offers.length} ofertas flash activas ahora. Ver todas',
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(20),
+        clipBehavior: Clip.antiAlias,
+        child: Ink(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                colors.primaryContainer,
+                b.walletAccent.withValues(alpha: 0.35),
+              ],
+            ),
+            border: Border.all(color: colors.primary.withValues(alpha: 0.25)),
+            borderRadius: BorderRadius.circular(20),
           ),
-          border: Border.all(color: colors.primary.withValues(alpha: 0.25)),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: InkWell(
-          onTap: onTap,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 108),
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: colors.primary,
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: Row(
+          child: InkWell(
+            onTap: onSeeAll,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 96),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.bolt_rounded,
-                            size: 13, color: colors.onPrimary),
-                        const SizedBox(width: 2),
-                        Text(
-                          'OFERTA FLASH',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 0.3,
-                            color: colors.onPrimary,
+                        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Padding(
+                            padding: const EdgeInsets.only(top: 1),
+                            child: Icon(Icons.bolt_rounded, size: 20, color: colors.primary),
                           ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    restaurant.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w800,
-                      color: colors.onSurface,
-                    ),
-                  ),
-                  Text(
-                    price == null
-                        ? offer.title
-                        : '${offer.title} · ${formatMoney(price)}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: colors.onSurface,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Row(
-                    children: [
-                      if (restaurant.hasLocation)
-                        Flexible(
-                          child: Text(
-                            restaurant.formattedDistance,
-                            maxLines: 1,
+                          const SizedBox(width: 2),
+                          Expanded(
+                            child: Text(
+                              '${offers.length} Ofertas Flash activas en tu zona',
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 15,
+                                height: 1.2,
+                                fontWeight: FontWeight.w900,
+                                color: colors.onSurface,
+                              ),
+                            ),
+                          ),
+                        ]),
+                        if (parts.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            parts.join(' · '),
+                            maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               fontSize: 12,
+                              height: 1.25,
                               fontWeight: FontWeight.w600,
                               color: colors.onSurfaceVariant,
                             ),
                           ),
-                        ),
-                      const Spacer(),
-                      if (endsAt != null) ...[
-                        Icon(Icons.timer_outlined,
-                            size: 14, color: colors.primary),
-                        const SizedBox(width: 3),
-                        Text(
-                          'Termina en ${_formatRemaining(endsAt.difference(now))}',
-                          maxLines: 1,
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w800,
-                            fontFeatures: const [FontFeature.tabularFigures()],
-                            color: colors.primary,
-                          ),
-                        ),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
-                ],
+                  const SizedBox(width: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: colors.primary,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      'Ver todas →',
+                      maxLines: 1,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                        color: colors.onPrimary,
+                      ),
+                    ),
+                  ),
+                ]),
               ),
             ),
           ),

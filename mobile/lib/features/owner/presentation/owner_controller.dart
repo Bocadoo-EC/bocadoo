@@ -114,26 +114,34 @@ final activeOrdersProvider = FutureProvider.autoDispose<List<OwnerOrder>>((ref) 
 /// Mesas con amigos por cobrar (banner de Caja / Pedidos en camino).
 final pendingTablesProvider =
     FutureProvider.autoDispose<List<PendingTable>>((ref) async {
-  final sim = GroupOrderSimulationStore.instance;
-  void onSimChanged() => ref.invalidateSelf();
-  sim.addListener(onSimChanged);
-  ref.onDispose(() => sim.removeListener(onSimChanged));
-
   _scheduleOrdersPoll(ref);
-  final repoTables = ApiCapabilities.ownerPendingTablesList
-      ? await ref
-          .read(ownerTablesRepositoryProvider)
-          .getPendingTables(ref.read(ownerRestaurantIdProvider))
-      : const <PendingTable>[];
 
-  final simTables = sim.confirmedOwnerTables;
-  if (simTables.isEmpty) return repoTables;
+  if (AppMode.useMock) {
+    final sim = GroupOrderSimulationStore.instance;
+    void onSimChanged() => ref.invalidateSelf();
+    sim.addListener(onSimChanged);
+    ref.onDispose(() => sim.removeListener(onSimChanged));
 
-  final merged = <String, PendingTable>{
-    for (final t in repoTables) t.id: t,
-    for (final t in simTables) t.id: t,
-  };
-  return merged.values.toList();
+    final repoTables = ApiCapabilities.ownerPendingTablesList
+        ? await ref
+            .read(ownerTablesRepositoryProvider)
+            .getPendingTables(ref.read(ownerRestaurantIdProvider))
+        : const <PendingTable>[];
+
+    final simTables = sim.confirmedOwnerTables;
+    if (simTables.isEmpty) return repoTables;
+
+    final merged = <String, PendingTable>{
+      for (final t in repoTables) t.id: t,
+      for (final t in simTables) t.id: t,
+    };
+    return merged.values.toList();
+  }
+
+  if (!ApiCapabilities.ownerPendingTablesList) return const <PendingTable>[];
+  return ref
+      .read(ownerTablesRepositoryProvider)
+      .getPendingTables(ref.read(ownerRestaurantIdProvider));
 });
 
 /// O15 · Opiniones.
@@ -457,8 +465,9 @@ final isTodayMenuPublishedProvider = Provider.autoDispose<bool>((ref) {
       MenuAvailabilityState.disponible;
 });
 
-final activeOfferProvider = FutureProvider.autoDispose<FlashOffer?>((ref) {
-  return ref.read(ownerCashRepositoryProvider).getActiveOffer(ref.read(ownerRestaurantIdProvider));
+/// Ofertas vigentes del local: N flash (un plato cada una) + promo programada.
+final activeOffersProvider = FutureProvider.autoDispose<List<FlashOffer>>((ref) {
+  return ref.read(ownerCashRepositoryProvider).getActiveOffers(ref.read(ownerRestaurantIdProvider));
 });
 
 final ordersOnTheWayProvider = FutureProvider.autoDispose<int>((ref) {

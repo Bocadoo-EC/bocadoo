@@ -99,6 +99,39 @@ class DemoFeedback {
   String? reply;
 }
 
+/// Oferta flash de un solo plato publicada desde Caja (O11) y visible para el
+/// comensal en "Dónde comer" (C2).
+class DemoFlashOffer {
+  DemoFlashOffer({
+    required this.id,
+    required this.restaurantId,
+    required this.dishName,
+    required this.price,
+    required this.originalPrice,
+    required this.slotsTotal,
+    required this.endsAt,
+    this.dishId,
+  }) : slotsLeft = slotsTotal;
+
+  final String id;
+  final String restaurantId;
+  final String dishName;
+  final String? dishId;
+  final double price;
+  final double originalPrice;
+  final int slotsTotal;
+  final DateTime endsAt;
+
+  int slotsLeft;
+  bool paused = false;
+
+  int get discountPercent => originalPrice <= 0
+      ? 0
+      : (((originalPrice - price) / originalPrice) * 100).round();
+
+  bool isLiveAt(DateTime now) => !paused && slotsLeft > 0 && endsAt.isAfter(now);
+}
+
 /// Datos en memoria que comparten los mocks de comensal y dueño mientras no
 /// exista la API: una preorden entregada en caja la ve el comensal, y una
 /// mesa armada en C9 aparece en Caja.
@@ -142,10 +175,15 @@ class DemoStore extends ChangeNotifier {
   };
   final Map<String, Set<String>> soldOutDishesByRest = {};
 
+  /// Ofertas flash publicadas desde Caja (N por local, un plato cada una).
+  final List<DemoFlashOffer> flashOffers = [];
+
   int _orderSeq = 43;
   int _tableSeq = 1235;
   int _feedbackSeq = 0;
+  int _offerSeq = 0;
 
+  String nextOfferId() => 'fo-${++_offerSeq}';
   String nextOrderNumber() => '${++_orderSeq}';
   String nextTableId() => 'M${_tableSeq++}';
   String nextFeedbackId() => 'op-${++_feedbackSeq}';

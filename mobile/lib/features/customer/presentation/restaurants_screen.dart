@@ -103,7 +103,7 @@ class _RestaurantsScreenState extends ConsumerState<RestaurantsScreen> {
     final colors = context.colorScheme;
     final searching = s.searchQuery.trim().isNotEmpty;
     final filtered = s.filteredRestaurants;
-    final flashOffers = controller.state.activeFlashOffers();
+    final flashOffers = controller.state.activeZoneFlashOffers();
 
     return RefreshIndicator(
       onRefresh: () => controller.refreshRestaurants(forceHydrate: true),
@@ -123,7 +123,13 @@ class _RestaurantsScreenState extends ConsumerState<RestaurantsScreen> {
           if (!searching)
             FlashOffersSection(
               offers: flashOffers,
-              onOpenRestaurant: _openRestaurant,
+              onOrder: (_, _) => ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  behavior: SnackBarBehavior.floating,
+                  content: Text('Reclamo de oferta pendiente de integración de pago'),
+                ),
+              ),
+              onSeeAll: () => context.push('/customer/ofertas-flash'),
             ),
           Row(children: [
             Expanded(child: _SectionTitle('Cerca de ti')),
@@ -157,6 +163,12 @@ class _RestaurantsScreenState extends ConsumerState<RestaurantsScreen> {
               _RestaurantCard(
                 restaurant: r,
                 publicStatus: ref.watch(restaurantPublicStatusProvider(r.id)),
+                hasUserActivePlan: () {
+                  final pass = s.passFor(r.id);
+                  return pass != null &&
+                      !pass.isExpired &&
+                      pass.remainingLunches > 0;
+                }(),
                 isDailyMenuUnpublished:
                     s.todayMenuAvailabilityByRest[r.id] ==
                         MenuAvailabilityState.sinPublicar ||
@@ -317,6 +329,7 @@ class _OfferBadge extends StatelessWidget {
 class _RestaurantCard extends StatelessWidget {
   final Restaurant restaurant;
   final RestaurantPublicStatus publicStatus;
+  final bool hasUserActivePlan;
   final bool isDailyMenuUnpublished;
   final VoidCallback onUnpublishedTap;
   final VoidCallback onOpen;
@@ -326,6 +339,7 @@ class _RestaurantCard extends StatelessWidget {
   const _RestaurantCard({
     required this.restaurant,
     required this.publicStatus,
+    this.hasUserActivePlan = false,
     this.isDailyMenuUnpublished = false,
     required this.onUnpublishedTap,
     required this.onOpen,
@@ -454,7 +468,7 @@ class _RestaurantCard extends StatelessWidget {
                   ),
                 ),
                 if (r.hasBreakfastToday) const _Tag(icon: Icons.wb_sunny_outlined, label: 'Desayunos'),
-                if (r.hasPlan) ...[
+                if (hasUserActivePlan) ...[
                   const SizedBox(width: 4),
                   const _Tag(icon: Icons.confirmation_number_outlined, label: 'Plan activo'),
                 ],

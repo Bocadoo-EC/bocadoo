@@ -6,6 +6,7 @@ import '../../../core/contracts/qr_parser.dart';
 import '../../../core/contracts/repositories.dart';
 import '../../../core/demo/demo_store.dart';
 import '../../../core/location/location_service.dart';
+import '../../../core/network/api_exception.dart';
 import '../../../core/utils/formatters.dart';
 import 'local_customer_cache.dart';
 
@@ -133,12 +134,28 @@ class MockCustomerRepository implements ICustomerRepository {
       ];
     }
     final effectiveOpen = _store.storeOpenByRest[r.id] ?? r.isOpen;
+    final now = DateTime.now();
     final liveOffers = [
       for (final o in r.offers)
-        if (o.appliesToday && o.endsAt == null)
-          o.withEndsAt(_mockOfferEndsAt(o.id))
-        else
-          o,
+        _withTaken(
+          o.appliesToday && o.endsAt == null
+              ? o.withEndsAt(_mockOfferEndsAt(o.id))
+              : o,
+        ),
+      // Ofertas flash de un plato publicadas desde Caja del Dueño.
+      for (final o in _store.flashOffers)
+        if (o.restaurantId == r.id && o.isLiveAt(now))
+          RestaurantOffer(
+            id: o.id,
+            restaurantId: r.id,
+            title: o.dishName,
+            badge: '-${o.discountPercent}% · ${o.dishName}',
+            price: o.price,
+            originalPrice: o.originalPrice,
+            slotsLeft: o.slotsLeft,
+            reservable: true,
+            endsAt: o.endsAt,
+          ),
     ];
     final filteredOffers = avail == MenuAvailabilityState.agotadoTotal
         ? [
@@ -596,6 +613,19 @@ class MockCustomerRepository implements ICustomerRepository {
       createdAt: now,
       expiresAt: now.add(const Duration(minutes: 30)),
     );
+    if (offerId != null) {
+      final stored = _store.flashOffers.where((o) => o.id == offerId).firstOrNull;
+      if (stored != null) {
+        if (!stored.isLiveAt(now)) {
+          throw ApiException(status: 409, code: 'OFERTA_AGOTADA');
+        }
+        stored.slotsLeft -= 1;
+      } else if (offerItem == null || !offerItem.isActiveFlashAt(now)) {
+        throw ApiException(status: 409, code: 'OFERTA_AGOTADA');
+      } else {
+        _offerTaken[offerId] = (_offerTaken[offerId] ?? 0) + 1;
+      }
+    }
     _store.preorders.add(record);
     _store.changed();
     return _toActiveOrder(record);
@@ -656,6 +686,14 @@ class MockCustomerRepository implements ICustomerRepository {
 
   /// Fin simulado de cada oferta flash mock (estable durante la sesión).
   static final Map<String, DateTime> _mockOfferEnds = {};
+
+  /// Cupos ya pedidos de las ofertas fijas del mock (las de Caja viven en DemoStore).
+  static final Map<String, int> _offerTaken = {};
+
+  static RestaurantOffer _withTaken(RestaurantOffer o) {
+    final taken = _offerTaken[o.id] ?? 0;
+    return taken > 0 ? o.withSlotsLeft(o.slotsLeft - taken) : o;
+  }
 
   static DateTime _mockOfferEndsAt(String offerId) {
     final minutes = 20 + (offerId.hashCode.abs() % 40);

@@ -121,11 +121,24 @@ abstract class IOwnerCashRepository {
     required OwnerPayMethod method,
   });
 
-  Future<FlashOffer?> getActiveOffer(String restaurantId);
+  /// Ofertas vigentes del local (N flash, cada una de un solo plato) más la
+  /// promo programada si existe.
+  Future<List<FlashOffer>> getActiveOffers(String restaurantId);
 
-  Future<bool> publishOffer(String restaurantId, FlashOffer offer);
+  /// Publica una oferta y devuelve su id, o `null` si falló.
+  Future<String?> publishOffer(String restaurantId, FlashOffer offer);
 
-  Future<bool> cancelOffer(String restaurantId);
+  /// Cierra [offerId]; sin id cierra todas las ofertas vigentes del local.
+  Future<bool> cancelOffer(String restaurantId, {String? offerId});
+
+  /// `false` cuando el backend no ofrece pausar/reanudar una oferta.
+  bool get supportsOfferPause;
+
+  Future<bool> setOfferPaused(
+    String restaurantId,
+    String offerId, {
+    required bool paused,
+  });
 
   Future<bool> setManualBusy(String restaurantId, {required bool busy});
 

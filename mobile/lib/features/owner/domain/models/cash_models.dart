@@ -176,20 +176,47 @@ class FlashOffer {
     required this.discountPercent,
     required this.slots,
     required this.price,
+    this.id,
+    this.dishId,
+    this.originalPrice,
+    this.slotsTotal,
     this.validUntil,
+    this.endsAt,
+    this.paused = false,
     this.days = const [],
     this.fromMinutes,
     this.toMinutes,
   });
 
+  /// `null` hasta que el repositorio la publica.
+  final String? id;
   final OfferKind kind;
+
+  /// Nombre exacto del plato (oferta flash: un único plato por oferta).
   final String title;
+
+  /// Plato del catálogo (`platoId` del backend) cuando sale del menú de hoy.
+  final String? dishId;
   final int discountPercent;
+
+  /// Cupos restantes.
   final int slots;
   final double price;
 
+  /// Precio normal del plato (para tachar en la tarjeta del comensal).
+  final double? originalPrice;
+
+  /// Cupos con los que se publicó; `null` si el origen no lo informa.
+  final int? slotsTotal;
+
   /// Hora límite de la oferta de hoy, `HH:mm`.
   final String? validUntil;
+
+  /// Instante exacto en que vence; alimenta el cronómetro del gestor.
+  final DateTime? endsAt;
+  final bool paused;
+
+  int get totalSlots => slotsTotal ?? slots;
 
   /// Días de la semana de la promo programada (1 = lunes … 7 = domingo).
   final List<int> days;

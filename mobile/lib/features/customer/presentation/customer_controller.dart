@@ -17,6 +17,7 @@ import '../../../core/session/session_notifier.dart';
 import '../data/api_customer_repo.dart';
 import '../data/mock_customer_repo.dart';
 import '../data/pase_events_stream.dart';
+import 'widgets/flash_offers_sync.dart';
 
 enum CustomerStatus { initial, loading, success, error }
 
@@ -199,6 +200,34 @@ class CustomerUiState {
     ];
   }
 
+  /// Ofertas flash activas filtradas por la dirección/zona activa del comensal.
+  List<(Restaurant, RestaurantOffer)> activeZoneFlashOffers([DateTime? at]) {
+    final now = at ?? DateTime.now();
+    return [
+      for (final r in restaurants)
+        if (_matchesActiveZone(r) &&
+            !publicStatusFor(r).isSoldOutToday &&
+            !publicStatusFor(r).isClosed)
+          for (final o in r.offers)
+            if (o.isActiveFlashAt(now)) (r, o),
+    ];
+  }
+
+  bool _matchesActiveZone(Restaurant r) {
+    if (filters.contains(RestaurantFilter.near) && r.distanceKm >= 1.0) {
+      return false;
+    }
+    if (searchCenter != null && searchRadiusMeters != null) {
+      if (!r.hasLocation) return false;
+      final meters = LocationService.meters(
+        searchCenter!,
+        LatLng(r.latitude!, r.longitude!),
+      );
+      if (meters > searchRadiusMeters!) return false;
+    }
+    return true;
+  }
+
   List<Restaurant> get filteredRestaurants {
     final q = searchQuery.trim().toLowerCase();
     final now = DateTime.now();
@@ -375,6 +404,44 @@ class CustomerController extends ChangeNotifier {
     if (AppMode.useMock) {
       DemoStore.instance.addListener(_onDemoStoreChanged);
     }
+    FlashOffersLiveSync.instance.addListener(_onFlashOfferLiveSync);
+  }
+
+  void _onFlashOfferLiveSync() {
+    if (_disposed) return;
+    final sync = FlashOffersLiveSync.instance;
+    final rid = sync.lastRestaurantId;
+    if (rid == null || rid.isEmpty) return;
+    final offer = sync.lastOffer;
+    if (offer != null) {
+      final updatedList = <Restaurant>[
+        for (final r in _state.restaurants)
+          if (r.id == rid)
+            r.copyWith(
+              offers: sync.lastRemoved
+                  ? r.offers.where((o) => o.id != offer.id).toList()
+                  : [
+                      offer,
+                      for (final o in r.offers)
+                        if (o.id != offer.id) o,
+                    ],
+            )
+          else
+            r,
+      ];
+      _emit(_state.copyWith(restaurants: updatedList));
+    }
+    if (!AppMode.useMock) {
+      unawaited(_hydrateSingleRestaurant(rid));
+    }
+  }
+
+  Future<void> _hydrateSingleRestaurant(String rid) async {
+    try {
+      final detail = await _repository.getRestaurantById(rid);
+      if (detail == null || _disposed) return;
+      syncRestaurantSummary(detail);
+    } catch (_) {}
   }
 
   CustomerUiState get state => _state;
@@ -391,8 +458,8 @@ class CustomerController extends ChangeNotifier {
     _restaurantsVisible = visible;
     if (visible) {
       _restaurantsPoller ??= LifecyclePollingController(
-        interval: const Duration(seconds: 25),
-        onTick: refreshRestaurants,
+        interval: const Duration(seconds: 10),
+        onTick: () => refreshRestaurants(forceHydrate: true),
       );
       if (!_restaurantsPoller!.isRunning) {
         try {
@@ -424,7 +491,11 @@ class CustomerController extends ChangeNotifier {
             return card.copyWith(
               planLunchPrice: card.planLunchPrice ?? prev.planLunchPrice,
               todayMenu: card.todayMenu.isNotEmpty ? card.todayMenu : prev.todayMenu,
-              offers: card.offers.isNotEmpty ? card.offers : prev.offers,
+              // En mock el feed es la fuente completa: una oferta cerrada o
+              // pausada por el Dueño debe desaparecer también si queda vacía.
+              offers: AppMode.useMock || card.offers.isNotEmpty
+                  ? card.offers
+                  : prev.offers,
             );
           }(),
       ];
@@ -1306,10 +1377,17 @@ class CustomerController extends ChangeNotifier {
     }
   }
 
-  Future<bool> reserveOffer(RestaurantOffer offer) async {
+  Future<bool> reserveOffer(RestaurantOffer offer, {bool takeaway = false}) async {
     final restaurant = _state.restaurantById(offer.restaurantId);
     if (restaurant == null) return false;
-    return preorder(restaurant: restaurant, offerId: offer.id);
+    final ok = await preorder(
+      restaurant: restaurant,
+      offerId: offer.id,
+      takeaway: takeaway,
+    );
+    // Los cupos cambiaron: el feed se relee para que la oferta baje o salga.
+    if (ok) unawaited(refreshRestaurants());
+    return ok;
   }
 
   Future<void> selectPlansRestaurant(String restaurantId) async {
@@ -1471,12 +1549,16 @@ class CustomerController extends ChangeNotifier {
     );
     var changed = false;
     var fetched = 0;
-    for (var i = 0; i < base.length && fetched < 8; i++) {
+    final prioritized = <Restaurant>[
+      ...base.where(_state._matchesActiveZone),
+      ...base.where((r) => !_state._matchesActiveZone(r)),
+    ];
+    for (var i = 0; i < prioritized.length && fetched < 12; i++) {
       if (_disposed) return;
-      if (!force && base[i].hasMenu) continue;
+      if (!force && prioritized[i].hasMenu) continue;
       fetched++;
       try {
-        final detail = await _repository.getRestaurantById(base[i].id);
+        final detail = await _repository.getRestaurantById(prioritized[i].id);
         if (detail != null && !_disposed) {
           byId[detail.id] = detail;
           final avail = detail.menuAvailabilityState;
@@ -1501,6 +1583,7 @@ class CustomerController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    FlashOffersLiveSync.instance.removeListener(_onFlashOfferLiveSync);
     if (AppMode.useMock) {
       DemoStore.instance.removeListener(_onDemoStoreChanged);
     }

@@ -20,12 +20,17 @@ class DailyMenuAccordionSelector extends StatefulWidget {
     required this.selection,
     required this.onChanged,
     this.enabled = true,
+    this.flashMode = false,
   });
 
   final DailyMenu dailyMenu;
   final GroupOrderDishSelection selection;
   final ValueChanged<GroupOrderDishSelection> onChanged;
   final bool enabled;
+
+  /// Oferta flash del Dueño: sopa y segundo son los principales (hay que elegir
+  /// al menos uno), con "Sin segundo" / "Sin postre"; bebida y postre opcionales.
+  final bool flashMode;
 
   @override
   State<DailyMenuAccordionSelector> createState() =>
@@ -79,7 +84,13 @@ class _DailyMenuAccordionSelectorState
         if (_menu.desserts.isNotEmpty) _Section.dessert,
       ];
 
-  bool _isRequired(_Section s) => s != _Section.dessert;
+  bool _isRequired(_Section s) => widget.flashMode
+      ? (s == _Section.soup || s == _Section.main)
+      : s != _Section.dessert;
+
+  String _badgeOf(_Section s) => widget.flashMode
+      ? (_isRequired(s) ? 'Principal' : 'Opcional')
+      : (_isRequired(s) ? 'Requerido' : 'Opcional');
 
   String _titleOf(_Section s) => switch (s) {
         _Section.soup => '1. Sopa',
@@ -105,12 +116,16 @@ class _DailyMenuAccordionSelectorState
           ],
         _Section.main => [
             for (final o in _menu.mains) _Option(o, tag: _menu.mainTags[o]),
+            if (widget.flashMode) const _Option(kNoMainOption),
           ],
         _Section.drink => [
             for (final o in _menu.drinks) _Option(o),
             const _Option(kNoDrinkOption),
           ],
-        _Section.dessert => [for (final o in _menu.desserts) _Option(o)],
+        _Section.dessert => [
+            for (final o in _menu.desserts) _Option(o),
+            if (widget.flashMode) const _Option(kNoDessertOption),
+          ],
       };
 
   void _toggle(_Section s) {
@@ -129,7 +144,7 @@ class _DailyMenuAccordionSelectorState
       _Section.main => sel.copyWith(main: value),
       _Section.drink => sel.copyWith(drink: value),
       // El postre es opcional: tocar de nuevo la opción elegida la quita.
-      _Section.dessert => sel.dessert == value
+      _Section.dessert => sel.dessert == value && !widget.flashMode
           ? sel.copyWith(clearDessert: true)
           : sel.copyWith(dessert: value),
     };
@@ -182,7 +197,7 @@ class _DailyMenuAccordionSelectorState
           title: _titleOf(s),
           hint: _hintOf(s),
           selectedLabel: selected,
-          required: _isRequired(s),
+          badge: _badgeOf(s),
           expanded: expanded,
           onTap: widget.enabled ? () => _toggle(s) : null,
         ),
@@ -217,7 +232,7 @@ class _SectionHeader extends StatelessWidget {
     required this.title,
     required this.hint,
     required this.selectedLabel,
-    required this.required,
+    required this.badge,
     required this.expanded,
     required this.onTap,
   });
@@ -225,7 +240,7 @@ class _SectionHeader extends StatelessWidget {
   final String title;
   final String hint;
   final String? selectedLabel;
-  final bool required;
+  final String badge;
   final bool expanded;
   final VoidCallback? onTap;
 
@@ -238,7 +253,7 @@ class _SectionHeader extends StatelessWidget {
     return Semantics(
       button: true,
       expanded: expanded,
-      label: '$title, ${required ? 'requerido' : 'opcional'}',
+      label: '$title, $badge',
       child: InkWell(
         onTap: onTap,
         child: Padding(
@@ -278,7 +293,7 @@ class _SectionHeader extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              _RequirementBadge(required: required),
+              _RequirementBadge(label: badge),
               const SizedBox(width: 2),
               Icon(
                 expanded
@@ -296,9 +311,9 @@ class _SectionHeader extends StatelessWidget {
 }
 
 class _RequirementBadge extends StatelessWidget {
-  const _RequirementBadge({required this.required});
+  const _RequirementBadge({required this.label});
 
-  final bool required;
+  final String label;
 
   @override
   Widget build(BuildContext context) {
@@ -310,7 +325,7 @@ class _RequirementBadge extends StatelessWidget {
         borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
-        required ? 'Requerido' : 'Opcional',
+        label,
         style: TextStyle(
           fontSize: 12,
           fontWeight: FontWeight.w600,

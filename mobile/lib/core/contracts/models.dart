@@ -476,12 +476,27 @@ class RestaurantOffer {
   bool isActiveFlashAt(DateTime now) =>
       appliesToday &&
       availableNow &&
+      slotsLeft > 0 &&
       (endsAt == null || endsAt!.isAfter(now));
 
   /// Oferta flash vigente u oferta programada (semanal): cuenta para el
   /// filtro "Ofertas". Una flash vencida deja de contar.
   bool isLiveAt(DateTime now) =>
       !appliesToday || endsAt == null || endsAt!.isAfter(now);
+
+  RestaurantOffer withSlotsLeft(int value) => RestaurantOffer(
+        id: id,
+        restaurantId: restaurantId,
+        title: title,
+        badge: badge,
+        price: price,
+        originalPrice: originalPrice,
+        slotsLeft: value < 0 ? 0 : value,
+        availableNow: availableNow,
+        appliesToday: appliesToday,
+        reservable: reservable,
+        endsAt: endsAt,
+      );
 
   RestaurantOffer withEndsAt(DateTime? value) => RestaurantOffer(
         id: id,

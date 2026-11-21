@@ -150,10 +150,11 @@ class OwnerRepository implements IOwnerRepository, IOwnerMenuRepository, IOwnerC
 
     // Pausa/cancelación automática de Ofertas Flash si el menú entra en AGOTADO_TOTAL.
     if (avail == MenuAvailabilityState.agotadoTotal) {
-      final activeOffer =
-          await _delegate.getActiveOffer(rid.isNotEmpty ? rid : 'rest-001');
-      if (activeOffer != null && activeOffer.kind == OfferKind.flash) {
-        await _delegate.cancelOffer(rid.isNotEmpty ? rid : 'rest-001');
+      final offerRid = rid.isNotEmpty ? rid : 'rest-001';
+      final hasFlash = (await _delegate.getActiveOffers(offerRid))
+          .any((o) => o.kind == OfferKind.flash);
+      if (hasFlash) {
+        await _delegate.cancelOffer(offerRid);
       }
     }
     store.changed();

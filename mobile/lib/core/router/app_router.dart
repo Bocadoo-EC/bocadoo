@@ -26,6 +26,7 @@ import '../../features/owner/presentation/scanner_screen.dart';
 import '../../features/owner/presentation/sell_plan_modal.dart';
 import '../../features/customer/presentation/account_screen.dart';
 import '../../features/customer/presentation/customer_shell.dart';
+import '../../features/customer/presentation/flash_offers_screen.dart';
 import '../../features/customer/presentation/join_table_screen.dart';
 import '../../features/customer/presentation/map_screen.dart';
 import '../../features/customer/presentation/order_status_sheet.dart';
@@ -304,6 +305,11 @@ final GoRouter appRouter = GoRouter(
       builder: (context, state) => OnboardingOwnerScreen(
         precioBase: (state.extra as double?) ?? 3.50,
       ),
+    ),
+    GoRoute(
+      path: '/customer/ofertas-flash',
+      name: 'customer_ofertas_flash',
+      builder: (context, state) => const FlashOffersScreen(),
     ),
     // Customer · Fase 5 (social)
     GoRoute(

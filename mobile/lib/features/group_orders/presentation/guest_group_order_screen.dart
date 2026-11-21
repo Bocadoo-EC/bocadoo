@@ -105,8 +105,9 @@ class _GuestGroupOrderScreenState extends ConsumerState<GuestGroupOrderScreen> {
   void initState() {
     super.initState();
     final sessionName = ref.read(sessionProvider).userName?.trim() ?? '';
-    _nameCtrl.text =
-        sessionName.isNotEmpty ? sessionName : 'Invitado Prueba';
+    _nameCtrl.text = sessionName.isNotEmpty
+        ? sessionName
+        : (AppMode.useMock ? 'Invitado Prueba' : '');
     _load();
   }
 

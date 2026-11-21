@@ -146,9 +146,8 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
       return;
     }
     ref.invalidate(posMenuProvider);
-    ref.invalidate(activeOfferProvider);
-    final dishes =
-        ref.read(catalogDishesProvider).value ?? const <CatalogDish>[];
+    ref.invalidate(activeOffersProvider);
+    final dishes = ref.read(catalogDishesProvider).value ?? const <CatalogDish>[];
     if (_published &&
         dishes.isNotEmpty &&
         _buildMenu(dishes).availabilityState ==
@@ -220,7 +219,7 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
       return;
     }
     container.invalidate(posMenuProvider);
-    container.invalidate(activeOfferProvider);
+    container.invalidate(activeOffersProvider);
     if (menu.availabilityState != MenuAvailabilityState.agotadoTotal) {
       final occupancyErr = await ref
           .read(manualOccupancyProvider.notifier)
@@ -230,28 +229,22 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
         showInfoSnackBar(messenger, occupancyErr);
       }
     }
-    final publishMsg =
-        menu.availabilityState == MenuAvailabilityState.agotadoTotal
-            ? 'Menú marcado como Agotado hoy (ofertas flash pausadas)'
-            : 'Menú de hoy actualizado con éxito';
-    showUndoSnackBar(
-      messenger,
-      label: publishMsg,
-      onUndo: () async {
-        final undone = await repo.unpublishMenu(rid);
-        if (undone) {
-          container.invalidate(posMenuProvider);
-          container.invalidate(activeOfferProvider);
-          if (mounted) setState(() => _published = false);
-        } else {
-          final err = repo is ApiOwnerRepository
-              ? (repo.consumeLastError() ??
-                  'No se pudo deshacer la publicación.')
-              : 'No se pudo deshacer la publicación.';
-          showInfoSnackBar(messenger, err);
-        }
-      },
-    );
+    final publishMsg = menu.availabilityState == MenuAvailabilityState.agotadoTotal
+        ? 'Menú marcado como Agotado hoy (ofertas flash pausadas)'
+        : 'Menú publicado con éxito';
+    showUndoSnackBar(messenger, label: publishMsg, onUndo: () async {
+      final undone = await repo.unpublishMenu(rid);
+      if (undone) {
+        container.invalidate(posMenuProvider);
+        container.invalidate(activeOffersProvider);
+        if (mounted) setState(() => _published = false);
+      } else {
+        final err = repo is ApiOwnerRepository
+            ? (repo.consumeLastError() ?? 'No se pudo deshacer la publicación.')
+            : 'No se pudo deshacer la publicación.';
+        showInfoSnackBar(messenger, err);
+      }
+    });
   }
 
   Future<void> _openOptions(DishKind kind) {

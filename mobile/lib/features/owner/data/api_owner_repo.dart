@@ -120,7 +120,6 @@ class ApiOwnerRepository
 
   final List<CatalogItem> _catalogCache = [];
   int _cachedLunchPriceCents = 0;
-  String? _activeOfferId;
   String? _lastError;
 
   bool get _isCashier => _session.isCashierAccount;
@@ -2088,43 +2087,62 @@ class ApiOwnerRepository
   }
 
   @override
-  Future<FlashOffer?> getActiveOffer(String restaurantId) async {
+  bool get supportsOfferPause => false;
+
+  @override
+  Future<List<FlashOffer>> getActiveOffers(String restaurantId) async {
     final data = await guard(
       () => _api.getMap(
         '${ApiConfig.v1}/ofertas',
-        query: {'estado': 'VIGENTE', 'limit': 1},
+        query: {'estado': 'VIGENTE', 'limit': 50},
         restaurant: true,
       ),
     );
     final items = data['items'] is List ? data['items'] as List : const [];
-    final first = items.whereType<Map>().firstOrNull;
-    if (first == null) {
-      _activeOfferId = null;
-      return null;
+    final offers = <FlashOffer>[];
+    for (final raw in items.whereType<Map>()) {
+      final expiraRaw = raw['expiraEn']?.toString();
+      final endsAt = expiraRaw != null && expiraRaw.isNotEmpty
+          ? _parseDateTime(expiraRaw)
+          : null;
+      final plato = raw['plato'];
+      final stockTotal = _asInt(raw['stockTotal']);
+      offers.add(FlashOffer(
+        id: (raw['id'] ?? '').toString(),
+        kind: OfferKind.flash,
+        title: (raw['titulo'] ?? '').toString(),
+        dishId: plato is Map ? plato['id']?.toString() : null,
+        discountPercent: _asInt(raw['descuentoPorcentaje']),
+        slots: _asInt(raw['stockRestante'], stockTotal),
+        slotsTotal: stockTotal,
+        price: Money.fromCents(_asInt(raw['precioCentavos'])),
+        originalPrice: Money.fromCents(_asInt(raw['precioOriginalCentavos'])),
+        validUntil: endsAt != null ? _hhmmEcuador(endsAt) : null,
+        endsAt: endsAt,
+      ));
     }
-    _activeOfferId = (first['id'] ?? '').toString();
-    final expiraRaw = first['expiraEn']?.toString();
-    final validUntil = expiraRaw != null && expiraRaw.isNotEmpty
-        ? _hhmmEcuador(_parseDateTime(expiraRaw))
-        : null;
-    return FlashOffer(
-      kind: OfferKind.flash,
-      title: (first['titulo'] ?? '').toString(),
-      discountPercent: _asInt(first['descuentoPorcentaje']),
-      slots: _asInt(first['stockRestante'], _asInt(first['stockTotal'])),
-      price: Money.fromCents(_asInt(first['precioCentavos'])),
-      validUntil: validUntil,
-    );
+    return offers;
   }
 
   @override
-  Future<bool> publishOffer(String restaurantId, FlashOffer offer) async {
+  Future<bool> setOfferPaused(
+    String restaurantId,
+    String offerId, {
+    required bool paused,
+  }) async {
+    _lastError = 'Pausar ofertas aún no está disponible. Puedes cerrarla.';
+    return false;
+  }
+
+  @override
+  Future<String?> publishOffer(String restaurantId, FlashOffer offer) async {
     _lastError = null;
     final priceCents = Money.toCents(offer.price);
     final ratio = (100 - offer.discountPercent.clamp(1, 95)) / 100.0;
     final computedOriginal = ratio > 0 ? (priceCents / ratio).round() : priceCents;
-    final originalCents =
-        computedOriginal > priceCents ? computedOriginal : priceCents + 50;
+    final originalCents = offer.originalPrice != null
+        ? Money.toCents(offer.originalPrice!)
+        : (computedOriginal > priceCents ? computedOriginal : priceCents + 50);
 
     int duracionMinutos = 120;
     if (offer.validUntil != null && offer.validUntil!.contains(':')) {
@@ -2146,6 +2164,8 @@ class ApiOwnerRepository
               '${ApiConfig.v1}/ofertas',
               body: {
                 'titulo': offer.title.trim(),
+                if (offer.dishId != null && offer.dishId!.isNotEmpty)
+                  'platoId': offer.dishId,
                 'precioCentavos': priceCents,
                 'precioOriginalCentavos': originalCents,
                 'stock': offer.slots,
@@ -2155,7 +2175,6 @@ class ApiOwnerRepository
               idempotencyKey: ik,
             ).then((v) => v ?? <String, dynamic>{}),
       );
-      _activeOfferId = res['id']?.toString();
       eventsService.track(
         'dueno.oferta_publicada',
         restaurantId: restaurantId,
@@ -2164,37 +2183,40 @@ class ApiOwnerRepository
           'descuento': offer.discountPercent,
         },
       );
-      return true;
+      final id = res['id']?.toString();
+      return (id == null || id.isEmpty) ? 'publicada' : id;
     } on ApiException catch (e) {
       final detail = e.detail.trim();
       _lastError =
           ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
               ? detail
               : e.userMessage;
-      return false;
+      return null;
     } finally {
       _idempotency.done(intent);
     }
   }
 
   @override
-  Future<bool> cancelOffer(String restaurantId) async {
+  Future<bool> cancelOffer(String restaurantId, {String? offerId}) async {
     _lastError = null;
     try {
-      var id = _activeOfferId;
-      if (id == null || id.isEmpty) {
-        await getActiveOffer(restaurantId);
-        id = _activeOfferId;
+      final ids = offerId != null
+          ? [offerId]
+          : [
+              for (final o in await getActiveOffers(restaurantId))
+                if (o.id != null && o.id!.isNotEmpty) o.id!,
+            ];
+      if (ids.isEmpty) return false;
+      for (final id in ids) {
+        await guard(
+          () => _api.send<Map<String, dynamic>>(
+            'POST',
+            '${ApiConfig.v1}/ofertas/$id/cerrar',
+            restaurant: true,
+          ),
+        );
       }
-      if (id == null || id.isEmpty) return false;
-      await guard(
-        () => _api.send<Map<String, dynamic>>(
-          'POST',
-          '${ApiConfig.v1}/ofertas/$id/cerrar',
-          restaurant: true,
-        ),
-      );
-      _activeOfferId = null;
       return true;
     } on ApiException catch (e) {
       final detail = e.detail.trim();
@@ -3856,10 +3878,9 @@ class ApiOwnerRepository
       return;
     }
     try {
-      final activeOffer = await getActiveOffer(restaurantId);
-      if (activeOffer != null && activeOffer.kind == OfferKind.flash) {
-        await cancelOffer(restaurantId);
-      }
+      final hasFlash = (await getActiveOffers(restaurantId))
+          .any((o) => o.kind == OfferKind.flash);
+      if (hasFlash) await cancelOffer(restaurantId);
     } catch (_) {}
   }
 
