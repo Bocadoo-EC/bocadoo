@@ -244,6 +244,18 @@ class _TableOrderCard extends StatelessWidget {
               ),
             ],
           ),
+          if (table.isCollecting) ...[
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OwnerBadge(
+                label:
+                    'Esperando invitados (${table.confirmedCount ?? table.members}/${table.members} listos)',
+                background: colors.secondaryContainer,
+                foreground: colors.onSecondaryContainer,
+              ),
+            ),
+          ],
           const SizedBox(height: 10),
           Container(
             padding: const EdgeInsets.all(12),

@@ -97,27 +97,41 @@ class GroupOrderSimulationStore extends ChangeNotifier {
           .where((s) => s.shortCode == tableId.toUpperCase())
           .firstOrNull;
 
-  /// Pedidos grupales confirmados listos para mostrarse en "Pedidos en camino" del Dueño.
-  List<PendingTable> get confirmedOwnerTables {
+  /// Pedidos grupales activos (recolectando o confirmados) para "Pedidos en camino" del Dueño.
+  List<PendingTable> get confirmedOwnerTables => ownerTablesFor('');
+
+  List<PendingTable> ownerTablesFor(String restaurantId) {
     final out = <PendingTable>[];
     for (final s in _sessionsById.values) {
-      if (s.status != GroupOrderStatus.confirmed) continue;
+      final activeStatus = s.status == GroupOrderStatus.collecting ||
+          s.status == GroupOrderStatus.confirmed;
+      if (!activeStatus) continue;
+      if (restaurantId.isNotEmpty &&
+          s.restaurantId.isNotEmpty &&
+          s.restaurantId != restaurantId) {
+        continue;
+      }
       final takeawayCount =
           s.participants.where((p) => p.selection.takeaway).length;
       final planCount = s.participants.where((p) => p.paidByPlan).length;
-      final cashCount = s.participants.length - planCount;
+      final isCollecting = s.status == GroupOrderStatus.collecting;
+      final memberCount =
+          isCollecting ? s.totalParticipants : s.participants.length;
+      final cashCount = (memberCount - planCount).clamp(0, memberCount);
       final surchargeCents = (s.dailyMenu.takeawaySurcharge * 100).round();
 
       out.add(
         PendingTable(
           id: s.tableId,
           hostName: 'Mesa de ${s.hostName}',
-          members: s.participants.length,
+          members: memberCount,
           time: s.timeHhmm,
           planCount: planCount,
           cashCount: cashCount,
           takeawayCount: takeawayCount,
           takeawaySurchargeCents: surchargeCents,
+          isCollecting: isCollecting,
+          confirmedCount: s.participants.length,
           memberDishes: [
             for (final p in s.participants)
               PendingTableMemberDish(

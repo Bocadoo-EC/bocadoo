@@ -114,34 +114,33 @@ final activeOrdersProvider = FutureProvider.autoDispose<List<OwnerOrder>>((ref) 
 /// Mesas con amigos por cobrar (banner de Caja / Pedidos en camino).
 final pendingTablesProvider =
     FutureProvider.autoDispose<List<PendingTable>>((ref) async {
-  _scheduleOrdersPoll(ref);
+  _scheduleOrdersPoll(ref, interval: const Duration(seconds: 4));
 
-  if (AppMode.useMock) {
-    final sim = GroupOrderSimulationStore.instance;
-    void onSimChanged() => ref.invalidateSelf();
-    sim.addListener(onSimChanged);
-    ref.onDispose(() => sim.removeListener(onSimChanged));
+  final sim = GroupOrderSimulationStore.instance;
+  void onSimChanged() => ref.invalidateSelf();
+  sim.addListener(onSimChanged);
+  ref.onDispose(() => sim.removeListener(onSimChanged));
 
-    final repoTables = ApiCapabilities.ownerPendingTablesList
-        ? await ref
-            .read(ownerTablesRepositoryProvider)
-            .getPendingTables(ref.read(ownerRestaurantIdProvider))
-        : const <PendingTable>[];
+  final restaurantId = ref.read(ownerRestaurantIdProvider);
+  final simTables = sim.ownerTablesFor(restaurantId);
 
-    final simTables = sim.confirmedOwnerTables;
-    if (simTables.isEmpty) return repoTables;
-
-    final merged = <String, PendingTable>{
-      for (final t in repoTables) t.id: t,
-      for (final t in simTables) t.id: t,
-    };
-    return merged.values.toList();
+  List<PendingTable> repoTables = const <PendingTable>[];
+  if (ApiCapabilities.ownerPendingTablesList) {
+    try {
+      repoTables = await ref
+          .read(ownerTablesRepositoryProvider)
+          .getPendingTables(restaurantId);
+    } catch (_) {
+      if (simTables.isEmpty) rethrow;
+    }
   }
 
-  if (!ApiCapabilities.ownerPendingTablesList) return const <PendingTable>[];
-  return ref
-      .read(ownerTablesRepositoryProvider)
-      .getPendingTables(ref.read(ownerRestaurantIdProvider));
+  if (simTables.isEmpty) return repoTables;
+  final merged = <String, PendingTable>{
+    for (final t in repoTables) t.id: t,
+    for (final t in simTables) t.id: t,
+  };
+  return merged.values.toList();
 });
 
 /// O15 · Opiniones.

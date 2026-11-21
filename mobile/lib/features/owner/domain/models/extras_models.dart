@@ -91,6 +91,8 @@ class PendingTable {
     this.takeawayCount = 0,
     this.takeawaySurchargeCents = 0,
     this.memberDishes = const [],
+    this.isCollecting = false,
+    this.confirmedCount,
   });
 
   final String id;
@@ -102,6 +104,8 @@ class PendingTable {
   final int takeawayCount;
   final int takeawaySurchargeCents;
   final List<PendingTableMemberDish> memberDishes;
+  final bool isCollecting;
+  final int? confirmedCount;
 
   String get shortId {
     final clean = id.replaceAll('-', '').trim().toUpperCase();
