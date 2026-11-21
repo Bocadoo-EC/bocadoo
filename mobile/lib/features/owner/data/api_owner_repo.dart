@@ -2164,8 +2164,8 @@ class ApiOwnerRepository
               '${ApiConfig.v1}/ofertas',
               body: {
                 'titulo': offer.title.trim(),
-                if (offer.dishId != null && offer.dishId!.isNotEmpty)
-                  'platoId': offer.dishId,
+                if (offer.dishId != null && _uuidRegex.hasMatch(offer.dishId!.trim()))
+                  'platoId': offer.dishId!.trim(),
                 'precioCentavos': priceCents,
                 'precioOriginalCentavos': originalCents,
                 'stock': offer.slots,
