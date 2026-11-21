@@ -1030,7 +1030,8 @@ class MockOwnerRepository
       ManualOccupancyStatus.concurrido => 'MOVIDO',
       ManualOccupancyStatus.libre => 'LIBRE',
     };
-    final effectiveUntil = status == ManualOccupancyStatus.lleno
+    final effectiveUntil = (status == ManualOccupancyStatus.lleno ||
+            status == ManualOccupancyStatus.concurrido)
         ? (fullUntil ?? DateTime.now().add(const Duration(minutes: 20)))
         : null;
     final isOpen = status != ManualOccupancyStatus.cerrado;

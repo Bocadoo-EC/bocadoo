@@ -41,11 +41,13 @@ class RestaurantPublicStatus {
   final RestaurantEffectiveStatus effective;
   final ManualOccupancyStatus manual;
   final DateTime? fullUntil;
+  final DateTime? concurridoUntil;
 
   const RestaurantPublicStatus({
     required this.effective,
     required this.manual,
     this.fullUntil,
+    this.concurridoUntil,
   });
 
   bool get isSoldOutToday => effective == RestaurantEffectiveStatus.agotadoHoy;
@@ -54,6 +56,14 @@ class RestaurantPublicStatus {
 
   int get remainingFullMinutes {
     final until = fullUntil;
+    if (until == null) return 0;
+    final secs = until.difference(DateTime.now()).inSeconds;
+    if (secs <= 0) return 0;
+    return (secs / 60).ceil();
+  }
+
+  int get remainingConcurridoMinutes {
+    final until = concurridoUntil;
     if (until == null) return 0;
     final secs = until.difference(DateTime.now()).inSeconds;
     if (secs <= 0) return 0;
@@ -75,30 +85,38 @@ class RestaurantPublicStatus {
       other is RestaurantPublicStatus &&
       other.effective == effective &&
       other.manual == manual &&
-      other.fullUntil == fullUntil;
+      other.fullUntil == fullUntil &&
+      other.concurridoUntil == concurridoUntil;
 
   @override
-  int get hashCode => Object.hash(effective, manual, fullUntil);
+  int get hashCode =>
+      Object.hash(effective, manual, fullUntil, concurridoUntil);
 }
 
 /// Evalúa el estado público efectivo respetando la jerarquía estricta:
 /// 1. Prioridad 1: `CERRADO` si el local fue cerrado/pausado manualmente.
 /// 2. Prioridad 2: `AGOTADO_HOY` si el menú del día quedó con 0 platos disponibles.
-/// 3. Prioridad 3: Semáforo manual (`LIBRE` | `CONCURRIDO` | `LLENO` vigente hasta `fullUntil`).
+/// 3. Prioridad 3: Semáforo manual (`LIBRE` | `CONCURRIDO` | `LLENO` vigente hasta `fullUntil`/`concurridoUntil`).
 RestaurantPublicStatus resolveRestaurantPublicStatus({
   required MenuAvailabilityState menuAvailability,
   required ManualOccupancyStatus manual,
   bool isOpen = true,
   DateTime? fullUntil,
+  DateTime? concurridoUntil,
   DateTime? now,
   bool ignoreClock = false,
 }) {
   final clock = now ?? DateTime.now();
   final fullActive = manual == ManualOccupancyStatus.lleno &&
       (ignoreClock || fullUntil == null || fullUntil.isAfter(clock));
+  final concurridoActive = manual == ManualOccupancyStatus.concurrido &&
+      (ignoreClock ||
+          concurridoUntil == null ||
+          concurridoUntil.isAfter(clock));
   final effectiveManual = !isOpen
       ? ManualOccupancyStatus.cerrado
-      : (manual == ManualOccupancyStatus.lleno && !fullActive)
+      : ((manual == ManualOccupancyStatus.lleno && !fullActive) ||
+              (manual == ManualOccupancyStatus.concurrido && !concurridoActive))
           ? ManualOccupancyStatus.libre
           : manual;
 
@@ -114,6 +132,7 @@ RestaurantPublicStatus resolveRestaurantPublicStatus({
       effective: RestaurantEffectiveStatus.agotadoHoy,
       manual: effectiveManual,
       fullUntil: fullActive ? fullUntil : null,
+      concurridoUntil: concurridoActive ? concurridoUntil : null,
     );
   }
 
@@ -127,6 +146,7 @@ RestaurantPublicStatus resolveRestaurantPublicStatus({
     effective: effective,
     manual: effectiveManual,
     fullUntil: fullActive ? fullUntil : null,
+    concurridoUntil: concurridoActive ? concurridoUntil : null,
   );
 }
 

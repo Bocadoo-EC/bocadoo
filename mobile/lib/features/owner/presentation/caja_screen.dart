@@ -92,8 +92,10 @@ class _Header extends ConsumerWidget {
       RestaurantEffectiveStatus.concurrido => (
           b.walletAccent.withValues(alpha: 0.45),
           b.onWalletAccent,
-          b.onWalletAccent,
-          'Concurrido',
+          b.statusConcurridoDot,
+          status.remainingConcurridoMinutes > 0
+              ? 'Concurrido · ${status.remainingConcurridoMinutes}m'
+              : 'Concurrido',
         ),
       RestaurantEffectiveStatus.lleno => (
           b.danger,
@@ -170,6 +172,9 @@ class _PublicStatusSheet extends ConsumerWidget {
     final notifier = ref.read(manualOccupancyProvider.notifier);
     final isFullActive = status.manual == ManualOccupancyStatus.lleno &&
         status.remainingFullMinutes > 0;
+    final isConcurridoActive =
+        status.manual == ManualOccupancyStatus.concurrido &&
+            status.remainingConcurridoMinutes > 0;
     final messenger = ScaffoldMessenger.of(context);
 
     Future<void> selectStatus(Future<String?> Function() action) async {
@@ -309,8 +314,11 @@ class _PublicStatusSheet extends ConsumerWidget {
             ),
             const SizedBox(height: 8),
             optionTile(
-              title: 'Concurrido',
-              subtitle: 'Pocas mesas disponibles o ligera espera.',
+              title: isConcurridoActive
+                  ? 'Concurrido · Quedan ${status.remainingConcurridoMinutes} min'
+                  : 'Concurrido (20 min)',
+              subtitle:
+                  'Pocas mesas disponibles o ligera espera (vuelve a Libre en 20 min).',
               dotColor: b.statusConcurridoDot,
               selected: status.manual == ManualOccupancyStatus.concurrido,
               onTap: () => unawaited(

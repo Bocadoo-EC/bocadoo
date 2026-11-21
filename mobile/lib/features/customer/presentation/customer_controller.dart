@@ -310,13 +310,13 @@ class CustomerController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Activa o pausa la sincronización asíncrona cada 10 s y al volver de
+  /// Activa o pausa la sincronización asíncrona cada 25 s y al volver de
   /// segundo plano mientras la pestaña **Restaurantes** está visible.
   void setRestaurantsVisible(bool visible) {
     _restaurantsVisible = visible;
     if (visible) {
       _restaurantsPoller ??= LifecyclePollingController(
-        interval: const Duration(seconds: 5),
+        interval: const Duration(seconds: 25),
         onTick: refreshRestaurants,
       );
       if (!_restaurantsPoller!.isRunning) {

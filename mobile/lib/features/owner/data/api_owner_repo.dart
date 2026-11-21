@@ -253,21 +253,86 @@ class ApiOwnerRepository
     return data;
   }
 
+  DateTime? _parseFutureLocal(Object? raw) {
+    if (raw is! String || raw.isEmpty) return null;
+    final dt = DateTime.tryParse(raw)?.toLocal();
+    if (dt != null && dt.isAfter(DateTime.now())) {
+      return dt;
+    }
+    return null;
+  }
+
   /// Lee `llenoManualHasta` desde `GET /v1/restaurante` para inicializar el
   /// estado del interruptor de local lleno al abrir Caja.
   Future<DateTime?> fetchManualBusyUntil() async {
     try {
       final data = await _fetchRestaurantMap();
-      final raw = data['llenoManualHasta'];
-      if (raw is String && raw.isNotEmpty) {
-        final dt = DateTime.tryParse(raw)?.toLocal();
-        if (dt != null && dt.isAfter(DateTime.now())) {
-          return dt;
-        }
-      }
-      return null;
+      return _parseFutureLocal(data['llenoManualHasta']);
     } catch (_) {
       return null;
+    }
+  }
+
+  /// Lee el estado real de disponibilidad desde `GET /v1/restaurante`
+  /// (`estado`, `ocupacion`, `llenoManualHasta` y `concurridoManualHasta`).
+  Future<
+      ({
+        bool isOpen,
+        ManualOccupancyStatus manual,
+        DateTime? fullUntil,
+        DateTime? concurridoUntil,
+      })> fetchManualOccupancyState() async {
+    try {
+      final data = await _fetchRestaurantMap();
+      final estado = (data['estado'] ?? 'ACTIVO').toString().toUpperCase();
+      final isOpen = estado == 'ACTIVO';
+      if (!isOpen) {
+        return (
+          isOpen: false,
+          manual: ManualOccupancyStatus.cerrado,
+          fullUntil: null,
+          concurridoUntil: null,
+        );
+      }
+
+      final fullUntil = _parseFutureLocal(data['llenoManualHasta']);
+      final concurridoUntil = _parseFutureLocal(data['concurridoManualHasta']);
+      final ocupacion =
+          data['ocupacion'] is Map ? data['ocupacion'] as Map : const {};
+      final nivel = (ocupacion['nivel'] ?? '').toString().toUpperCase();
+      final isFullByOccupancy =
+          ocupacion['lleno'] == true || nivel == 'LLENO';
+
+      // Un aforo >= 90% da LLENO aunque el dueño haya marcado Concurrido.
+      if (fullUntil != null || isFullByOccupancy) {
+        return (
+          isOpen: true,
+          manual: ManualOccupancyStatus.lleno,
+          fullUntil: fullUntil,
+          concurridoUntil: null,
+        );
+      }
+      if (concurridoUntil != null) {
+        return (
+          isOpen: true,
+          manual: ManualOccupancyStatus.concurrido,
+          fullUntil: null,
+          concurridoUntil: concurridoUntil,
+        );
+      }
+      return (
+        isOpen: true,
+        manual: ManualOccupancyStatus.libre,
+        fullUntil: null,
+        concurridoUntil: null,
+      );
+    } catch (_) {
+      return (
+        isOpen: true,
+        manual: ManualOccupancyStatus.libre,
+        fullUntil: null,
+        concurridoUntil: null,
+      );
     }
   }
 
@@ -2175,6 +2240,13 @@ class ApiOwnerRepository
     final busy = status == ManualOccupancyStatus.lleno;
     final isClosed = status == ManualOccupancyStatus.cerrado;
 
+    Future<void> clearLegacyPref() async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove('$_manualOccupancyPrefPrefix$restaurantId');
+      } catch (_) {}
+    }
+
     try {
       if (isClosed) {
         final paused = await setStoreOpen(restaurantId, isOpen: false);
@@ -2187,18 +2259,12 @@ class ApiOwnerRepository
             () => _api.send<Map<String, dynamic>>(
                   'POST',
                   '${ApiConfig.v1}/restaurante/lleno',
-                  body: const {'lleno': false},
+                  body: const {'nivel': 'LIBRE'},
                   restaurant: true,
                 ).then((v) => v ?? <String, dynamic>{}),
           );
         } catch (_) {}
-        try {
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setString(
-            '$_manualOccupancyPrefPrefix$restaurantId',
-            'CERRADO',
-          );
-        } catch (_) {}
+        await clearLegacyPref();
         eventsService.track(
           'dueno.aforo_cambiado',
           restaurantId: restaurantId,
@@ -2224,59 +2290,41 @@ class ApiOwnerRepository
         ManualOccupancyStatus.libre || ManualOccupancyStatus.cerrado => 'LIBRE',
       };
 
-      Map<String, dynamic> res;
-      try {
-        res = await guard(
-          () => _api.send<Map<String, dynamic>>(
-                'POST',
-                '${ApiConfig.v1}/restaurante/lleno',
-                body: {'lleno': busy, 'nivel': nivel},
-                restaurant: true,
-              ).then((v) => v ?? <String, dynamic>{}),
-        );
-      } on ApiException catch (e) {
-        // Fallback temporal si el backend aún tiene whitelist estricto sin `nivel`.
-        if (e.status != 400) rethrow;
-        res = await guard(
-          () => _api.send<Map<String, dynamic>>(
-                'POST',
-                '${ApiConfig.v1}/restaurante/lleno',
-                body: {'lleno': busy},
-                restaurant: true,
-              ).then((v) => v ?? <String, dynamic>{}),
-        );
-      }
+      final res = await guard(
+        () => _api.send<Map<String, dynamic>>(
+              'POST',
+              '${ApiConfig.v1}/restaurante/lleno',
+              body: {'nivel': nivel},
+              restaurant: true,
+            ).then((v) => v ?? <String, dynamic>{}),
+      );
 
-      // Solo limpiar/persistir en SharedPreferences después de confirmación 200 OK del servidor.
-      try {
-        final prefs = await SharedPreferences.getInstance();
-        if (status == ManualOccupancyStatus.concurrido) {
-          await prefs.setString(
-            '$_manualOccupancyPrefPrefix$restaurantId',
-            'CONCURRIDO',
-          );
-        } else {
-          await prefs.remove('$_manualOccupancyPrefPrefix$restaurantId');
-        }
-      } catch (_) {}
+      await clearLegacyPref();
 
       eventsService.track(
         'dueno.aforo_cambiado',
         restaurantId: restaurantId,
-        props: {'lleno': busy, 'estado': status.name},
+        props: {'lleno': busy, 'nivel': nivel, 'estado': status.name},
       );
-      if (!busy) return null;
-      final serverRaw = res['llenoManualHasta']?.toString();
-      if (serverRaw != null && serverRaw.isNotEmpty) {
-        final serverDt = DateTime.tryParse(serverRaw)?.toLocal();
-        if (serverDt != null && serverDt.isAfter(DateTime.now())) {
+
+      if (status == ManualOccupancyStatus.lleno) {
+        final serverDt = _parseFutureLocal(res['llenoManualHasta']);
+        if (serverDt != null) {
           if (fullUntil != null && fullUntil.isAfter(serverDt)) {
             return fullUntil;
           }
           return serverDt;
         }
+        return fullUntil ?? DateTime.now().add(const Duration(minutes: 20));
       }
-      return fullUntil ?? DateTime.now().add(const Duration(minutes: 20));
+
+      if (status == ManualOccupancyStatus.concurrido) {
+        return _parseFutureLocal(res['concurridoManualHasta']) ??
+            fullUntil ??
+            DateTime.now().add(const Duration(minutes: 20));
+      }
+
+      return null;
     } on ApiException catch (e) {
       final detail = e.detail.trim();
       _lastError =
@@ -3502,7 +3550,7 @@ class ApiOwnerRepository
             () => _api.send<Map<String, dynamic>>(
                   'POST',
                   '${ApiConfig.v1}/restaurante/lleno',
-                  body: const {'lleno': false},
+                  body: const {'nivel': 'LIBRE'},
                   restaurant: true,
                 ).then((v) => v ?? <String, dynamic>{}),
           );

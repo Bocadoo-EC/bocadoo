@@ -476,11 +476,13 @@ class ManualOccupancyState {
   const ManualOccupancyState({
     this.manual = ManualOccupancyStatus.libre,
     this.fullUntil,
+    this.concurridoUntil,
     this.tick = 0,
   });
 
   final ManualOccupancyStatus manual;
   final DateTime? fullUntil;
+  final DateTime? concurridoUntil;
   final int tick;
 }
 
@@ -500,6 +502,7 @@ final ownerPublicStatusProvider =
     manual: manualState.manual,
     isOpen: manualState.manual != ManualOccupancyStatus.cerrado,
     fullUntil: manualState.fullUntil,
+    concurridoUntil: manualState.concurridoUntil,
   );
 });
 
@@ -533,28 +536,43 @@ class ManualOccupancyNotifier extends Notifier<ManualOccupancyState> {
 
   Future<void> _loadInitial() async {
     final repo = ref.read(apiOwnerRepositoryProvider);
-    final rid = ref.read(ownerRestaurantIdProvider);
-    final isOpen = await repo.fetchStoreOpen();
+    final snap = await repo.fetchManualOccupancyState();
     if (_disposed) return;
-    if (!isOpen) {
+    if (!snap.isOpen || snap.manual == ManualOccupancyStatus.cerrado) {
+      _timer?.cancel();
+      _timer = null;
       state = const ManualOccupancyState(manual: ManualOccupancyStatus.cerrado);
       return;
     }
-    final until = await repo.fetchManualBusyUntil();
-    if (_disposed) return;
-    if (until != null && until.isAfter(DateTime.now())) {
+    if (snap.manual == ManualOccupancyStatus.lleno) {
       state = ManualOccupancyState(
         manual: ManualOccupancyStatus.lleno,
-        fullUntil: until,
+        fullUntil: snap.fullUntil,
       );
-      _startTimer();
+      if (snap.fullUntil != null) {
+        _startTimer();
+      } else {
+        _timer?.cancel();
+        _timer = null;
+      }
       return;
     }
-    final pref = await repo.fetchManualOccupancyPreference(rid);
-    if (_disposed) return;
-    if (pref == ManualOccupancyStatus.concurrido) {
-      state = const ManualOccupancyState(manual: ManualOccupancyStatus.concurrido);
+    if (snap.manual == ManualOccupancyStatus.concurrido) {
+      state = ManualOccupancyState(
+        manual: ManualOccupancyStatus.concurrido,
+        concurridoUntil: snap.concurridoUntil,
+      );
+      if (snap.concurridoUntil != null) {
+        _startTimer();
+      } else {
+        _timer?.cancel();
+        _timer = null;
+      }
+      return;
     }
+    _timer?.cancel();
+    _timer = null;
+    state = const ManualOccupancyState(manual: ManualOccupancyStatus.libre);
   }
 
   Future<void> refreshFromServer() async {
@@ -568,8 +586,12 @@ class ManualOccupancyNotifier extends Notifier<ManualOccupancyState> {
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 15), (_) {
       if (_disposed) return;
-      final until = state.fullUntil;
-      if (state.manual != ManualOccupancyStatus.lleno || until == null) {
+      final until = switch (state.manual) {
+        ManualOccupancyStatus.lleno => state.fullUntil,
+        ManualOccupancyStatus.concurrido => state.concurridoUntil,
+        _ => null,
+      };
+      if (until == null) {
         _timer?.cancel();
         _timer = null;
         return;
@@ -577,12 +599,17 @@ class ManualOccupancyNotifier extends Notifier<ManualOccupancyState> {
       if (!until.isAfter(DateTime.now())) {
         _timer?.cancel();
         _timer = null;
-        unawaited(setStatus(ManualOccupancyStatus.libre));
+        if (!AppMode.useMock) {
+          unawaited(refreshFromServer());
+        } else {
+          unawaited(setStatus(ManualOccupancyStatus.libre));
+        }
         return;
       }
       state = ManualOccupancyState(
         manual: state.manual,
-        fullUntil: until,
+        fullUntil: state.fullUntil,
+        concurridoUntil: state.concurridoUntil,
         tick: state.tick + 1,
       );
     });
@@ -593,11 +620,12 @@ class ManualOccupancyNotifier extends Notifier<ManualOccupancyState> {
     final rid = ref.read(ownerRestaurantIdProvider);
     final cashRepo = ref.read(ownerCashRepositoryProvider);
 
-    if (next == ManualOccupancyStatus.lleno) {
+    if (next == ManualOccupancyStatus.lleno ||
+        next == ManualOccupancyStatus.concurrido) {
       final until = DateTime.now().add(busyDuration);
       final syncedUntil = await cashRepo.setManualOccupancy(
         rid,
-        status: ManualOccupancyStatus.lleno,
+        status: next,
         fullUntil: until,
       );
       if (_disposed) return null;
@@ -608,13 +636,17 @@ class ManualOccupancyNotifier extends Notifier<ManualOccupancyState> {
         state = prev;
         return (apiErr != null && apiErr.isNotEmpty)
             ? apiErr
-            : 'No se pudo marcar como Lleno en el servidor.';
+            : (next == ManualOccupancyStatus.lleno
+                ? 'No se pudo marcar como Lleno en el servidor.'
+                : 'No se pudo marcar como Concurrido en el servidor.');
       }
       final confirmedUntil =
           syncedUntil.isAfter(DateTime.now()) ? syncedUntil : until;
       state = ManualOccupancyState(
-        manual: ManualOccupancyStatus.lleno,
-        fullUntil: confirmedUntil,
+        manual: next,
+        fullUntil: next == ManualOccupancyStatus.lleno ? confirmedUntil : null,
+        concurridoUntil:
+            next == ManualOccupancyStatus.concurrido ? confirmedUntil : null,
         tick: prev.tick + 1,
       );
       _startTimer();
