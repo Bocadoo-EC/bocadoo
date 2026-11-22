@@ -7,6 +7,7 @@ import '../../features/auth/presentation/onboarding_diner_screen.dart';
 import '../../features/auth/presentation/onboarding_owner_screen.dart';
 import '../../features/auth/presentation/register_diner_screen.dart';
 import '../../features/auth/presentation/register_owner_screen.dart';
+import '../../features/owner/domain/models/extras_models.dart';
 import '../../features/owner/presentation/add_client_sheet.dart';
 import '../../features/owner/presentation/cartulina_sheet.dart';
 import '../../features/owner/presentation/cash_closing_screen.dart';
@@ -246,7 +247,10 @@ final GoRouter appRouter = GoRouter(
     GoRoute(
       path: '/owner/scanner',
       name: 'owner_scanner',
-      builder: (context, state) => const ScannerScreen(),
+      builder: (context, state) => ScannerScreen(
+        expectedOrder:
+            state.extra is OwnerOrder ? state.extra as OwnerOrder : null,
+      ),
     ),
     // El resultado se muestra como tarjeta flotante sobre Caja (ver openScannerFlow)
     GoRoute(

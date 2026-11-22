@@ -7,14 +7,17 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../../core/config/app_mode.dart';
 import '../../../core/contracts/qr_parser.dart';
 import '../../../core/theme/app_theme.dart';
+import '../domain/models/extras_models.dart';
 import 'owner_controller.dart';
 
 /// Escáner QR del Dueño: cámara con ML Kit (offline), overlay animado,
 /// linterna, simulación para emulador e ingreso manual del token.
-/// Al obtener un resultado vuelve a la pantalla anterior, que muestra la
-/// tarjeta flotante (ver `openScannerFlow`).
+/// Cuando recibe [expectedOrder] desde Pedidos en camino, valida el QR de esa
+/// orden y retorna el [OwnerOrder] verificado para abrir Confirmar cobro.
 class ScannerScreen extends ConsumerStatefulWidget {
-  const ScannerScreen({super.key});
+  const ScannerScreen({super.key, this.expectedOrder});
+
+  final OwnerOrder? expectedOrder;
 
   @override
   ConsumerState<ScannerScreen> createState() => _ScannerScreenState();
@@ -37,6 +40,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
   /// para que la cámara no dispare validaciones paralelas.
   bool _paused = false;
   bool _isProcessingScan = false;
+  bool _verifyingOrder = false;
 
   @override
   void initState() {
@@ -44,7 +48,9 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
     WidgetsBinding.instance.addObserver(this);
     // Deja el controlador en Scanning al abrir la pantalla.
     Future.microtask(() {
-      if (mounted) ref.read(ownerControllerProvider.notifier).startScanning();
+      if (mounted && widget.expectedOrder == null) {
+        ref.read(ownerControllerProvider.notifier).startScanning();
+      }
     });
   }
 
@@ -92,6 +98,48 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
     try {
       await _camera.stop();
     } catch (_) {}
+
+    final expected = widget.expectedOrder;
+    if (expected != null) {
+      if (mounted) setState(() => _verifyingOrder = true);
+      final ordersRepo = ref.read(ownerOrdersRepositoryProvider);
+      final rid = ref.read(ownerRestaurantIdProvider);
+      final check = await ordersRepo.verifyOrderQrCode(
+        rawToken,
+        rid,
+        expectedOrder: expected,
+      );
+      if (!mounted) return;
+      setState(() => _verifyingOrder = false);
+      if (check.isValid && check.order != null) {
+        context.pop(check.order);
+        return;
+      }
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Código no válido'),
+          content: Text(
+            check.errorMessage ??
+                'El código no corresponde al pedido #${expected.number}.',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Volver a escanear'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted) return;
+      _isProcessingScan = false;
+      _paused = false;
+      if (_camera.value.hasCameraPermission) {
+        await _camera.start();
+      }
+      return;
+    }
+
     final controller = ref.read(ownerControllerProvider.notifier);
     await controller.onCodeDetected(rawToken);
     if (!mounted) return;
@@ -117,7 +165,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
     final token = await showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
-      builder: (_) => const _SimulatorSheet(),
+      builder: (_) => _SimulatorSheet(expectedOrder: widget.expectedOrder),
     );
     _paused = false;
     if (token != null && mounted) _submit(token);
@@ -127,7 +175,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
     _paused = true;
     final token = await showDialog<String>(
       context: context,
-      builder: (_) => const _ManualEntryDialog(),
+      builder: (_) => _ManualEntryDialog(expectedOrder: widget.expectedOrder),
     );
     _paused = false;
     if (token != null && mounted) _submit(token);
@@ -150,7 +198,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
   Widget build(BuildContext context) {
     final scheme = context.colorScheme;
     final state = ref.watch(ownerControllerProvider);
-    final processing = state is OwnerScanning && state.isProcessing;
+    final processing = _verifyingOrder || (state is OwnerScanning && state.isProcessing);
+    final expected = widget.expectedOrder;
 
     return Scaffold(
       resizeToAvoidBottomInset: false,
@@ -184,7 +233,35 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
                 _TopBar(
                   camera: _camera,
                   onClose: _close,
+                  title: expected != null
+                      ? 'Cobrar pedido #${expected.number}'
+                      : 'Escanear QR',
                 ),
+                if (expected != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: scheme.primaryContainer,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        '${expected.dinerName} · Escanea su QR para confirmar cobro',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w800,
+                          color: scheme.onPrimaryContainer,
+                        ),
+                      ),
+                    ),
+                  ),
                 const Spacer(),
                 const SizedBox(height: _frameSize),
                 const SizedBox(height: 24),
@@ -221,10 +298,15 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
 }
 
 class _TopBar extends StatelessWidget {
-  const _TopBar({required this.camera, required this.onClose});
+  const _TopBar({
+    required this.camera,
+    required this.onClose,
+    this.title = 'Escanear QR',
+  });
 
   final MobileScannerController camera;
   final VoidCallback onClose;
+  final String title;
 
   @override
   Widget build(BuildContext context) {
@@ -244,7 +326,9 @@ class _TopBar extends StatelessWidget {
           ),
           Expanded(
             child: Text(
-              'Escanear QR',
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     color: scheme.surface,
@@ -376,15 +460,32 @@ class _CameraError extends StatelessWidget {
 
 /// Hoja con tokens de prueba (solo debug / emulador).
 class _SimulatorSheet extends StatelessWidget {
-  const _SimulatorSheet();
+  const _SimulatorSheet({this.expectedOrder});
+
+  final OwnerOrder? expectedOrder;
 
   @override
   Widget build(BuildContext context) {
     final scheme = context.colorScheme;
+    final expected = expectedOrder;
     return SafeArea(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (expected != null)
+            ListTile(
+              leading: Icon(Icons.qr_code_2_rounded, color: scheme.primary),
+              title: Text('Pedido #${expected.number} (${expected.dinerName})'),
+              subtitle: const Text('QR del pedido esperado · abre Confirmar cobro'),
+              onTap: () => Navigator.pop(
+                context,
+                BocadooQrParser.generateOrderCode(
+                  expected.number,
+                  orderId: expected.id ?? expected.number,
+                  restaurantId: expected.restaurantId,
+                ),
+              ),
+            ),
           ListTile(
             leading: Icon(Icons.check_circle_outline, color: scheme.primary),
             title: const Text('Token válido'),
@@ -438,7 +539,9 @@ class _SimulatorSheet extends StatelessWidget {
 
 /// Diálogo para escribir el token a mano si falla la cámara.
 class _ManualEntryDialog extends StatefulWidget {
-  const _ManualEntryDialog();
+  const _ManualEntryDialog({this.expectedOrder});
+
+  final OwnerOrder? expectedOrder;
 
   @override
   State<_ManualEntryDialog> createState() => _ManualEntryDialogState();
@@ -497,7 +600,9 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
                 textInputAction: TextInputAction.done,
                 textCapitalization: TextCapitalization.characters,
                 decoration: InputDecoration(
-                  hintText: 'Ej: A7K9P2 o #7',
+                  hintText: widget.expectedOrder != null
+                      ? 'Ej: #${widget.expectedOrder!.number} o código del QR'
+                      : 'Ej: A7K9P2 o #7',
                   errorText: _error,
                 ),
                 onChanged: (_) {

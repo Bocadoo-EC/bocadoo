@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -5,6 +8,7 @@ import 'package:material_ui/material_ui.dart';
 import '../../../core/config/app_mode.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatters.dart';
+import '../domain/models/cash_models.dart';
 import '../domain/models/extras_models.dart';
 import 'owner_controller.dart';
 import 'owner_format.dart';
@@ -27,8 +31,8 @@ String _short(String? dish) {
   return i > 0 ? dish.substring(0, i) : dish;
 }
 
-/// O12 · Pedidos en camino: preórdenes por cobrar (solo efectivo) y entregar.
-/// [chargeNumber] abre directo la hoja de cobro (QR `BCD-ORD-…` del escáner).
+/// O12 · Pedidos en camino: preórdenes por cobrar (Efectivo / Transfer. / Deuna) y entregar.
+/// [chargeNumber] abre directo el modal Confirmar cobro (QR `BCD-ORD-…` del escáner).
 class PedidosScreen extends ConsumerStatefulWidget {
   const PedidosScreen({super.key, this.chargeNumber});
 
@@ -46,6 +50,7 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
     ref.invalidate(ordersOnTheWayProvider);
     ref.invalidate(pendingTablesProvider);
     ref.invalidate(dailySummaryProvider);
+    unawaited(ref.read(cajaMovementsProvider.notifier).refresh());
   }
 
   void _maybeOpenFromScanner(List<OwnerOrder> orders) {
@@ -56,30 +61,71 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
       if (!mounted) return;
       final order = orders.where((o) => o.number == number).firstOrNull;
       if (order == null) {
-        showInfoSnackBar(ScaffoldMessenger.of(context), 'No hay un pedido #$number por entregar.');
+        showInfoSnackBar(
+          ScaffoldMessenger.of(context),
+          'No hay un pedido #$number por entregar.',
+        );
         return;
       }
-      _act(order);
+      _openDirectConfirmForOrder(order);
     });
   }
 
-  /// Qué hace el botón principal de la tarjeta según el pedido:
-  /// invoca el disparador transaccional único `confirmAndRedeemOrder`
-  /// tras confirmar en la hoja correspondiente.
-  Future<void> _act(OwnerOrder order) async {
-    final sheet = order.paidByPlan && !order.validated
-        ? _ValidateOrderSheet(order: order)
-        : (order.paidByPlan ? null : _ChargeOrderSheet(order: order));
-    if (sheet != null && await _openSheet(sheet) != true) return;
-    if (!mounted) return;
-    await _confirmOrder(order);
+  Future<void> _openDirectConfirmForOrder(OwnerOrder order) async {
+    if (order.paidByPlan) {
+      if (!order.validated) {
+        final ok = await _openSheet<bool>(_ValidateOrderSheet(order: order));
+        if (ok != true || !mounted) return;
+      }
+      await _confirmOrder(order);
+      return;
+    }
+    await _openPosChargeSheet(order);
   }
 
-  Future<void> _confirmOrder(OwnerOrder order) async {
+  /// Flujo principal de tarjeta:
+  /// - Con plan: confirma canje y entrega.
+  /// - Sin plan ("Cobrar y entregar"): abre directo el escáner QR pasando el
+  ///   pedido esperado y, al validar el QR, abre el modal Confirmar cobro estilo POS.
+  Future<void> _act(OwnerOrder order) async {
+    if (order.paidByPlan) {
+      await _openDirectConfirmForOrder(order);
+      return;
+    }
+
+    final verifiedOrder = await context.push<OwnerOrder?>(
+      '/owner/scanner',
+      extra: order,
+    );
+    if (!mounted || verifiedOrder == null) return;
+    await _openPosChargeSheet(verifiedOrder);
+  }
+
+  Future<void> _openPosChargeSheet(OwnerOrder order) async {
+    final payment = await _openSheet<({OwnerPayMethod method, int changeCents})>(
+      _OrderConfirmChargeSheet(order: order),
+    );
+    if (payment == null || !mounted) return;
+    await _confirmOrder(
+      order,
+      paymentMethod: payment.method,
+      changeCents: payment.changeCents,
+    );
+  }
+
+  Future<void> _confirmOrder(
+    OwnerOrder order, {
+    OwnerPayMethod paymentMethod = OwnerPayMethod.efectivo,
+    int changeCents = 0,
+  }) async {
     final messenger = ScaffoldMessenger.of(context);
     final repo = ref.read(ownerOrdersRepositoryProvider);
     final restaurantId = ref.read(ownerRestaurantIdProvider);
-    final res = await repo.confirmAndRedeemOrder(order.number, restaurantId);
+    final res = await repo.confirmAndRedeemOrder(
+      order.number,
+      restaurantId,
+      paymentMethod: paymentMethod,
+    );
     if (!mounted) return;
     _refresh();
     if (!res.isValid) {
@@ -94,16 +140,33 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
       );
       return;
     }
-    showInfoSnackBar(messenger, '${res.title} · ${res.supportingLine}');
+
+    if (order.paidByPlan) {
+      showInfoSnackBar(messenger, '${res.title} · ${res.supportingLine}');
+      return;
+    }
+
+    final totalText = OwnerFormat.money(
+      Money.fromCents(order.effectiveTotalCents),
+    );
+    final changeText = changeCents > 0
+        ? ' · Cambio ${OwnerFormat.money(Money.fromCents(changeCents))}'
+        : '';
+    showInfoSnackBar(
+      messenger,
+      'Pedido #${order.number} cobrado ($totalText · ${paymentMethod.label})$changeText y entregado',
+    );
   }
 
-  Future<bool?> _openSheet(Widget child) => showModalBottomSheet<bool>(
+  Future<T?> _openSheet<T>(Widget child) => showModalBottomSheet<T>(
         context: context,
         useRootNavigator: true,
         isScrollControlled: true,
         showDragHandle: true,
         backgroundColor: context.colorScheme.surface,
-        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        ),
         builder: (_) => child,
       );
 
@@ -431,42 +494,90 @@ class _OrderCard extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         if (!order.paidByPlan)
-          // Preorden individual (Sin plan): se cobra el total USD y se entrega.
-          Row(children: [
-            Icon(Icons.payments_outlined, size: 18, color: colors.onSurface),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Text(
-                '${OwnerFormat.money(Money.fromCents(order.effectiveTotalCents))} en efectivo',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: colors.onSurface),
-              ),
-            ),
-            OwnerSmallButton(
-              label: 'Cobrar y entregar',
-              icon: Icons.check_circle_outline_rounded,
-              onPressed: onAction,
-            ),
-          ])
+          // Preorden sin plan: abre escáner QR -> modal POS Confirmar cobro.
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final labelRow = Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.payments_outlined, size: 18, color: colors.onSurface),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      'Por cobrar · ${OwnerFormat.money(Money.fromCents(order.effectiveTotalCents))}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                        color: colors.onSurface,
+                      ),
+                    ),
+                  ),
+                ],
+              );
+              final actionBtn = OwnerSmallButton(
+                label: 'Cobrar y entregar',
+                icon: Icons.qr_code_scanner_rounded,
+                onPressed: onAction,
+              );
+              if (constraints.maxWidth < 330) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    labelRow,
+                    const SizedBox(height: 10),
+                    actionBtn,
+                  ],
+                );
+              }
+              return Row(
+                children: [
+                  Expanded(child: labelRow),
+                  const SizedBox(width: 8),
+                  actionBtn,
+                ],
+              );
+            },
+          )
         else
-          // Preorden con Plan (Prepagado): sin cobro en efectivo, se canjea y entrega.
-          Row(children: [
-            Expanded(
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: OwnerBadge(
-                  label: '🎫 Plan activo (Prepagado)',
-                  background: b.successContainer,
-                  foreground: b.onSuccessContainer,
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            OwnerSmallButton(
-              label: 'Canjear y entregar',
-              icon: Icons.qr_code_scanner_rounded,
-              onPressed: onAction,
-            ),
-          ]),
+          // Preorden con Plan (Prepagado): sin cobro en caja, se canjea y entrega.
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final badge = OwnerBadge(
+                label: '🎫 Plan activo (Prepagado)',
+                background: b.successContainer,
+                foreground: b.onSuccessContainer,
+              );
+              final actionBtn = OwnerSmallButton(
+                label: 'Canjear y entregar',
+                icon: Icons.qr_code_scanner_rounded,
+                onPressed: onAction,
+              );
+              if (constraints.maxWidth < 330) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Align(alignment: Alignment.centerLeft, child: badge),
+                    const SizedBox(height: 10),
+                    actionBtn,
+                  ],
+                );
+              }
+              return Row(
+                children: [
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: badge,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  actionBtn,
+                ],
+              );
+            },
+          ),
       ]),
     );
   }
@@ -536,73 +647,418 @@ class _ValidateOrderSheet extends StatelessWidget {
   }
 }
 
-/// Hoja "Cobrar pedido #N": las preórdenes se cobran solo en efectivo.
-class _ChargeOrderSheet extends StatelessWidget {
-  const _ChargeOrderSheet({required this.order});
+/// Modal POS "Confirmar cobro" abierto al validar el QR de una preorden sin plan.
+/// Reutiliza el patrón de acordeón + 3 métodos + bloque de vuelto de caja POS.
+class _OrderConfirmChargeSheet extends StatefulWidget {
+  const _OrderConfirmChargeSheet({required this.order});
 
   final OwnerOrder order;
 
   @override
+  State<_OrderConfirmChargeSheet> createState() =>
+      _OrderConfirmChargeSheetState();
+}
+
+class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
+  OwnerPayMethod _method = OwnerPayMethod.efectivo;
+  final TextEditingController _cash = TextEditingController();
+  bool _expanded = false;
+
+  @override
+  void dispose() {
+    _cash.dispose();
+    super.dispose();
+  }
+
+  static String _fmt(int cents) => OwnerFormat.money(Money.fromCents(cents));
+
+  static int? _parseCents(String raw) {
+    final cleaned = raw.trim().replaceAll(',', '.');
+    if (cleaned.isEmpty) return null;
+    final val = double.tryParse(cleaned);
+    if (val == null || val < 0) return null;
+    return (val * 100).round();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
-    final dishes = [_short(order.soup), _short(order.main)].where((d) => d.isNotEmpty).join(' + ');
-    final amount = OwnerFormat.money(Money.fromCents(order.effectiveTotalCents));
+    final b = context.bocadooColors;
+    final order = widget.order;
+    final totalCents = order.effectiveTotalCents;
+    final arrival = _arrivalLabel(order);
+    final dishesParts = [
+      if (order.soup != null && order.soup!.trim().isNotEmpty) order.soup!.trim(),
+      if (order.main != null && order.main!.trim().isNotEmpty) order.main!.trim(),
+    ];
+    final dishesSummary =
+        dishesParts.isNotEmpty ? dishesParts.join(' · ') : 'Almuerzo del día';
+    final modalityLabel = order.takeaway ? 'Para llevar' : 'En local';
+
+    final isCash = _method == OwnerPayMethod.efectivo && totalCents > 0;
+    final receivedCents = isCash ? _parseCents(_cash.text) : null;
+    final invalid =
+        isCash && _cash.text.trim().isNotEmpty && receivedCents == null;
+    final shortfall =
+        isCash && receivedCents != null && receivedCents < totalCents;
+    final changeCents =
+        receivedCents == null ? 0 : receivedCents - totalCents;
+    final canConfirm = !isCash || (!invalid && !shortfall);
+    final bills = [5, 10, 20].where((v) => v * 100 >= totalCents).toList();
+    final totalFormatted = _fmt(totalCents);
+
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Row(children: [
-            Expanded(
-              child: Text('Cobrar pedido #${order.number}',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: colors.onSurface)),
-            ),
-            IconButton.filledTonal(
-              tooltip: 'Cerrar',
-              onPressed: () => Navigator.of(context).pop(false),
-              icon: const Icon(Icons.close_rounded),
-            ),
-          ]),
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            decoration: BoxDecoration(
-              color: colors.primaryContainer.withValues(alpha: 0.35),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Text(
-              dishes.isEmpty ? order.dinerName : '${order.dinerName} · $dishes',
-              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: colors.onSurface),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            decoration: BoxDecoration(
-              color: colors.primaryContainer.withValues(alpha: 0.35),
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: colors.primary, width: 1.5),
-            ),
-            child: Row(children: [
-              Icon(Icons.payments_outlined, color: colors.primary),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text('Efectivo',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: colors.onSurface)),
+        padding: EdgeInsets.fromLTRB(
+          20,
+          0,
+          20,
+          MediaQuery.of(context).viewInsets.bottom + 20,
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Confirmar cobro',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w900,
+                        color: colors.onSurface,
+                      ),
+                    ),
+                  ),
+                  IconButton.filledTonal(
+                    tooltip: 'Cerrar',
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
               ),
-              Text(amount, style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900, color: colors.onSurface)),
-            ]),
+              const SizedBox(height: 12),
+              Material(
+                color: colors.primaryContainer.withValues(alpha: 0.4),
+                borderRadius: BorderRadius.circular(18),
+                clipBehavior: Clip.antiAlias,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    InkWell(
+                      onTap: () => setState(() => _expanded = !_expanded),
+                      child: Padding(
+                        padding: const EdgeInsets.all(14),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    '${order.dinerName} · Pedido #${order.number}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 13.5,
+                                      fontWeight: FontWeight.w800,
+                                      color: colors.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  totalFormatted,
+                                  style: TextStyle(
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.w900,
+                                    color: colors.primary,
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                Icon(
+                                  _expanded
+                                      ? Icons.keyboard_arrow_up_rounded
+                                      : Icons.keyboard_arrow_down_rounded,
+                                  size: 22,
+                                  color: colors.primary,
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '$dishesSummary · $modalityLabel',
+                              maxLines: _expanded ? 3 : 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w700,
+                                color: colors.onSurface,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    AnimatedCrossFade(
+                      firstChild: const SizedBox.shrink(),
+                      secondChild: Container(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                        decoration: BoxDecoration(
+                          border: Border(
+                            top: BorderSide(
+                              color: colors.outlineVariant.withValues(alpha: 0.6),
+                            ),
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            const SizedBox(height: 10),
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: colors.surface,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  _OrderDetailLine(
+                                    label: 'Turno',
+                                    value: '#${order.number} · Llega $arrival',
+                                  ),
+                                  if (order.soup != null &&
+                                      order.soup!.trim().isNotEmpty)
+                                    _OrderDetailLine(
+                                      label: 'Sopa',
+                                      value: order.soup!.trim(),
+                                    ),
+                                  if (order.main != null &&
+                                      order.main!.trim().isNotEmpty)
+                                    _OrderDetailLine(
+                                      label: 'Segundo',
+                                      value: order.main!.trim(),
+                                    ),
+                                  if (order.drink != null &&
+                                      order.drink!.trim().isNotEmpty)
+                                    _OrderDetailLine(
+                                      label: 'Jugo',
+                                      value: order.drink!.trim(),
+                                    ),
+                                  if (order.cashItems.isNotEmpty)
+                                    _OrderDetailLine(
+                                      label: 'Carta / Extras',
+                                      value: order.cashItems.join(', '),
+                                    ),
+                                  _OrderDetailLine(
+                                    label: 'Modalidad',
+                                    value: order.takeaway
+                                        ? 'Para llevar (+${_fmt(order.takeawaySurchargeCents)})'
+                                        : 'En local',
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      crossFadeState: _expanded
+                          ? CrossFadeState.showSecond
+                          : CrossFadeState.showFirst,
+                      duration: const Duration(milliseconds: 180),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 14),
+              const OwnerSectionLabel('Método de pago'),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  for (final (m, icon) in const [
+                    (OwnerPayMethod.efectivo, Icons.payments_outlined),
+                    (
+                      OwnerPayMethod.transferencia,
+                      Icons.account_balance_outlined
+                    ),
+                    (OwnerPayMethod.deuna, Icons.bolt_rounded),
+                  ]) ...[
+                    if (m != OwnerPayMethod.efectivo) const SizedBox(width: 8),
+                    Expanded(
+                      child: Material(
+                        color: _method == m
+                            ? colors.primary
+                            : Theme.of(context).scaffoldBackgroundColor,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          side: BorderSide(
+                            color: _method == m
+                                ? colors.primary
+                                : colors.outlineVariant,
+                          ),
+                        ),
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(14),
+                          onTap: () => setState(() {
+                            _method = m;
+                            if (m != OwnerPayMethod.efectivo) _cash.clear();
+                          }),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  icon,
+                                  size: 20,
+                                  color: _method == m
+                                      ? colors.onPrimary
+                                      : colors.onSurface,
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  m.shortLabel,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w900,
+                                    color: _method == m
+                                        ? colors.onPrimary
+                                        : colors.onSurface,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              if (isCash) ...[
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _cash,
+                        onChanged: (_) => setState(() {}),
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        inputFormatters: [
+                          FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+                        ],
+                        decoration: InputDecoration(
+                          isDense: true,
+                          prefixText: '\$ ',
+                          hintText: 'Efectivo recibido (opcional)',
+                          errorText: invalid
+                              ? 'Monto inválido'
+                              : (shortfall
+                                  ? 'Faltan ${_fmt(totalCents - receivedCents)}'
+                                  : null),
+                        ),
+                      ),
+                    ),
+                    if (changeCents > 0) ...[
+                      const SizedBox(width: 10),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: b.successContainer,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          'Cambio ${_fmt(changeCents)}',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w900,
+                            color: b.success,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  children: [
+                    for (final v in bills)
+                      ActionChip(
+                        label: Text('\$$v'),
+                        onPressed: () => setState(() => _cash.text = '$v'),
+                      ),
+                    ActionChip(
+                      label: const Text('Exacto'),
+                      onPressed: () => setState(() => _cash.clear()),
+                    ),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: canConfirm
+                    ? () => Navigator.of(context).pop((
+                          method: _method,
+                          changeCents: changeCents > 0 ? changeCents : 0,
+                        ))
+                    : null,
+                icon: const Icon(Icons.check_circle_outline_rounded),
+                label: Text(
+                  'Confirmar cobro y entrega · $totalFormatted',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 8),
-          Text('Las preórdenes se cobran solo en efectivo.',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant)),
-          const SizedBox(height: 14),
-          ElevatedButton.icon(
-            onPressed: () => Navigator.of(context).pop(true),
-            icon: const Icon(Icons.check_circle_outline_rounded),
-            label: Text('Cobré $amount · Entregar'),
-          ),
-        ]),
+        ),
+      ),
+    );
+  }
+}
+
+class _OrderDetailLine extends StatelessWidget {
+  const _OrderDetailLine({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Text.rich(
+        TextSpan(
+          children: [
+            TextSpan(
+              text: '$label: ',
+              style: TextStyle(
+                fontWeight: FontWeight.w800,
+                color: colors.primary,
+              ),
+            ),
+            TextSpan(text: value),
+          ],
+        ),
+        style: TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+          color: colors.onSurface,
+        ),
       ),
     );
   }

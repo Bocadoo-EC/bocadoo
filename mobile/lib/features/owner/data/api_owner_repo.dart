@@ -2535,11 +2535,138 @@ class ApiOwnerRepository
 
   final Set<String> _inFlightOrders = <String>{};
 
+  static bool _matchesExpectedOrderRaw(
+    String rawPayload,
+    OwnerOrder expected,
+    String activeRestaurantId,
+  ) {
+    final trimmed = rawPayload.trim();
+    if (trimmed.isEmpty) return false;
+    final upper = trimmed.toUpperCase();
+    if (expected.id != null &&
+        expected.id!.isNotEmpty &&
+        trimmed.toLowerCase() == expected.id!.toLowerCase()) {
+      return true;
+    }
+    if (upper == expected.number.toUpperCase() ||
+        upper == '#${expected.number.toUpperCase()}') {
+      return true;
+    }
+    if (upper.startsWith('BCD-ORD-')) {
+      final rest = trimmed.substring(8).trim();
+      if (rest == expected.number ||
+          (expected.id != null && rest.toLowerCase() == expected.id!.toLowerCase())) {
+        return true;
+      }
+    }
+    final cleaned = BocadooQrParser.sanitizeManualInput(rawPayload);
+    if (cleaned.length == BocadooQrParser.shortCodeLength) {
+      final c1 = BocadooQrParser.generateOrderCode(
+        expected.number,
+        orderId: expected.id,
+        restaurantId: activeRestaurantId,
+      );
+      final c2 = BocadooQrParser.generateOrderCode(
+        expected.number,
+        orderId: expected.id,
+      );
+      final c3 = BocadooQrParser.generateOrderCode(expected.number);
+      if (cleaned == c1 || cleaned == c2 || cleaned == c3) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  @override
+  Future<({bool isValid, OwnerOrder? order, String? errorMessage})>
+      verifyOrderQrCode(
+    String rawPayload,
+    String activeRestaurantId, {
+    OwnerOrder? expectedOrder,
+  }) async {
+    _lastError = null;
+    final trimmed = rawPayload.trim();
+    final upper = trimmed.toUpperCase();
+    if (trimmed.isEmpty ||
+        trimmed.startsWith('BCD1.') ||
+        upper.startsWith(BocadooQrParser.planPrefix) ||
+        upper.startsWith('BCD-MESA-') ||
+        upper.startsWith('MESA-')) {
+      return (
+        isValid: false,
+        order: null,
+        errorMessage: 'Este código no corresponde a un pedido.',
+      );
+    }
+
+    final codeRestId = BocadooQrParser.restaurantForCode(rawPayload);
+    if (codeRestId != null &&
+        codeRestId.isNotEmpty &&
+        activeRestaurantId.isNotEmpty &&
+        codeRestId != activeRestaurantId) {
+      return (
+        isValid: false,
+        order: null,
+        errorMessage: 'Este código pertenece a otro restaurante.',
+      );
+    }
+
+    var order = await _findOrderByAnyCode(rawPayload, activeRestaurantId);
+    if (order == null && expectedOrder != null) {
+      if (_matchesExpectedOrderRaw(rawPayload, expectedOrder, activeRestaurantId)) {
+        order = expectedOrder;
+      }
+    }
+
+    if (order == null) {
+      return (
+        isValid: false,
+        order: null,
+        errorMessage: expectedOrder != null
+            ? 'El código no coincide con el pedido #${expectedOrder.number}.'
+            : 'No encontramos esa preorden activa.',
+      );
+    }
+
+    if (order.restaurantId != null &&
+        order.restaurantId!.isNotEmpty &&
+        activeRestaurantId.isNotEmpty &&
+        order.restaurantId != activeRestaurantId) {
+      return (
+        isValid: false,
+        order: null,
+        errorMessage: 'Este código pertenece a otro restaurante.',
+      );
+    }
+
+    if (expectedOrder != null && order.number != expectedOrder.number) {
+      return (
+        isValid: false,
+        order: null,
+        errorMessage:
+            'Este QR corresponde al pedido #${order.number}, no al pedido #${expectedOrder.number}.',
+      );
+    }
+
+    final ordKey = 'ORD:${order.number}';
+    if (_redeemedCodes.contains(ordKey) || _inFlightOrders.contains(order.number)) {
+      return (
+        isValid: false,
+        order: null,
+        errorMessage: 'Este pedido ya fue cobrado y entregado.',
+      );
+    }
+
+    return (isValid: true, order: order, errorMessage: null);
+  }
+
   @override
   Future<ScanResult> confirmAndRedeemOrder(
     String orderIdOrCode,
     String activeRestaurantId, {
     String? rawCodeKey,
+    OwnerPayMethod paymentMethod = OwnerPayMethod.efectivo,
   }) async {
     _lastError = null;
     final cleaned = BocadooQrParser.sanitizeManualInput(orderIdOrCode);
@@ -2672,7 +2799,7 @@ class ApiOwnerRepository
             amount: Money.fromCents(order.effectiveTotalCents),
           );
 
-      await _commitDeliverOrder(entry);
+      await _commitDeliverOrder(entry, paymentMethod: paymentMethod);
       if (_lastError != null && _lastError!.isNotEmpty) {
         return ScanResult(
           isValid: false,
@@ -2715,7 +2842,7 @@ class ApiOwnerRepository
           customerName: 'Pedido #${order.number} · ${order.dinerName}',
           type: order.paidByPlan ? 'Canje de plan' : 'Pedido #${order.number}',
           amount: order.paidByPlan ? 0 : Money.fromCents(order.effectiveTotalCents),
-          paymentMethod: order.paidByPlan ? 'Plan' : 'Efectivo',
+          paymentMethod: order.paidByPlan ? 'Plan' : paymentMethod.label,
           timestamp: scanTs,
           detail: order.paidByPlan
               ? 'Canje de plan · ${dishSummary ?? 'Almuerzo del día'} (Prepagado)'
@@ -2870,7 +2997,10 @@ class ApiOwnerRepository
     return true;
   }
 
-  Future<void> _commitDeliverOrder(_OrderCacheEntry entry) async {
+  Future<void> _commitDeliverOrder(
+    _OrderCacheEntry entry, {
+    OwnerPayMethod paymentMethod = OwnerPayMethod.efectivo,
+  }) async {
     final today = EcuadorTime.today();
     try {
       var porCobrarCents = 0;
@@ -2922,11 +3052,15 @@ class ApiOwnerRepository
       );
       eventsService.track(
         'dueno.pedido_entregado',
-        props: {'con_efectivo': entry.amount > 0.005},
+        props: {
+          'con_efectivo':
+              entry.amount > 0.005 && paymentMethod == OwnerPayMethod.efectivo,
+          'metodo_pago': _mapPayMethodApi(paymentMethod),
+        },
       );
 
       // TODO(backend): B-26 — si servir/canjear no incrementa efectivoEsperadoCentavos
-      // en cierre, registrar la parte por cobrar como venta POS en efectivo.
+      // en cierre, registrar la parte por cobrar como venta POS con el método elegido.
       if (porCobrarCents > 0) {
         try {
           final afterCierre = await guard(
@@ -2953,7 +3087,7 @@ class ApiOwnerRepository
                         'cantidad': 1,
                       },
                     ],
-                    'metodoPago': 'EFECTIVO',
+                    'metodoPago': _mapPayMethodApi(paymentMethod),
                     'paraLlevar': false,
                     'mesaTexto': 'Pedido #${entry.number}',
                     'pagoConfirmado': true,

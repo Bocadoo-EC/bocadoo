@@ -1250,10 +1250,124 @@ class MockOwnerRepository
   final Map<String, (String, String, String)> _validatedOrders = {};
 
   @override
+  Future<({bool isValid, OwnerOrder? order, String? errorMessage})>
+      verifyOrderQrCode(
+    String rawPayload,
+    String activeRestaurantId, {
+    OwnerOrder? expectedOrder,
+  }) async {
+    await _simulateLatency();
+    final trimmed = rawPayload.trim();
+    final upper = trimmed.toUpperCase();
+    if (trimmed.isEmpty ||
+        trimmed.startsWith('BCD1.') ||
+        upper.startsWith(BocadooQrParser.planPrefix) ||
+        upper.startsWith('BCD-MESA-') ||
+        upper.startsWith('MESA-')) {
+      return (
+        isValid: false,
+        order: null,
+        errorMessage: 'Este código no corresponde a un pedido.',
+      );
+    }
+
+    final codeRestId = BocadooQrParser.restaurantForCode(rawPayload);
+    if (codeRestId != null &&
+        codeRestId.isNotEmpty &&
+        activeRestaurantId.isNotEmpty &&
+        codeRestId != activeRestaurantId) {
+      return (
+        isValid: false,
+        order: null,
+        errorMessage: 'Este código pertenece a otro restaurante.',
+      );
+    }
+
+    var preorder = _findPreorderByCode(rawPayload);
+    if (preorder == null && expectedOrder != null) {
+      final cleaned = BocadooQrParser.sanitizeManualInput(rawPayload);
+      final expectedShort = BocadooQrParser.generateOrderCode(
+        expectedOrder.number,
+        orderId: expectedOrder.id ?? expectedOrder.number,
+        restaurantId: activeRestaurantId,
+      );
+      final matchesDirect = upper == expectedOrder.number.toUpperCase() ||
+          upper == '#${expectedOrder.number.toUpperCase()}' ||
+          (cleaned.length == BocadooQrParser.shortCodeLength &&
+              cleaned == expectedShort);
+      if (matchesDirect) {
+        preorder = _store.preorderByNumber(expectedOrder.number);
+      }
+    }
+
+    if (preorder == null) {
+      return (
+        isValid: false,
+        order: null,
+        errorMessage: expectedOrder != null
+            ? 'El código no coincide con el pedido #${expectedOrder.number}.'
+            : 'No encontramos esa preorden activa.',
+      );
+    }
+
+    if (preorder.restaurantId != activeRestaurantId) {
+      return (
+        isValid: false,
+        order: null,
+        errorMessage: 'Este código pertenece a otro restaurante.',
+      );
+    }
+
+    if (expectedOrder != null && preorder.number != expectedOrder.number) {
+      return (
+        isValid: false,
+        order: null,
+        errorMessage:
+            'Este QR corresponde al pedido #${preorder.number}, no al pedido #${expectedOrder.number}.',
+      );
+    }
+
+    final ordKey = 'ORD:${preorder.number}';
+    if (!preorder.isOpen || _redeemedCodes.contains(ordKey)) {
+      return (
+        isValid: false,
+        order: null,
+        errorMessage: 'Este pedido ya fue cobrado y entregado.',
+      );
+    }
+
+    return (
+      isValid: true,
+      order: OwnerOrder(
+        id: preorder.number,
+        restaurantId: preorder.restaurantId,
+        number: preorder.number,
+        dinerName: preorder.dinerName,
+        amount: preorder.amount,
+        totalCents: preorder.effectiveTotalCents,
+        createdAt: preorder.createdAt,
+        soup: preorder.soup,
+        main: preorder.main,
+        drink: preorder.drink,
+        estimatedArrivalLabel: preorder.estimatedArrivalLabel,
+        takeaway: preorder.takeaway,
+        takeawaySurchargeCents: preorder.takeawaySurchargeCents,
+        paidByPlan: preorder.hasPlan,
+        validated: preorder.validated,
+        planCreditsUsed: preorder.planCreditsUsed,
+        cashToCollectCents: preorder.cashToCollectCents,
+        cashItems: preorder.cashItems,
+      ),
+      errorMessage: null,
+    );
+  }
+
+  @override
   Future<ScanResult> confirmAndRedeemOrder(
     String orderIdOrCode,
-    String activeRestaurantId,
-  ) async {
+    String activeRestaurantId, {
+    OwnerPayMethod paymentMethod = OwnerPayMethod.efectivo,
+  }) async {
     await _simulateLatency();
     final now = _clock();
     final cleaned = BocadooQrParser.sanitizeManualInput(orderIdOrCode);
@@ -1375,7 +1489,7 @@ class MockOwnerRepository
       customerName: 'Pedido #${order.number} · ${order.dinerName}',
       type: 'Venta Suelta',
       amount: Money.fromCents(totalCents),
-      paymentMethod: 'Efectivo',
+      paymentMethod: paymentMethod.label,
       timestamp: now,
     ));
     _posLunchUnits[saleId] = 1;

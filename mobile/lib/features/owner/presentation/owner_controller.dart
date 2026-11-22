@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/config/api_capabilities.dart';
 import '../../../core/config/app_mode.dart';
 import '../../../core/contracts/models.dart';
+import '../../../core/contracts/qr_parser.dart';
 import '../../../core/contracts/repositories.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/network/api_exception.dart';
@@ -814,6 +815,27 @@ class OwnerController extends Notifier<OwnerState> {
     _lastNetworkRetryCode = null;
     state = const OwnerScanning(isProcessing: true);
     try {
+      final trimmed = rawPayload.trim();
+      final upper = trimmed.toUpperCase();
+      final couldBeOrder = !trimmed.startsWith('BCD1.') &&
+          !upper.startsWith(BocadooQrParser.planPrefix) &&
+          !upper.startsWith('BCD-MESA-') &&
+          !upper.startsWith('MESA-');
+      if (couldBeOrder) {
+        final orderCheck = await ref
+            .read(ownerOrdersRepositoryProvider)
+            .verifyOrderQrCode(
+              rawPayload,
+              ref.read(ownerRestaurantIdProvider),
+            );
+        if (orderCheck.isValid &&
+            orderCheck.order != null &&
+            !orderCheck.order!.paidByPlan) {
+          state = OwnerRedirect('/owner/pedidos?cobrar=${orderCheck.order!.number}');
+          return;
+        }
+      }
+
       final result = await _repo.validateQrCode(rawPayload);
       final passId = result.passId;
       if (!result.isValid || passId == null) {

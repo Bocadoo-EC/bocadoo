@@ -202,12 +202,22 @@ abstract class IOwnerOrdersRepository {
 
   Future<bool> undoDeliver(String restaurantId, String orderNumber);
 
+  /// Verifica un código QR o manual de preorden sin cobrar ni marcar entrega aún.
+  /// Si [expectedOrder] no es `null`, valida que el código corresponda a esa orden.
+  Future<({bool isValid, OwnerOrder? order, String? errorMessage})>
+      verifyOrderQrCode(
+    String rawPayload,
+    String activeRestaurantId, {
+    OwnerOrder? expectedOrder,
+  });
+
   /// Disparador transaccional único (escáner QR, código de 6 chars o botón
   /// "Cobrar y entregar") con validación de pertenencia al local e idempotencia.
   Future<ScanResult> confirmAndRedeemOrder(
     String orderIdOrCode,
-    String activeRestaurantId,
-  );
+    String activeRestaurantId, {
+    OwnerPayMethod paymentMethod = OwnerPayMethod.efectivo,
+  });
 }
 
 /// O5 · Mesas con amigos por cobrar desde caja.
