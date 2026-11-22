@@ -190,13 +190,25 @@ class CustomerUiState {
   }
 
   /// Ofertas flash activas de todos los locales (con cupos y sin vencer).
+  bool _isOfferDishSoldOut(Restaurant r, RestaurantOffer o) {
+    if (r.todayMenu.isEmpty) return false;
+    final soldOutNames = <String>{
+      for (final m in r.todayMenu)
+        if (m.isSoldOut) m.name.trim().toLowerCase(),
+    };
+    if (soldOutNames.isEmpty) return false;
+    final parts = o.title.split(' + ').map((p) => p.trim().toLowerCase());
+    return parts.any(soldOutNames.contains) ||
+        soldOutNames.contains(o.title.trim().toLowerCase());
+  }
+
   List<(Restaurant, RestaurantOffer)> activeFlashOffers([DateTime? at]) {
     final now = at ?? DateTime.now();
     return [
       for (final r in restaurants)
         if (!publicStatusFor(r).isSoldOutToday && !publicStatusFor(r).isClosed)
           for (final o in r.offers)
-            if (o.isActiveFlashAt(now)) (r, o),
+            if (o.isActiveFlashAt(now) && !_isOfferDishSoldOut(r, o)) (r, o),
     ];
   }
 
@@ -209,7 +221,7 @@ class CustomerUiState {
             !publicStatusFor(r).isSoldOutToday &&
             !publicStatusFor(r).isClosed)
           for (final o in r.offers)
-            if (o.isActiveFlashAt(now)) (r, o),
+            if (o.isActiveFlashAt(now) && !_isOfferDishSoldOut(r, o)) (r, o),
     ];
   }
 

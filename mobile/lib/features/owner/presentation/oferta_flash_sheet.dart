@@ -71,6 +71,14 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
   String? _error;
 
   @override
+  void initState() {
+    super.initState();
+    Future.microtask(() {
+      if (mounted) ref.invalidate(posMenuProvider);
+    });
+  }
+
+  @override
   void dispose() {
     _slotsOther.dispose();
     _title.dispose();

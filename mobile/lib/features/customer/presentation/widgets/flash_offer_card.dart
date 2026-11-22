@@ -4,12 +4,16 @@ import '../../../../core/contracts/models.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../customer_widgets.dart';
 
-/// `MM:SS` (los minutos pueden superar 59 para ofertas de más de una hora).
+/// Formato humano del tiempo restante: `4h 22m` si >= 1 hora, `45m 12s` si < 1 hora.
 String formatFlashRemaining(Duration d) {
   final safe = d.isNegative ? Duration.zero : d;
-  final mm = safe.inMinutes.toString().padLeft(2, '0');
-  final ss = (safe.inSeconds % 60).toString().padLeft(2, '0');
-  return '$mm:$ss';
+  final hours = safe.inHours;
+  final minutes = safe.inMinutes % 60;
+  final seconds = safe.inSeconds % 60;
+  if (hours >= 1) {
+    return '${hours}h ${minutes.toString().padLeft(2, '0')}m';
+  }
+  return '${minutes}m ${seconds.toString().padLeft(2, '0')}s';
 }
 
 /// Tarjeta de una oferta flash: **un plato** con precio normal tachado vs.

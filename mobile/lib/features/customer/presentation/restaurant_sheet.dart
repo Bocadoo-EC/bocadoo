@@ -7,8 +7,11 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatters.dart';
 import 'customer_controller.dart';
 import 'customer_widgets.dart';
+import 'widgets/individual_menu_accordion.dart';
+import 'widgets/restaurant_preorder_widgets.dart';
 
-/// C3 · Ficha del local: menú del día y preorden. Se muestra como hoja.
+/// C3 · Ficha del local: flujo progresivo en 2 pasos (1: acordeón de platos,
+/// 2: modalidad de consumo y hora estimada).
 class RestaurantSheet extends ConsumerStatefulWidget {
   final String restaurantId;
 
@@ -19,14 +22,8 @@ class RestaurantSheet extends ConsumerStatefulWidget {
 }
 
 class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
-  String? _soupId;
-  String? _mainId;
-  String? _breakfastId;
-  bool _breakfastMode = false;
-  bool _takeaway = false;
+  IndividualPreorderState _draft = const IndividualPreorderState();
   bool _sending = false;
-  String _selectedArrival = 'En 15 min';
-  String? _customArrival;
 
   List<String> _availableArrivalOptions() {
     final now = EcuadorTime.now();
@@ -81,48 +78,38 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
     final formatted =
         '${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}';
     setState(() {
-      _customArrival = formatted;
-      _selectedArrival = formatted;
+      _draft = _draft.copyWith(
+        customArrival: formatted,
+        selectedArrival: formatted,
+      );
     });
   }
 
-  void _applyDefaults(Restaurant r) {
-    if (_soupId == null || r.soups.any((m) => m.id == _soupId && m.isSoldOut)) {
-      _soupId = r.soups.where((m) => !m.isSoldOut).firstOrNull?.id;
-    }
-    if (_mainId == null || r.mains.any((m) => m.id == _mainId && m.isSoldOut)) {
-      _mainId = r.mains.where((m) => !m.isSoldOut).firstOrNull?.id;
-    }
-    if (_breakfastId == null ||
-        r.breakfasts.any((m) => m.id == _breakfastId && m.isSoldOut)) {
-      _breakfastId = r.breakfasts.where((m) => !m.isSoldOut).firstOrNull?.id;
-    }
-    final options = _availableArrivalOptions();
-    if (_selectedArrival != _customArrival &&
-        !options.contains(_selectedArrival)) {
-      _selectedArrival = 'En 15 min';
-    }
-  }
-
-  String _resolveArrivalHhmm() {
-    if (_selectedArrival != 'En 15 min') return _selectedArrival;
+  String _resolveArrivalHhmm(IndividualPreorderState draft) {
+    if (draft.selectedArrival != 'En 15 min') return draft.selectedArrival;
     final target = EcuadorTime.now().add(const Duration(minutes: 15));
     final hh = target.hour.toString().padLeft(2, '0');
     final mm = target.minute.toString().padLeft(2, '0');
     return '$hh:$mm';
   }
 
-  Future<void> _order(CustomerController controller, Restaurant r) async {
+  Future<void> _order(
+    CustomerController controller,
+    Restaurant r,
+    IndividualPreorderState draft,
+  ) async {
     setState(() => _sending = true);
+    final resolvedSoupId =
+        draft.soupId == kIndividualNoSoupId ? null : draft.soupId;
     final ok = await controller.preorder(
       restaurant: r,
-      soupId: _breakfastMode ? null : _soupId,
-      mainId: _breakfastMode ? null : _mainId,
-      breakfastId: _breakfastMode ? _breakfastId : null,
+      soupId: draft.breakfastMode ? null : resolvedSoupId,
+      mainId: draft.breakfastMode ? null : draft.mainId,
+      breakfastId: draft.breakfastMode ? draft.breakfastId : null,
       // Salón lleno: el pedido siempre es para llevar.
-      takeaway:
-          _takeaway || ref.read(restaurantPublicStatusProvider(r.id)).isFull,
-      estimatedArrival: _resolveArrivalHhmm(),
+      takeaway: draft.takeaway ||
+          ref.read(restaurantPublicStatusProvider(r.id)).isFull,
+      estimatedArrival: _resolveArrivalHhmm(draft),
     );
     if (!mounted) return;
     setState(() => _sending = false);
@@ -130,27 +117,9 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
       context.pop();
       return;
     }
-    final errorCode = controller.lastActionErrorCode;
     final error = controller.lastActionError;
-    if (errorCode == 'LOCAL_LLENO_SOLO_LLEVAR') {
-      setState(() => _takeaway = true);
-      ref.invalidate(restaurantDetailProvider(r.id));
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'El salón está lleno ahora. Activamos "Para llevar" para que puedas confirmar tu pedido.',
-          ),
-        ),
-      );
-      return;
-    }
-    if (errorCode == 'RESTAURANTE_PAUSADO' ||
-        errorCode == 'MENU_NO_PUBLICADO') {
-      ref.invalidate(restaurantDetailProvider(r.id));
-    }
     if (error != null && error.isNotEmpty) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(error)));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));
     }
   }
 
@@ -194,8 +163,8 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
             data: (r) => r != null
                 ? _content(controller, s, r)
                 : (cached != null
-                      ? _content(controller, s, cached)
-                      : const _CenteredStatus(text: 'Sin menú publicado hoy')),
+                    ? _content(controller, s, cached)
+                    : const _CenteredStatus(text: 'Sin menú publicado hoy')),
           );
         },
       ),
@@ -207,503 +176,462 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
     CustomerUiState s,
     Restaurant r,
   ) {
-    _applyDefaults(r);
     final colors = context.colorScheme;
+    final arrivalOptions = _availableArrivalOptions();
+    final draft = _draft.sanitizeFor(r, arrivalOptions);
     final hasBreakfasts = r.breakfasts.isNotEmpty;
-    final breakfastMode = hasBreakfasts && _breakfastMode;
+    final breakfastMode = hasBreakfasts && draft.breakfastMode;
     final hasActiveOrder = s.activeOrder != null;
     final chosenBreakfast = r.breakfasts
-        .where((b) => b.id == _breakfastId && !b.isSoldOut)
+        .where((b) => b.id == draft.breakfastId && !b.isSoldOut)
         .firstOrNull;
     final publicStatus = ref.watch(restaurantPublicStatusProvider(r.id));
     // Lleno = solo para llevar: se fuerza la modalidad y se bloquea "comer aquí".
     final forceTakeaway = publicStatus.isFull;
-    final takeaway = forceTakeaway || _takeaway;
+    final takeaway = forceTakeaway || draft.takeaway;
     final isClosed = publicStatus.isClosed;
-    final menuSoldOutAll =
-        publicStatus.isSoldOutToday ||
+    final menuSoldOutAll = publicStatus.isSoldOutToday ||
         (breakfastMode
             ? r.breakfasts.every((b) => b.isSoldOut)
             : r.isMenuSoldOutToday);
-    final canOrder =
-        !isClosed &&
+
+    final activePass = s.passFor(r.id);
+    final hasPlanHere = activePass != null &&
+        activePass.remainingLunches > 0 &&
+        !activePass.isExpired;
+    final baseCents = breakfastMode
+        ? Money.toCents(chosenBreakfast?.price ?? r.singleLunchPrice)
+        : Money.toCents(r.singleLunchPrice);
+    final surchargeCents = takeaway ? Money.toCents(r.takeawaySurcharge) : 0;
+    final totalCents = hasPlanHere ? 0 : baseCents + surchargeCents;
+
+    final step1Ready = draft.isStepOneComplete(r);
+    final canContinue = !isClosed &&
         !hasActiveOrder &&
         !_sending &&
         r.hasMenu &&
         !menuSoldOutAll &&
-        (!breakfastMode || chosenBreakfast != null);
+        step1Ready;
+    final canOrder = canContinue && draft.step == 2;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-          child: Text(
-            r.name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: 21,
-              fontWeight: FontWeight.w900,
-              color: colors.onSurface,
-            ),
-          ),
+        PreorderModalHeader(
+          restaurantName: r.name,
+          step: draft.step,
+          totalSteps: 2,
+          subtitle: draft.step == 1 ? 'Arma tu almuerzo' : 'Modalidad y hora',
+          onBack: draft.step == 2 && !_sending
+              ? () => setState(() => _draft = draft.copyWith(step: 1))
+              : null,
         ),
         Expanded(
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-            children: [
-              if (s.isOffline) ...[
-                Center(
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 220),
+            switchInCurve: Curves.easeOutCubic,
+            switchOutCurve: Curves.easeInCubic,
+            transitionBuilder: (child, anim) {
+              return FadeTransition(
+                opacity: anim,
+                child: SlideTransition(
+                  position: Tween<Offset>(
+                    begin: const Offset(0.04, 0),
+                    end: Offset.zero,
+                  ).animate(anim),
+                  child: child,
+                ),
+              );
+            },
+            child: draft.step == 1
+                ? _buildStepOne(
+                    s: s,
+                    r: r,
+                    draft: draft,
+                    publicStatus: publicStatus,
+                    hasPlanHere: hasPlanHere || r.hasPlan,
+                    hasBreakfasts: hasBreakfasts,
+                    breakfastMode: breakfastMode,
+                    isClosed: isClosed,
+                  )
+                : _buildStepTwo(
+                    colors: colors,
+                    r: r,
+                    draft: draft,
+                    arrivalOptions: arrivalOptions,
+                    forceTakeaway: forceTakeaway,
+                    takeaway: takeaway,
+                  ),
+          ),
+        ),
+        if (r.hasMenu)
+          _buildBottomBar(
+            colors: colors,
+            r: r,
+            draft: draft,
+            controller: controller,
+            isClosed: isClosed,
+            hasActiveOrder: hasActiveOrder,
+            menuSoldOutAll: menuSoldOutAll,
+            breakfastMode: breakfastMode,
+            hasPlanHere: hasPlanHere,
+            remainingLunches: activePass?.remainingLunches ?? 0,
+            baseCents: baseCents,
+            totalCents: totalCents,
+            canContinue: canContinue,
+            canOrder: canOrder,
+          ),
+      ],
+    );
+  }
+
+  Widget _buildStepOne({
+    required CustomerUiState s,
+    required Restaurant r,
+    required IndividualPreorderState draft,
+    required RestaurantPublicStatus publicStatus,
+    required bool hasPlanHere,
+    required bool hasBreakfasts,
+    required bool breakfastMode,
+    required bool isClosed,
+  }) {
+    final colors = context.colorScheme;
+    return ListView(
+      key: const ValueKey(1),
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      children: [
+        if (s.isOffline) ...[
+          Center(
+            child: Text(
+              'Sin conexión · Menú guardado',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: colors.onSurfaceVariant,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
+        CleanRestaurantPlanCard(
+          restaurant: r,
+          publicStatus: publicStatus,
+          hasPlanHere: hasPlanHere,
+          onTable: _openTable,
+        ),
+        const SizedBox(height: 16),
+        if (!r.hasMenu)
+          _CenteredStatus(
+            text: isClosed
+                ? 'Este restaurante está cerrado por hoy'
+                : 'Sin menú publicado hoy',
+          )
+        else ...[
+          if (hasBreakfasts) ...[
+            _ModeTabs(
+              breakfast: breakfastMode,
+              onChanged: (v) => setState(
+                () => _draft = draft.copyWith(breakfastMode: v, step: 1),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+          IndividualMenuAccordion(
+            restaurant: r,
+            breakfastMode: breakfastMode,
+            soupId: draft.soupId,
+            mainId: draft.mainId,
+            breakfastId: draft.breakfastId,
+            selectedDrink: draft.drinkName,
+            selectedDessert: draft.dessertName,
+            onSelectSoup: (id) =>
+                setState(() => _draft = draft.copyWith(soupId: id)),
+            onSelectMain: (id) =>
+                setState(() => _draft = draft.copyWith(mainId: id)),
+            onSelectBreakfast: (id) =>
+                setState(() => _draft = draft.copyWith(breakfastId: id)),
+            onSelectDrink: (name) =>
+                setState(() => _draft = draft.copyWith(drinkName: name)),
+            onSelectDessert: (name) =>
+                setState(() => _draft = draft.copyWith(dessertName: name)),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildStepTwo({
+    required ColorScheme colors,
+    required Restaurant r,
+    required IndividualPreorderState draft,
+    required List<String> arrivalOptions,
+    required bool forceTakeaway,
+    required bool takeaway,
+  }) {
+    return ListView(
+      key: const ValueKey(2),
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+      children: [
+        SelectedDishSummaryTile(
+          summary: draft.summaryLine(r),
+          onEdit: () => setState(() => _draft = draft.copyWith(step: 1)),
+        ),
+        const SizedBox(height: 18),
+        if (forceTakeaway) ...[
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: context.bocadooColors.dangerContainer,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  Icons.info_outline_rounded,
+                  size: 18,
+                  color: context.bocadooColors.onDangerContainer,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
                   child: Text(
-                    'Sin conexión · Menú guardado',
+                    'Este local tiene el salón lleno por los próximos '
+                    'minutos. Puedes ordenar solo para llevar y retirar '
+                    'rápido en caja.',
                     style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: colors.onSurfaceVariant,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: context.bocadooColors.onDangerContainer,
                     ),
                   ),
                 ),
-                const SizedBox(height: 12),
               ],
-              _HeaderCard(
-                restaurant: r,
-                publicStatus: publicStatus,
-                hasPlanHere: s.passFor(r.id) != null || r.hasPlan,
-                onTable: _openTable,
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
+        Text(
+          'Modalidad de consumo',
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w800,
+            color: colors.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: _ChoiceButton(
+                label: 'Para comer aquí',
+                icon: Icons.restaurant_rounded,
+                selected: !takeaway,
+                onTap: forceTakeaway
+                    ? null
+                    : () => setState(
+                          () => _draft = draft.copyWith(takeaway: false),
+                        ),
               ),
-              const SizedBox(height: 16),
-              if (!r.hasMenu)
-                _CenteredStatus(
-                  text: isClosed
-                      ? 'Este restaurante está cerrado por hoy'
-                      : 'Sin menú publicado hoy',
-                )
-              else ...[
-                if (hasBreakfasts) ...[
-                  _ModeTabs(
-                    breakfast: breakfastMode,
-                    onChanged: (v) => setState(() => _breakfastMode = v),
-                  ),
-                  const SizedBox(height: 16),
-                ],
-                if (breakfastMode) ...[
-                  const SectionLabel('Desayuno a elegir'),
-                  const SizedBox(height: 8),
-                  for (final b in r.breakfasts)
-                    _OptionTile(
-                      item: b,
-                      selected: b.id == _breakfastId,
-                      onTap: () => setState(() => _breakfastId = b.id),
-                    ),
-                ] else ...[
-                  const SectionLabel('Sopa del día'),
-                  const SizedBox(height: 8),
-                  for (final soup in r.soups)
-                    _OptionTile(
-                      item: soup,
-                      selected: soup.id == _soupId,
-                      onTap: () => setState(() => _soupId = soup.id),
-                    ),
-                  const SizedBox(height: 8),
-                  const SectionLabel('Segundo a elegir'),
-                  const SizedBox(height: 8),
-                  for (final main in r.mains)
-                    _OptionTile(
-                      item: main,
-                      selected: main.id == _mainId,
-                      showPhoto: true,
-                      onTap: () => setState(() => _mainId = main.id),
-                    ),
-                  const SizedBox(height: 8),
-                  _IncludedBox(juice: r.juice, dessert: r.dessert),
-                ],
-                const SizedBox(height: 16),
-                if (forceTakeaway) ...[
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: context.bocadooColors.dangerContainer,
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Icon(
-                          Icons.info_outline_rounded,
-                          size: 18,
-                          color: context.bocadooColors.onDangerContainer,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'Este local tiene el salón lleno por los próximos '
-                            'minutos. Puedes ordenar solo para llevar y retirar '
-                            'rápido en caja.',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: context.bocadooColors.onDangerContainer,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                ],
-                Row(
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _ChoiceButton(
+                label: 'Para llevar (+${formatMoney(r.takeawaySurcharge)})',
+                icon: Icons.takeout_dining_outlined,
+                selected: takeaway,
+                onTap: () => setState(
+                  () => _draft = draft.copyWith(takeaway: true),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 20),
+        Text(
+          'Hora estimada de consumo',
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w800,
+            color: colors.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 6,
+          children: [
+            for (final opt in arrivalOptions)
+              ChoiceChip(
+                label: Text(opt),
+                selected: draft.selectedArrival == opt,
+                onSelected: (_) => setState(
+                  () => _draft = draft.copyWith(selectedArrival: opt),
+                ),
+              ),
+            ChoiceChip(
+              label: Text(draft.customArrival ?? '+'),
+              selected: draft.customArrival != null &&
+                  draft.selectedArrival == draft.customArrival,
+              onSelected: (_) => _pickCustomTime(r),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBottomBar({
+    required ColorScheme colors,
+    required Restaurant r,
+    required IndividualPreorderState draft,
+    required CustomerController controller,
+    required bool isClosed,
+    required bool hasActiveOrder,
+    required bool menuSoldOutAll,
+    required bool breakfastMode,
+    required bool hasPlanHere,
+    required int remainingLunches,
+    required int baseCents,
+    required int totalCents,
+    required bool canContinue,
+    required bool canOrder,
+  }) {
+    final stepOneCtaLabel = hasActiveOrder
+        ? 'Ya tienes un pedido en camino'
+        : menuSoldOutAll
+            ? 'Menú agotado por hoy'
+            : hasPlanHere
+                ? 'Continuar · Con Plan (\$0,00)'
+                : 'Continuar · ${formatCents(baseCents)}';
+
+    final stepTwoCtaLabel = hasActiveOrder
+        ? 'Ya tienes un pedido en camino'
+        : menuSoldOutAll
+            ? 'Menú agotado por hoy'
+            : breakfastMode
+                ? (hasPlanHere
+                    ? 'Preordenar desayuno con Plan (\$0,00)'
+                    : 'Preordenar desayuno · ${formatCents(totalCents)}')
+                : (hasPlanHere
+                    ? 'Preordenar almuerzo con Plan (\$0,00)'
+                    : 'Preordenar almuerzo · ${formatCents(totalCents)}');
+
+    return SafeArea(
+      top: false,
+      bottom: true,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+        decoration: BoxDecoration(
+          color: colors.surface,
+          border: Border(top: BorderSide(color: colors.outlineVariant)),
+        ),
+        child: isClosed
+            ? Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 14,
+                ),
+                decoration: BoxDecoration(
+                  color: colors.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Expanded(
-                      child: _ChoiceButton(
-                        label: 'Para comer aquí',
-                        icon: Icons.restaurant_rounded,
-                        selected: !takeaway,
-                        onTap: forceTakeaway
-                            ? null
-                            : () => setState(() => _takeaway = false),
-                      ),
+                    Icon(
+                      Icons.lock_clock_outlined,
+                      size: 18,
+                      color: colors.onSurfaceVariant,
                     ),
                     const SizedBox(width: 8),
-                    Expanded(
-                      child: _ChoiceButton(
-                        label:
-                            'Para llevar (+ ${formatMoney(r.takeawaySurcharge)})',
-                        icon: Icons.takeout_dining_outlined,
-                        selected: takeaway,
-                        onTap: () => setState(() => _takeaway = true),
+                    Flexible(
+                      child: Text(
+                        'Este restaurante está cerrado por hoy',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800,
+                          color: colors.onSurface,
+                        ),
                       ),
                     ),
                   ],
                 ),
-              ],
-              _PublicCartaSection(restaurantId: r.id),
-            ],
-          ),
-        ),
-        if (r.hasMenu)
-          SafeArea(
-            top: false,
-            bottom: true,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
-              child: isClosed
-                  ? Container(
+              )
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (draft.step == 2 && hasPlanHere)
+                    Container(
                       padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 14,
+                        horizontal: 12,
+                        vertical: 8,
                       ),
+                      margin: const EdgeInsets.only(bottom: 10),
                       decoration: BoxDecoration(
-                        color: colors.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(16),
+                        color: context.bocadooColors.successContainer,
+                        borderRadius: BorderRadius.circular(12),
                       ),
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           Icon(
-                            Icons.lock_clock_outlined,
-                            size: 18,
-                            color: colors.onSurfaceVariant,
+                            Icons.verified_rounded,
+                            size: 16,
+                            color: context.bocadooColors.success,
                           ),
-                          const SizedBox(width: 8),
+                          const SizedBox(width: 6),
                           Flexible(
                             child: Text(
-                              'Este restaurante está cerrado por hoy',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w800,
-                                color: colors.onSurface,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    )
-                  : Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Text(
-                          'Hora estimada de consumo',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w800,
-                            color: colors.onSurfaceVariant,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 6,
-                          children: [
-                            for (final opt in _availableArrivalOptions())
-                              ChoiceChip(
-                                label: Text(opt),
-                                selected: _selectedArrival == opt,
-                                onSelected: (_) =>
-                                    setState(() => _selectedArrival = opt),
-                              ),
-                            ChoiceChip(
-                              label: Text(_customArrival ?? '+'),
-                              selected:
-                                  _customArrival != null &&
-                                  _selectedArrival == _customArrival,
-                              onSelected: (_) => _pickCustomTime(r),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        Builder(
-                          builder: (context) {
-                            final activePass = s.passFor(r.id);
-                            final hasPlanHere =
-                                activePass != null &&
-                                activePass.remainingLunches > 0 &&
-                                !activePass.isExpired;
-                            final baseCents = breakfastMode
-                                ? Money.toCents(
-                                    chosenBreakfast?.price ??
-                                        r.singleLunchPrice,
-                                  )
-                                : Money.toCents(r.singleLunchPrice);
-                            final surchargeCents = takeaway
-                                ? Money.toCents(r.takeawaySurcharge)
-                                : 0;
-                            final totalCents = hasPlanHere
-                                ? 0
-                                : baseCents + surchargeCents;
-                            return Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                if (hasPlanHere) ...[
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 12,
-                                      vertical: 8,
-                                    ),
-                                    margin: const EdgeInsets.only(bottom: 8),
-                                    decoration: BoxDecoration(
-                                      color: context
-                                          .bocadooColors
-                                          .successContainer,
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: Row(
-                                      mainAxisAlignment:
-                                          MainAxisAlignment.center,
-                                      children: [
-                                        Icon(
-                                          Icons.verified_rounded,
-                                          size: 16,
-                                          color: context.bocadooColors.success,
-                                        ),
-                                        const SizedBox(width: 6),
-                                        Flexible(
-                                          child: Text(
-                                            'Cubierto por tu Plan (Quedan ${activePass.remainingLunches} almuerzos)',
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.w800,
-                                              color:
-                                                  context.bocadooColors.success,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                                ElevatedButton(
-                                  onPressed: canOrder
-                                      ? () => _order(controller, r)
-                                      : null,
-                                  child: Text(
-                                    hasActiveOrder
-                                        ? 'Ya tienes un pedido en camino'
-                                        : menuSoldOutAll
-                                        ? 'Menú agotado por hoy'
-                                        : breakfastMode
-                                        ? (hasPlanHere
-                                              ? 'Preordenar desayuno con Plan (\$0,00)'
-                                              : 'Preordenar desayuno · ${formatCents(totalCents)}')
-                                        : (hasPlanHere
-                                              ? 'Preordenar almuerzo con Plan (\$0,00)'
-                                              : 'Preordenar almuerzo · ${formatCents(totalCents)}'),
-                                  ),
-                                ),
-                              ],
-                            );
-                          },
-                        ),
-                        if (hasActiveOrder) ...[
-                          const SizedBox(height: 8),
-                          Text(
-                            'Límite: tienes una orden activa pendiente.',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                              color: context.bocadooColors.danger,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-            ),
-          ),
-      ],
-    );
-  }
-}
-
-class _HeaderCard extends StatelessWidget {
-  final Restaurant restaurant;
-  final RestaurantPublicStatus publicStatus;
-  final bool hasPlanHere;
-  final VoidCallback onTable;
-
-  const _HeaderCard({
-    required this.restaurant,
-    required this.publicStatus,
-    required this.hasPlanHere,
-    required this.onTable,
-  });
-
-  static const _grayscaleFilter = ColorFilter.matrix(<double>[
-    0.2126,
-    0.7152,
-    0.0722,
-    0,
-    0,
-    0.2126,
-    0.7152,
-    0.0722,
-    0,
-    0,
-    0.2126,
-    0.7152,
-    0.0722,
-    0,
-    0,
-    0,
-    0,
-    0,
-    1,
-    0,
-  ]);
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colorScheme;
-    final r = restaurant;
-    final cover = CoverImage(
-      url: r.imageUrl.isNotEmpty ? r.imageUrl : r.logoUrl,
-      name: r.name,
-    );
-    return Container(
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: Theme.of(context).scaffoldBackgroundColor,
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: colors.outlineVariant),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          SizedBox(
-            height: 112,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                publicStatus.isClosed
-                    ? ColorFiltered(colorFilter: _grayscaleFilter, child: cover)
-                    : cover,
-                DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.bottomCenter,
-                      end: Alignment.center,
-                      colors: [
-                        colors.scrim.withValues(alpha: 0.6),
-                        colors.scrim.withValues(alpha: 0),
-                      ],
-                    ),
-                  ),
-                ),
-                Positioned(
-                  left: 10,
-                  right: 10,
-                  bottom: 10,
-                  child: Row(
-                    children: [
-                      Flexible(child: OccupancyDetail(status: publicStatus)),
-                      if (r.hasLocation) ...[
-                        const SizedBox(width: 6),
-                        DistancePill(text: r.formattedDistance),
-                      ],
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(14),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.confirmation_number_outlined,
-                            size: 14,
-                            color: colors.primary,
-                          ),
-                          const SizedBox(width: 4),
-                          Flexible(
-                            child: Text(
-                              hasPlanHere
-                                  ? 'Tienes almuerzos activos aquí'
-                                  : 'Planes ejecutivos disponibles',
+                              'Cubierto por tu Plan (Quedan $remainingLunches almuerzos)',
                               style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.w800,
-                                color: colors.primary,
+                                color: context.bocadooColors.success,
                               ),
                             ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 2),
-                      Text(
-                        'Desde ${formatMoney(r.planLunchPrice ?? r.singleLunchPrice)} con plan · ${formatMoney(r.singleLunchPrice)} suelto',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: colors.onSurface,
-                        ),
+                    ),
+                  if (draft.step == 1)
+                    ElevatedButton(
+                      onPressed: canContinue
+                          ? () => setState(() => _draft = draft.copyWith(step: 2))
+                          : null,
+                      child: Text(stepOneCtaLabel),
+                    )
+                  else
+                    ElevatedButton(
+                      onPressed: canOrder
+                          ? () => _order(controller, r, draft)
+                          : null,
+                      child: _sending
+                          ? SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.5,
+                                color: colors.onPrimary,
+                              ),
+                            )
+                          : Text(stepTwoCtaLabel),
+                    ),
+                  if (hasActiveOrder) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Límite: tienes una orden activa pendiente.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: context.bocadooColors.danger,
                       ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                PillAction(
-                  label: publicStatus.isFull
-                      ? 'Pedido grupal (Para llevar)'
-                      : 'Pedido grupal',
-                  icon: Icons.group_outlined,
-                  onPressed:
-                      (publicStatus.isSoldOutToday || publicStatus.isClosed)
-                      ? null
-                      : onTable,
-                ),
-              ],
-            ),
-          ),
-        ],
+                    ),
+                  ],
+                ],
+              ),
       ),
     );
   }
@@ -765,220 +693,6 @@ class _ModeTabs extends StatelessWidget {
         children: [
           tab('Almuerzo del día', Icons.soup_kitchen_outlined, false),
           tab('Desayunos de hoy', Icons.wb_sunny_outlined, true),
-        ],
-      ),
-    );
-  }
-}
-
-class _OptionTile extends StatelessWidget {
-  final MenuItem item;
-  final bool selected;
-  final bool showPhoto;
-  final VoidCallback onTap;
-
-  const _OptionTile({
-    required this.item,
-    required this.selected,
-    required this.onTap,
-    this.showPhoto = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colorScheme;
-    final b = context.bocadooColors;
-    final soldOut = item.isSoldOut;
-    final active = selected && !soldOut;
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Material(
-        color: active
-            ? colors.primaryContainer
-            : Theme.of(context).scaffoldBackgroundColor,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: BorderSide(
-            color: active ? colors.primary : colors.outlineVariant,
-          ),
-        ),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: soldOut ? null : onTap,
-          child: Padding(
-            padding: EdgeInsets.all(
-              showPhoto && item.imageUrl != null ? 10 : 14,
-            ),
-            child: Row(
-              children: [
-                if (showPhoto && item.imageUrl != null) ...[
-                  Opacity(
-                    opacity: soldOut ? 0.5 : 1,
-                    child: CoverImage(
-                      url: item.imageUrl,
-                      name: item.name,
-                      width: 44,
-                      height: 44,
-                      radius: 12,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                ],
-                Expanded(
-                  child: Opacity(
-                    opacity: soldOut ? 0.6 : 1,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Flexible(
-                              child: Text(
-                                item.name,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w700,
-                                  color: colors.onSurface,
-                                  decoration: soldOut
-                                      ? TextDecoration.lineThrough
-                                      : null,
-                                ),
-                              ),
-                            ),
-                            if (item.isVeggie &&
-                                item.category == 'Plato Fuerte') ...[
-                              const SizedBox(width: 6),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 6,
-                                  vertical: 1,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: b.successContainer,
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                child: Text(
-                                  'Veggie',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w800,
-                                    color: b.success,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ],
-                        ),
-                        if (item.price != null)
-                          Text(
-                            formatMoney(item.price!),
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              color: colors.primary,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                if (soldOut)
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 2,
-                    ),
-                    decoration: BoxDecoration(
-                      color: b.dangerContainer,
-                      borderRadius: BorderRadius.circular(
-                        AppTheme.buttonRadius,
-                      ),
-                    ),
-                    child: Text(
-                      'Agotado',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w900,
-                        color: b.onDangerContainer,
-                      ),
-                    ),
-                  )
-                else if (active)
-                  Icon(Icons.check_rounded, size: 18, color: colors.primary),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _IncludedBox extends StatelessWidget {
-  final String juice;
-  final String dessert;
-
-  const _IncludedBox({required this.juice, required this.dessert});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colorScheme;
-    Widget line(IconData icon, String label, String value) => Padding(
-      padding: const EdgeInsets.only(top: 4),
-      child: Row(
-        children: [
-          Icon(icon, size: 14, color: colors.primary),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text.rich(
-              TextSpan(
-                children: [
-                  TextSpan(
-                    text: '$label: ',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w800,
-                      color: colors.onSurface,
-                    ),
-                  ),
-                  TextSpan(text: value),
-                ],
-              ),
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-                color: colors.onSurfaceVariant,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Theme.of(context).scaffoldBackgroundColor,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: colors.outlineVariant),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Almuerzo completo incluye:',
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w800,
-              color: colors.onSurface,
-            ),
-          ),
-          if (juice.isNotEmpty) line(Icons.local_drink_outlined, 'Jugo', juice),
-          if (dessert.isNotEmpty)
-            line(Icons.icecream_outlined, 'Postre', dessert),
         ],
       ),
     );
@@ -1082,190 +796,6 @@ class _CenteredStatus extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-/// Carta fija pública de solo lectura (`GET /v1/restaurantes/{slug}/carta`, Entrega C).
-/// Ordenada por `A_LA_CARTA` → `BEBIDA` → `EXTRA` y `orden`. No envía platos al pedido.
-class _PublicCartaSection extends ConsumerWidget {
-  final String restaurantId;
-
-  const _PublicCartaSection({required this.restaurantId});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final cartaAsync = ref.watch(restaurantCartaProvider(restaurantId));
-    final items = cartaAsync.value;
-    if (items == null || items.isEmpty) return const SizedBox.shrink();
-
-    final colors = context.colorScheme;
-    final b = context.bocadooColors;
-
-    final groups = <({String title, List<PublicCartaItem> items})>[
-      (
-        title: 'Platos a la carta',
-        items: items.where((i) => i.category == 'A_LA_CARTA').toList(),
-      ),
-      (
-        title: 'Bebidas',
-        items: items.where((i) => i.category == 'BEBIDA').toList(),
-      ),
-      (
-        title: 'Extras',
-        items: items.where((i) => i.category == 'EXTRA').toList(),
-      ),
-      (
-        title: 'Otros',
-        items: items
-            .where(
-              (i) =>
-                  i.category != 'A_LA_CARTA' &&
-                  i.category != 'BEBIDA' &&
-                  i.category != 'EXTRA',
-            )
-            .toList(),
-      ),
-    ].where((g) => g.items.isNotEmpty).toList();
-
-    if (groups.isEmpty) return const SizedBox.shrink();
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const SizedBox(height: 20),
-        Divider(height: 1, color: colors.outlineVariant),
-        const SizedBox(height: 14),
-        Row(
-          children: [
-            const Expanded(child: SectionLabel('Carta fija del local')),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: colors.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-              ),
-              child: Text(
-                'Solo consulta',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  color: colors.onSurfaceVariant,
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 4),
-        Text(
-          'Disponible en caja del restaurante.',
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w500,
-            color: colors.onSurfaceVariant,
-          ),
-        ),
-        const SizedBox(height: 10),
-        for (final group in groups) ...[
-          Padding(
-            padding: const EdgeInsets.only(top: 6, bottom: 6),
-            child: Text(
-              group.title,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w800,
-                color: colors.onSurfaceVariant,
-              ),
-            ),
-          ),
-          for (final item in group.items)
-            Container(
-              margin: const EdgeInsets.only(bottom: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                color: colors.surface,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: colors.outlineVariant),
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Flexible(
-                              child: Text(
-                                item.name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w700,
-                                  color: item.isSoldOut
-                                      ? colors.onSurfaceVariant
-                                      : colors.onSurface,
-                                  decoration: item.isSoldOut
-                                      ? TextDecoration.lineThrough
-                                      : null,
-                                ),
-                              ),
-                            ),
-                            if (item.isSoldOut) ...[
-                              const SizedBox(width: 8),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 7,
-                                  vertical: 2,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: b.dangerContainer,
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Text(
-                                  'Agotado',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w800,
-                                    color: b.onDangerContainer,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ],
-                        ),
-                        if (item.description.isNotEmpty) ...[
-                          const SizedBox(height: 2),
-                          Text(
-                            item.description,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: colors.onSurfaceVariant,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Text(
-                    formatMoney(item.price),
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w800,
-                      color: item.isSoldOut
-                          ? colors.onSurfaceVariant
-                          : colors.primary,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-        ],
-      ],
     );
   }
 }
