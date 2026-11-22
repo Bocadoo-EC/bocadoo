@@ -18,6 +18,7 @@ import '../data/api_customer_repo.dart';
 import '../data/mock_customer_repo.dart';
 import '../data/pase_events_stream.dart';
 import 'widgets/flash_offers_sync.dart';
+import 'widgets/restaurant_status_sync.dart';
 
 enum CustomerStatus { initial, loading, success, error }
 
@@ -420,6 +421,43 @@ class CustomerController extends ChangeNotifier {
       DemoStore.instance.addListener(_onDemoStoreChanged);
     }
     FlashOffersLiveSync.instance.addListener(_onFlashOfferLiveSync);
+    RestaurantStatusLiveSync.instance.addListener(_onRestaurantStatusLiveSync);
+  }
+
+  void _onRestaurantStatusLiveSync() {
+    if (_disposed) return;
+    final sync = RestaurantStatusLiveSync.instance;
+    final rid = sync.lastRestaurantId;
+    final status = sync.lastStatus;
+    if (rid == null || rid.isEmpty || status == null) return;
+
+    final occ = switch (status) {
+      ManualOccupancyStatus.libre => 'LIBRE',
+      ManualOccupancyStatus.concurrido => 'MOVIDO',
+      ManualOccupancyStatus.lleno => 'LLENO',
+      ManualOccupancyStatus.cerrado => 'CERRADO',
+    };
+    final isOpen = status != ManualOccupancyStatus.cerrado;
+    final until = status == ManualOccupancyStatus.lleno ? sync.lastUntil : null;
+
+    final updatedList = <Restaurant>[
+      for (final r in _state.restaurants)
+        if (r.id == rid)
+          r.copyWith(
+            occupancy: occ,
+            isOpen: isOpen,
+            openNow: isOpen,
+            status: isOpen ? 'ACTIVO' : 'PAUSADO',
+            fullUntil: until,
+            clearFullUntil: until == null,
+          )
+        else
+          r,
+    ];
+    _emit(_state.copyWith(restaurants: updatedList));
+    if (!AppMode.useMock) {
+      unawaited(_hydrateSingleRestaurant(rid));
+    }
   }
 
   void _onFlashOfferLiveSync() {
@@ -473,7 +511,7 @@ class CustomerController extends ChangeNotifier {
     _restaurantsVisible = visible;
     if (visible) {
       _restaurantsPoller ??= LifecyclePollingController(
-        interval: const Duration(seconds: 10),
+        interval: const Duration(seconds: 5),
         onTick: () => refreshRestaurants(forceHydrate: true),
       );
       if (!_restaurantsPoller!.isRunning) {
@@ -1607,6 +1645,7 @@ class CustomerController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     FlashOffersLiveSync.instance.removeListener(_onFlashOfferLiveSync);
+    RestaurantStatusLiveSync.instance.removeListener(_onRestaurantStatusLiveSync);
     if (AppMode.useMock) {
       DemoStore.instance.removeListener(_onDemoStoreChanged);
     }
@@ -1656,6 +1695,10 @@ final restaurantCartaProvider =
 final restaurantPublicStatusProvider =
     Provider.family<RestaurantPublicStatus, String>((ref, restaurantId) {
   final controller = ref.watch(customerControllerProvider);
+  void onChanged() => ref.invalidateSelf();
+  controller.addListener(onChanged);
+  ref.onDispose(() => controller.removeListener(onChanged));
+
   final s = controller.state;
   final fromList = s.restaurantById(restaurantId);
   var menuAvail = s.menuAvailabilityFor(restaurantId);

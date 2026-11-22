@@ -12,6 +12,7 @@ import '../../../core/network/api_client.dart';
 import '../../../core/network/api_exception.dart';
 import '../../../core/session/session_notifier.dart';
 import '../../../core/utils/formatters.dart';
+import '../../customer/presentation/widgets/restaurant_status_sync.dart';
 import '../../group_orders/presentation/group_order_simulation_provider.dart';
 import '../data/api_owner_repo.dart';
 import '../data/mock_owner_repo.dart';
@@ -657,6 +658,11 @@ class ManualOccupancyNotifier extends Notifier<ManualOccupancyState> {
             next == ManualOccupancyStatus.concurrido ? confirmedUntil : null,
         tick: prev.tick + 1,
       );
+      RestaurantStatusLiveSync.instance.notifyStatusChanged(
+        restaurantId: rid,
+        status: next,
+        until: confirmedUntil,
+      );
       _startTimer();
       return null;
     }
@@ -676,6 +682,10 @@ class ManualOccupancyNotifier extends Notifier<ManualOccupancyState> {
     _timer?.cancel();
     _timer = null;
     state = ManualOccupancyState(manual: next, tick: prev.tick + 1);
+    RestaurantStatusLiveSync.instance.notifyStatusChanged(
+      restaurantId: rid,
+      status: next,
+    );
     return null;
   }
 
