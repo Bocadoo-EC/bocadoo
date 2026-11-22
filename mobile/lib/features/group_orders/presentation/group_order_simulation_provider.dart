@@ -143,6 +143,7 @@ class GroupOrderSimulationStore extends ChangeNotifier {
                   if ((p.selection.dessert ?? '').isNotEmpty)
                     p.selection.dessert!,
                 ].join(' · '),
+                extras: p.selection.extras,
                 takeaway: p.selection.takeaway,
                 hasPlan: p.paidByPlan,
               ),
@@ -320,29 +321,67 @@ class GroupOrderSimulationStore extends ChangeNotifier {
     return updated;
   }
 
-  /// Sincroniza miembros que llegan desde backend cuando no vienen del simulador local.
+  /// Sincroniza miembros que llegan desde backend (`miembros[].seleccion`, Entrega C).
+  /// Respeta estrictamente `m.selection == null` (nunca infiere platos de otros invitados).
   GroupOrderSession? syncRemoteMembers(
     String tableId,
     List<TableMember> remoteMembers,
   ) {
     final current = sessionById(tableId);
-    if (current == null) return null;
-    if (remoteMembers.length <= current.participants.length) return current;
+    if (current == null || remoteMembers.isEmpty) return current;
 
-    final merged = List<GroupOrderParticipant>.from(current.participants);
-    for (var i = current.participants.length; i < remoteMembers.length; i++) {
-      final m = remoteMembers[i];
+    GroupOrderDishSelection mapRemoteSelection(
+      TableMember m, {
+      GroupOrderDishSelection? fallbackHost,
+    }) {
+      final sel = m.selection;
+      if (sel != null) {
+        return GroupOrderDishSelection(
+          soup: sel.soup,
+          main: sel.main,
+          extras: [for (final e in sel.extras) e.formattedLabel],
+          takeaway: m.takeaway,
+          selectionHidden: false,
+        );
+      }
+      if (m.isHost && fallbackHost != null) {
+        return fallbackHost;
+      }
+      final hasFlatDish = (m.soup?.trim().isNotEmpty ?? false) ||
+          (m.main?.trim().isNotEmpty ?? false);
+      if (hasFlatDish) {
+        return GroupOrderDishSelection(
+          soup: m.soup,
+          main: m.main,
+          takeaway: m.takeaway,
+          selectionHidden: false,
+        );
+      }
+      return GroupOrderDishSelection(
+        takeaway: m.takeaway,
+        selectionHidden: true,
+      );
+    }
+
+    final existingByKey = <String, GroupOrderParticipant>{
+      for (final p in current.participants) p.name.trim().toLowerCase(): p,
+    };
+    final hostFallback = current.participants.where((p) => p.isHost).firstOrNull?.selection;
+
+    final merged = <GroupOrderParticipant>[];
+    for (final m in remoteMembers) {
+      final prev = existingByKey[m.name.trim().toLowerCase()];
+      final mappedSel = mapRemoteSelection(
+        m,
+        fallbackHost: m.isHost ? (prev?.selection ?? hostFallback) : null,
+      );
       merged.add(
         GroupOrderParticipant(
-          id: m.id,
+          id: prev?.id ?? m.id,
           name: m.name,
           isHost: m.isHost,
-          selection: GroupOrderDishSelection(
-            soup: m.soup,
-            main: m.main,
-            takeaway: m.takeaway,
-          ),
-          paidByPlan: current.mode == TableMode.hostPays,
+          selection: mappedSel,
+          paidByPlan: m.isHost ? true : (current.mode == TableMode.hostPays),
         ),
       );
     }

@@ -67,6 +67,7 @@ class PendingTableMemberDish {
     required this.memberName,
     this.soup,
     this.main,
+    this.extras = const [],
     this.takeaway = false,
     this.hasPlan = false,
   });
@@ -74,6 +75,7 @@ class PendingTableMemberDish {
   final String memberName;
   final String? soup;
   final String? main;
+  final List<String> extras;
   final bool takeaway;
   final bool hasPlan;
 }
@@ -125,6 +127,7 @@ class TableChargeLine {
     required this.amount,
     this.soup,
     this.main,
+    this.extras = const [],
     this.isHost = false,
     this.takeaway = false,
   });
@@ -132,6 +135,7 @@ class TableChargeLine {
   final String name;
   final String? soup;
   final String? main;
+  final List<String> extras;
   final bool isHost;
   final bool takeaway;
   final TableChargeVia via;
@@ -218,6 +222,12 @@ class LocalInfo {
     required this.name,
     required this.address,
     required this.seats,
+    this.tablesCount,
+    this.phone = '',
+    this.maskedCedulaRuc,
+    this.takeawaySurchargeCents,
+    this.perfilCompleto = true,
+    this.datosPendientes = const [],
     this.zone = '',
     this.latitude,
     this.longitude,
@@ -228,6 +238,17 @@ class LocalInfo {
   final String name;
   final String address;
   final int seats;
+  final int? tablesCount;
+  final String phone;
+
+  /// Cédula o RUC enmascarado devuelto por el servidor (nunca reconstruido en cliente).
+  final String? maskedCedulaRuc;
+  final int? takeawaySurchargeCents;
+
+  /// Calculado únicamente por el backend (`GET /v1/restaurante`).
+  final bool perfilCompleto;
+  final List<String> datosPendientes;
+
   final String zone;
   final double? latitude;
   final double? longitude;

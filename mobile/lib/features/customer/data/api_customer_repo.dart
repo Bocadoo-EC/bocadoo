@@ -529,6 +529,82 @@ class ApiCustomerRepository implements ICustomerRepository {
     return detail?.todayMenu ?? const [];
   }
 
+  static int _cartaCategoryRank(String categoria) => switch (categoria.toUpperCase()) {
+        'A_LA_CARTA' => 0,
+        'BEBIDA' => 1,
+        'EXTRA' => 2,
+        _ => 3,
+      };
+
+  @override
+  Future<List<PublicCartaItem>> getRestaurantCarta(String restaurantId) async {
+    var slug = _slugById[restaurantId];
+    if (slug == null || slug.isEmpty) {
+      await getRestaurants();
+      slug = _slugById[restaurantId] ?? restaurantId;
+    }
+
+    try {
+      final raw = await guard(
+        () => _api.send<dynamic>(
+          'GET',
+          '${ApiConfig.v1}/restaurantes/$slug/carta',
+          auth: false,
+        ),
+      );
+      final List<Map<String, dynamic>> rawItems;
+      if (raw is List) {
+        rawItems = _asListOfMaps(raw);
+      } else if (raw is Map) {
+        final map = _asMap(raw);
+        if (map['items'] is List) {
+          rawItems = _asListOfMaps(map['items']);
+        } else if (map['carta'] is List) {
+          rawItems = _asListOfMaps(map['carta']);
+        } else if (map['platos'] is List) {
+          rawItems = _asListOfMaps(map['platos']);
+        } else {
+          rawItems = const [];
+        }
+      } else {
+        rawItems = const [];
+      }
+
+      final parsed = <PublicCartaItem>[];
+      for (final item in rawItems) {
+        final id = (item['id'] ?? '').toString();
+        final name = (item['nombre'] ?? '').toString().trim();
+        if (name.isEmpty) continue;
+        final categoria =
+            (item['categoria'] ?? 'A_LA_CARTA').toString().toUpperCase();
+        parsed.add(
+          PublicCartaItem(
+            id: id,
+            name: name,
+            category: categoria,
+            priceCents: _asInt(item['precioCentavos']) ?? 0,
+            order: _asInt(item['orden']) ?? 0,
+            isSoldOut: item['agotado'] == true,
+            description: (item['descripcion'] ?? '').toString().trim(),
+            imageUrl: item['fotoUrl']?.toString(),
+          ),
+        );
+      }
+      parsed.sort((a, b) {
+        final rankCmp =
+            _cartaCategoryRank(a.category).compareTo(_cartaCategoryRank(b.category));
+        if (rankCmp != 0) return rankCmp;
+        final ordCmp = a.order.compareTo(b.order);
+        if (ordCmp != 0) return ordCmp;
+        return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      });
+      return parsed;
+    } on ApiException catch (e) {
+      if (e.status == 404) return const [];
+      rethrow;
+    }
+  }
+
   @override
   Future<List<PlanTemplate>> getPlanTemplates(String restaurantId) async {
     final detail = await getRestaurantById(restaurantId);
@@ -1124,6 +1200,44 @@ class ApiCustomerRepository implements ICustomerRepository {
     }
   }
 
+  @override
+  Future<SharedTable> updateTableSelection(
+    String tableId, {
+    required List<String> lunchDishIds,
+    List<({String dishId, int quantity})> extras = const [],
+  }) async {
+    final cleanLunchIds = lunchDishIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toList();
+    final extrasBody = [
+      for (final e in extras)
+        if (e.dishId.trim().isNotEmpty && e.quantity > 0)
+          {
+            'platoId': e.dishId.trim(),
+            'cantidad': e.quantity,
+          },
+    ];
+    final res = await guard(
+      () => _api.send<Map<String, dynamic>>(
+        'PUT',
+        '${ApiConfig.v1}/mis/mesas/$tableId/seleccion',
+        body: {
+          'almuerzo': {
+            'platos': cleanLunchIds,
+          },
+          'extras': extrasBody,
+        },
+      ),
+    );
+    if (res != null && (res['id'] ?? '').toString().isNotEmpty) {
+      return _mapMesaResponseToSharedTable(res);
+    }
+    final refreshed = await getSharedTable(tableId);
+    if (refreshed != null) return refreshed;
+    throw ApiException(status: 404, code: 'MESA_NO_ENCONTRADA');
+  }
+
   /// Cancela una mesa compartida abierta (solo anfitrión, antes de validar en caja).
   @override
   Future<void> cancelSharedTable(String tableId) async {
@@ -1161,11 +1275,15 @@ class ApiCustomerRepository implements ICustomerRepository {
     final members = <TableMember>[];
     for (final raw in _asListOfMaps(json['miembros'])) {
       final nombre = (raw['nombre'] ?? '').toString();
+      final selection = _parseMemberSelection(raw['seleccion']);
       members.add(TableMember(
         id: raw['soyYo'] == true ? 'self' : nombre,
         name: nombre,
         isHost: raw['esAnfitrion'] == true,
         takeaway: raw['paraLlevar'] == true,
+        soup: selection?.soup,
+        main: selection?.main,
+        selection: selection,
       ));
     }
 
@@ -1195,6 +1313,95 @@ class ApiCustomerRepository implements ICustomerRepository {
       partySize: partySize,
       takeaway: takeaway,
       restaurant: cachedRest,
+    );
+  }
+
+  /// Parsea `miembros[].seleccion` respetando estrictamente `null` (nunca infiere platos ajenos).
+  TableMemberSelection? _parseMemberSelection(Object? raw) {
+    if (raw == null || raw is! Map) return null;
+    final map = _asMap(raw);
+    String? soup;
+    String? main;
+    final lunchIds = <String>[];
+    final lunchNames = <String>[];
+
+    void consumeLunchList(List list) {
+      for (final entry in list) {
+        if (entry is Map) {
+          final p = _asMap(entry);
+          final id = (p['id'] ?? p['platoId'] ?? '').toString().trim();
+          final name = (p['nombre'] ?? '').toString().trim();
+          final sec = (p['seccion'] ?? '').toString().toUpperCase();
+          if (id.isNotEmpty) lunchIds.add(id);
+          if (name.isNotEmpty) {
+            lunchNames.add(name);
+            if (sec == 'SOPA') {
+              soup ??= name;
+            } else if (sec == 'FUERTE' || sec == 'SEGUNDO' || sec == 'PLATO_FUERTE') {
+              main ??= name;
+            } else {
+              if (main != null) {
+                soup ??= name;
+              }
+              main ??= name;
+            }
+          }
+        } else if (entry is String && entry.trim().isNotEmpty) {
+          final val = entry.trim();
+          lunchIds.add(val);
+        }
+      }
+    }
+
+    final almuerzo = map['almuerzo'];
+    if (almuerzo is Map) {
+      final aMap = _asMap(almuerzo);
+      if (aMap['platos'] is List) {
+        consumeLunchList(aMap['platos'] as List);
+      }
+      final sRaw = aMap['sopa']?.toString().trim();
+      final mRaw = (aMap['segundo'] ?? aMap['fuerte'])?.toString().trim();
+      if (sRaw != null && sRaw.isNotEmpty) soup ??= sRaw;
+      if (mRaw != null && mRaw.isNotEmpty) main ??= mRaw;
+    } else if (almuerzo is List) {
+      consumeLunchList(almuerzo);
+    }
+
+    final extras = <TableSelectionExtra>[];
+    if (map['extras'] is List) {
+      for (final entry in map['extras'] as List) {
+        if (entry is Map) {
+          final ex = _asMap(entry);
+          final platoMap = ex['plato'] is Map ? _asMap(ex['plato']) : const <String, dynamic>{};
+          final dishId = (ex['platoId'] ?? platoMap['id'] ?? ex['id'] ?? '').toString().trim();
+          final name = (ex['nombre'] ?? platoMap['nombre'] ?? '').toString().trim();
+          final qty = _asInt(ex['cantidad']) ?? 1;
+          if (name.isNotEmpty || dishId.isNotEmpty) {
+            extras.add(
+              TableSelectionExtra(
+                dishId: dishId,
+                name: name.isNotEmpty ? name : dishId,
+                quantity: qty < 1 ? 1 : qty,
+              ),
+            );
+          }
+        } else if (entry is String && entry.trim().isNotEmpty) {
+          extras.add(
+            TableSelectionExtra(
+              dishId: entry.trim(),
+              name: entry.trim(),
+              quantity: 1,
+            ),
+          );
+        }
+      }
+    }
+
+    return TableMemberSelection(
+      lunchDishes: lunchNames.isNotEmpty ? lunchNames : lunchIds,
+      soup: soup,
+      main: main,
+      extras: extras,
     );
   }
 
@@ -1402,14 +1609,17 @@ class ApiCustomerRepository implements ICustomerRepository {
     final zona = _asMap(json['zona']);
     final logoUrl = json['logoUrl']?.toString();
     final desc = (json['descripcionCorta'] ?? '').toString().trim();
-    final ocupacion = _asMap(json['ocupacion']);
+    final ocupacion =
+        json['ocupacion'] is Map ? _asMap(json['ocupacion']) : const <String, dynamic>{};
     final nivelRaw = ocupacion['nivel']?.toString().toUpperCase();
-    final estadoRaw = json['estado']?.toString().toUpperCase();
-    // `GET /v1/restaurantes` solo lista locales activos; un local cerrado manualmente
-    // llega como PAUSADO/CERRADO o con nivel CERRADO, nunca por horario (`abiertoAhora`).
-    final isOpenFromServer = estadoRaw != 'PAUSADO' &&
-        estadoRaw != 'CERRADO' &&
-        nivelRaw != 'CERRADO';
+    final estadoRaw = (json['estado'] ?? 'ACTIVO').toString().toUpperCase();
+    final isPausedFromServer =
+        estadoRaw == 'PAUSADO' || estadoRaw == 'CERRADO';
+    final isOpenFromServer = !isPausedFromServer && nivelRaw != 'CERRADO';
+    final openNow = json['abiertoAhora'] is bool
+        ? json['abiertoAhora'] as bool
+        : isOpenFromServer;
+    final menuSoldOut = json['menuAgotado'] == true;
     final mappedOccupancy = !isOpenFromServer
         ? 'CERRADO'
         : (ocupacion['lleno'] == true ? 'LLENO' : _mapOccupancy(nivelRaw));
@@ -1439,6 +1649,9 @@ class ApiCustomerRepository implements ICustomerRepository {
       planLunchPrice: prev?.planLunchPrice,
       occupancy: mappedOccupancy,
       isOpen: isOpenFromServer,
+      status: estadoRaw,
+      openNow: openNow,
+      menuSoldOut: menuSoldOut,
       categories: categories,
       todayMenu: prev?.todayMenu ?? const [],
       featuredDish: (prev != null && prev.featuredDish.isNotEmpty)
@@ -1459,6 +1672,10 @@ class ApiCustomerRepository implements ICustomerRepository {
       seats: seats,
     );
 
+    if (menuSoldOut) {
+      _todayMenuAvailabilityByRest[id] = MenuAvailabilityState.agotadoTotal;
+      _todayMenuPublishedByRest[id] = false;
+    }
     _restaurantCache[id] = mapped;
     return mapped;
   }
@@ -1576,6 +1793,9 @@ class ApiCustomerRepository implements ICustomerRepository {
       planLunchPrice: bestPerLunch ?? base.planLunchPrice,
       occupancy: base.occupancy,
       isOpen: base.isOpen,
+      status: base.status,
+      openNow: base.openNow,
+      menuSoldOut: base.menuSoldOut,
       categories: base.categories,
       todayMenu: menuItems,
       featuredDish: featuredMain?.name ?? base.featuredDish,
@@ -1596,9 +1816,11 @@ class ApiCustomerRepository implements ICustomerRepository {
       seats: base.seats,
     );
 
-    final availability = (!published || menuItems.isEmpty)
-        ? MenuAvailabilityState.sinPublicar
-        : detailed.menuAvailabilityState;
+    final availability = base.menuSoldOut
+        ? MenuAvailabilityState.agotadoTotal
+        : ((!published || menuItems.isEmpty)
+            ? MenuAvailabilityState.sinPublicar
+            : detailed.menuAvailabilityState);
     _todayMenuAvailabilityByRest[base.id] = availability;
     _todayMenuPublishedByRest[base.id] =
         availability == MenuAvailabilityState.disponible;

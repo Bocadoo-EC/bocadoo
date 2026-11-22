@@ -194,14 +194,34 @@ class _GuestGroupOrderScreenState extends ConsumerState<GuestGroupOrderScreen> {
       }
 
       if (_remoteTable != null || (_session != null && !AppMode.useMock)) {
+        final repo = ref.read(customerRepositoryProvider);
         try {
-          final updated = await ref.read(customerRepositoryProvider).joinTable(
-                _session?.tableId ?? _remoteTable!.id,
-                name: guestName,
-                soup: _selection.cleanSoup ?? '',
-                main: _selection.main ?? '',
-                takeaway: _selection.takeaway,
+          // Flujo Entrega C en 2 llamadas: 1) unirse, 2) PUT /v1/mis/mesas/{id}/seleccion.
+          var updated = await repo.joinTable(
+            _session?.tableId ?? _remoteTable!.id,
+            name: guestName,
+            soup: _selection.cleanSoup ?? '',
+            main: _selection.main ?? '',
+            takeaway: _selection.takeaway,
+          );
+          var rest = ref
+              .read(customerControllerProvider)
+              .state
+              .restaurantById(updated.restaurantId);
+          if (rest == null || rest.todayMenu.isEmpty) {
+            rest = await repo.getRestaurantById(updated.restaurantId);
+          }
+          final lunchDishIds = _selection.resolveLunchDishIds(rest);
+          if (lunchDishIds.isNotEmpty) {
+            try {
+              updated = await repo.updateTableSelection(
+                updated.id,
+                lunchDishIds: lunchDishIds,
               );
+            } catch (_) {
+              // Mantiene la unión confirmada si el backend aún no acepta selección para este caso.
+            }
+          }
           if (mounted) {
             ref.read(customerControllerProvider).syncTable(updated);
           }
@@ -210,7 +230,7 @@ class _GuestGroupOrderScreenState extends ConsumerState<GuestGroupOrderScreen> {
           if (_session == null) {
             rethrow;
           }
-          if (e.status == 404 || e.status == 410) rethrow;
+          if (e.status == 404 || e.status == 410 || e.status == 409) rethrow;
         }
       }
 
@@ -230,6 +250,18 @@ class _GuestGroupOrderScreenState extends ConsumerState<GuestGroupOrderScreen> {
       }
     } on ApiException catch (e) {
       if (!mounted) return;
+      if (e.code == 'LOCAL_LLENO_SOLO_LLEVAR') {
+        setState(() => _selection = _selection.copyWith(takeaway: true));
+        messenger.showSnackBar(
+          const SnackBar(
+            behavior: SnackBarBehavior.floating,
+            content: Text(
+              'El salón está lleno ahora. Activamos "Para llevar" para que puedas unirte.',
+            ),
+          ),
+        );
+        return;
+      }
       messenger.showSnackBar(
         SnackBar(
           behavior: SnackBarBehavior.floating,
@@ -360,6 +392,26 @@ class _GuestGroupOrderScreenState extends ConsumerState<GuestGroupOrderScreen> {
                                     color: colors.onSurfaceVariant,
                                   ),
                                 ),
+                                if (remote != null && remote.members.isNotEmpty) ...[
+                                  const SizedBox(height: 10),
+                                  for (final m in remote.members)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 3),
+                                      child: Text(
+                                        m.selection != null &&
+                                                m.selection!.summary.isNotEmpty
+                                            ? '• ${m.name}: ${m.selection!.summary}'
+                                            : '• ${m.name}${m.isHost ? ' (Anfitrión)' : ''}',
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: 12.5,
+                                          fontWeight: FontWeight.w600,
+                                          color: colors.onSurfaceVariant,
+                                        ),
+                                      ),
+                                    ),
+                                ],
                               ],
                             ),
                           ),

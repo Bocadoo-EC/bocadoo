@@ -50,6 +50,7 @@ class CatalogDish {
     this.price,
     this.description = '',
     this.archived = false,
+    this.soldOut = false,
     this.topPick = false,
     this.veggie = false,
     this.breakfastCategory,
@@ -61,17 +62,19 @@ class CatalogDish {
   final double? price;
   final String description;
   final bool archived;
+  final bool soldOut;
   final bool topPick;
   final bool veggie;
   final BreakfastCategory? breakfastCategory;
 
-  CatalogDish copyWith({bool? archived}) => CatalogDish(
+  CatalogDish copyWith({bool? archived, bool? soldOut}) => CatalogDish(
         id: id,
         name: name,
         kind: kind,
         price: price,
         description: description,
         archived: archived ?? this.archived,
+        soldOut: soldOut ?? this.soldOut,
         topPick: topPick,
         veggie: veggie,
         breakfastCategory: breakfastCategory,

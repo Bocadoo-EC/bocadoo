@@ -251,6 +251,20 @@ class OwnerRepository implements IOwnerRepository, IOwnerMenuRepository, IOwnerC
   }
 
   @override
+  Future<bool> setCatalogDishSoldOut(
+    String restaurantId,
+    String dishId, {
+    required bool soldOut,
+  }) async {
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    final i = _dishes.indexWhere((d) => d.id == dishId);
+    if (i >= 0) {
+      _dishes[i] = _dishes[i].copyWith(soldOut: soldOut);
+    }
+    return true;
+  }
+
+  @override
   Future<bool> setStoreOpen(String restaurantId, {required bool isOpen}) async {
     await Future<void>.delayed(const Duration(milliseconds: 150));
     if (_todayMenu != null) {

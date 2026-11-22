@@ -313,6 +313,11 @@ class _MemberRow extends StatelessWidget {
             if (dishes.isNotEmpty)
               Text(dishes,
                   style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant)),
+            if (line.extras.isNotEmpty)
+              Text(
+                'Extras: ${line.extras.join(', ')}',
+                style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant),
+              ),
             if (line.takeaway)
               Row(children: [
                 Icon(Icons.shopping_bag_outlined, size: 14, color: colors.onSurfaceVariant),

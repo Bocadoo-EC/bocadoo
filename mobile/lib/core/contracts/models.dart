@@ -312,6 +312,15 @@ class Restaurant {
   /// Capacidad máxima de puestos del local (puestos configurados).
   final int? seats;
 
+  /// Estado del local devuelto por el servidor (`ACTIVO` | `PAUSADO`).
+  final String status;
+
+  /// Bandera `abiertoAhora` devuelta por el backend según horario.
+  final bool openNow;
+
+  /// Bandera `menuAgotado` devuelta por el backend (todos los fuertes agotados).
+  final bool menuSoldOut;
+
   const Restaurant({
     required this.id,
     required this.name,
@@ -342,7 +351,12 @@ class Restaurant {
     this.slug,
     this.fullUntil,
     this.seats,
+    this.status = 'ACTIVO',
+    this.openNow = true,
+    this.menuSoldOut = false,
   });
+
+  bool get isPaused => status.toUpperCase() == 'PAUSADO' || !isOpen;
 
   bool get hasLocation =>
       latitude != null &&
@@ -381,7 +395,7 @@ class Restaurant {
       );
 
   bool get isMenuSoldOutToday =>
-      menuAvailabilityState == MenuAvailabilityState.agotadoTotal;
+      menuSoldOut || menuAvailabilityState == MenuAvailabilityState.agotadoTotal;
 
   Restaurant copyWith({
     String? id,
@@ -405,6 +419,9 @@ class Restaurant {
     DateTime? fullUntil,
     bool clearFullUntil = false,
     int? seats,
+    String? status,
+    bool? openNow,
+    bool? menuSoldOut,
   }) {
     return Restaurant(
       id: id ?? this.id,
@@ -436,6 +453,9 @@ class Restaurant {
       slug: slug ?? this.slug,
       fullUntil: clearFullUntil ? null : (fullUntil ?? this.fullUntil),
       seats: seats ?? this.seats,
+      status: status ?? this.status,
+      openNow: openNow ?? this.openNow,
+      menuSoldOut: menuSoldOut ?? this.menuSoldOut,
     );
   }
 }
@@ -644,6 +664,83 @@ class ActiveOrder {
   });
 }
 
+/// Ítem de carta fija pública (`GET /v1/restaurantes/{slug}/carta`).
+@immutable
+class PublicCartaItem {
+  final String id;
+  final String name;
+  final String description;
+  final String category; // A_LA_CARTA, BEBIDA, EXTRA
+  final int priceCents;
+  final String? imageUrl;
+  final int order;
+  final bool isSoldOut;
+
+  const PublicCartaItem({
+    required this.id,
+    required this.name,
+    this.description = '',
+    required this.category,
+    required this.priceCents,
+    this.imageUrl,
+    this.order = 0,
+    this.isSoldOut = false,
+  });
+
+  double get price => priceCents / 100.0;
+}
+
+/// Extra elegido dentro de la selección de un miembro de mesa grupal.
+@immutable
+class TableSelectionExtra {
+  final String? dishId;
+  final String name;
+  final int quantity;
+
+  const TableSelectionExtra({
+    this.dishId,
+    required this.name,
+    this.quantity = 1,
+  });
+
+  String get formattedLabel => quantity > 1 ? '${quantity}x $name' : name;
+}
+
+/// Selección de platos (`almuerzo` + `extras`) registrada por un miembro de mesa.
+@immutable
+class TableMemberSelection {
+  final List<String> lunchDishes;
+  final String? soup;
+  final String? main;
+  final List<TableSelectionExtra> extras;
+
+  const TableMemberSelection({
+    this.lunchDishes = const [],
+    this.soup,
+    this.main,
+    this.extras = const [],
+  });
+
+  bool get isEmpty =>
+      lunchDishes.isEmpty &&
+      (soup == null || soup!.isEmpty) &&
+      (main == null || main!.isEmpty) &&
+      extras.isEmpty;
+
+  String get summary {
+    final parts = <String>[
+      if (lunchDishes.isNotEmpty)
+        ...lunchDishes
+      else ...[
+        if (soup != null && soup!.isNotEmpty) soup!,
+        if (main != null && main!.isNotEmpty) main!,
+      ],
+      for (final e in extras) e.formattedLabel,
+    ];
+    return parts.join(' · ');
+  }
+}
+
 /// Cómo se cobra la mesa con amigos.
 enum TableMode { eachOwn, hostPays }
 
@@ -656,6 +753,10 @@ class TableMember {
   final String? main;
   final bool takeaway;
 
+  /// Selección devuelta por `miembros[].seleccion`.
+  /// Para otros invitados el backend devuelve `null` (no inferir ni mostrar platos).
+  final TableMemberSelection? selection;
+
   const TableMember({
     required this.id,
     required this.name,
@@ -663,6 +764,7 @@ class TableMember {
     this.soup,
     this.main,
     this.takeaway = false,
+    this.selection,
   });
 }
 

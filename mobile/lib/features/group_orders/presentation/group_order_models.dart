@@ -167,14 +167,21 @@ class GroupOrderDishSelection {
   final String? main;
   final String? drink;
   final String? dessert;
+  final List<String> extras;
   final bool takeaway;
+
+  /// `true` cuando el backend devolvió `seleccion: null` para otro invitado.
+  /// Nunca se infieren ni muestran platos de otros comensales en ese caso.
+  final bool selectionHidden;
 
   const GroupOrderDishSelection({
     this.soup,
     this.main,
     this.drink,
     this.dessert,
+    this.extras = const [],
     this.takeaway = false,
+    this.selectionHidden = false,
   });
 
   String get modalityLabel => takeaway ? 'Para llevar' : 'Para comer aquí';
@@ -200,6 +207,28 @@ class GroupOrderDishSelection {
     return soupOk && mainOk && drinkOk;
   }
 
+  /// Resuelve los IDs de platos del menú diario para `PUT /v1/mis/mesas/{id}/seleccion`.
+  List<String> resolveLunchDishIds(Restaurant? restaurant) {
+    if (restaurant == null || restaurant.todayMenu.isEmpty) return const [];
+    final ids = <String>[];
+    void matchByName(String? target) {
+      final clean = target?.trim().toLowerCase() ?? '';
+      if (clean.isEmpty) return;
+      final hit = restaurant.todayMenu
+          .where((m) => m.name.trim().toLowerCase() == clean && m.id.isNotEmpty)
+          .firstOrNull;
+      if (hit != null && !ids.contains(hit.id)) {
+        ids.add(hit.id);
+      }
+    }
+
+    matchByName(cleanSoup);
+    matchByName(main);
+    matchByName(cleanDrink);
+    matchByName(dessert);
+    return ids;
+  }
+
   /// Descarta elecciones que ya no existen en el menú publicado.
   GroupOrderDishSelection sanitizedFor(DailyMenu menu) {
     return GroupOrderDishSelection(
@@ -208,18 +237,23 @@ class GroupOrderDishSelection {
       drink:
           (drink == kNoDrinkOption || menu.drinks.contains(drink)) ? drink : null,
       dessert: menu.desserts.contains(dessert) ? dessert : null,
+      extras: extras,
       takeaway: takeaway,
+      selectionHidden: selectionHidden,
     );
   }
 
   /// Resumen limpio para anfitrión y cocina: omite "Sin sopa" / "Sin bebida".
+  /// Cuando [selectionHidden] es `true`, solo muestra la modalidad sin inferir platos.
   String get summary {
+    if (selectionHidden) return modalityLabel;
     final dessertText = dessert?.trim() ?? '';
     final parts = <String>[
       ?cleanSoup,
       if (main != null && main!.trim().isNotEmpty) main!.trim(),
       ?cleanDrink,
       if (dessertText.isNotEmpty) dessertText,
+      if (extras.isNotEmpty) 'Extras: ${extras.join(', ')}',
     ];
     final dishText = parts.isEmpty ? 'Almuerzo del día' : parts.join(' · ');
     return '$dishText · $modalityLabel';
@@ -231,14 +265,18 @@ class GroupOrderDishSelection {
     String? drink,
     String? dessert,
     bool clearDessert = false,
+    List<String>? extras,
     bool? takeaway,
+    bool? selectionHidden,
   }) {
     return GroupOrderDishSelection(
       soup: soup ?? this.soup,
       main: main ?? this.main,
       drink: drink ?? this.drink,
       dessert: clearDessert ? null : (dessert ?? this.dessert),
+      extras: extras ?? this.extras,
       takeaway: takeaway ?? this.takeaway,
+      selectionHidden: selectionHidden ?? this.selectionHidden,
     );
   }
 }

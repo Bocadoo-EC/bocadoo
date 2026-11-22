@@ -416,6 +416,99 @@ class MockCustomerRepository implements ICustomerRepository {
   }
 
   @override
+  Future<List<PublicCartaItem>> getRestaurantCarta(String restaurantId) async {
+    await _simulateNetwork();
+    return const [
+      PublicCartaItem(
+        id: 'carta-1',
+        name: 'Fritada tradicional con mote',
+        category: 'A_LA_CARTA',
+        priceCents: 650,
+        order: 1,
+        description: 'Carne de cerdo dorada con mote y tostado',
+      ),
+      PublicCartaItem(
+        id: 'carta-2',
+        name: 'Churrasco con papas y huevo',
+        category: 'A_LA_CARTA',
+        priceCents: 550,
+        order: 2,
+        description: 'Lomo a la plancha con papas fritas y ensalada',
+      ),
+      PublicCartaItem(
+        id: 'beb-1',
+        name: 'Jugo natural de naranjilla',
+        category: 'BEBIDA',
+        priceCents: 125,
+        order: 1,
+      ),
+      PublicCartaItem(
+        id: 'beb-2',
+        name: 'Agua mineral sin gas',
+        category: 'BEBIDA',
+        priceCents: 75,
+        order: 2,
+      ),
+      PublicCartaItem(
+        id: 'ext-1',
+        name: 'Porción de maduro frito',
+        category: 'EXTRA',
+        priceCents: 100,
+        order: 1,
+      ),
+    ];
+  }
+
+  @override
+  Future<SharedTable> updateTableSelection(
+    String tableId, {
+    required List<String> lunchDishIds,
+    List<({String dishId, int quantity})> extras = const [],
+  }) async {
+    await _simulateNetwork();
+    return _update(
+      tableId,
+      (t) {
+        final menuById = <String, String>{};
+        for (final d in t.mains) {
+          menuById[d.id] = d.name;
+        }
+        final resolvedNames = [
+          for (final id in lunchDishIds) menuById[id] ?? id,
+        ];
+        final sel = TableMemberSelection(
+          lunchDishes: resolvedNames,
+          soup: resolvedNames.length > 1 ? resolvedNames.first : null,
+          main: resolvedNames.isNotEmpty ? resolvedNames.last : null,
+          extras: [
+            for (final e in extras)
+              TableSelectionExtra(
+                dishId: e.dishId,
+                name: e.dishId,
+                quantity: e.quantity,
+              ),
+          ],
+        );
+        if (t.members.isEmpty) return t;
+        final updatedMembers = [...t.members];
+        final idx = updatedMembers.lastIndexWhere((m) => m.id == 'self');
+        final targetIdx = idx >= 0 ? idx : updatedMembers.length - 1;
+        final m = updatedMembers[targetIdx];
+        updatedMembers[targetIdx] = TableMember(
+          id: m.id,
+          name: m.name,
+          isHost: m.isHost,
+          soup: sel.soup ?? m.soup,
+          main: sel.main ?? m.main,
+          takeaway: m.takeaway,
+          selection: sel,
+        );
+        return t.copyWith(members: updatedMembers);
+      },
+    );
+  }
+
+  @override
   Future<CustomerProfile> getProfile() async {
     // TODO: Conectar con provider de backend
     await _simulateNetwork();

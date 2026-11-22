@@ -399,13 +399,24 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
       final repo = ref.read(customerRepositoryProvider);
       final isFull = _isRestaurantFull(rid);
       final targetHhmm = _formatHhmm(_estimatedConsumptionTime);
-      final table = await repo.openSharedTable(
+      var table = await repo.openSharedTable(
         restaurantId: rid,
         time: targetHhmm,
         partySize: _partySize,
         takeaway: isFull || _dishSelection.takeaway,
         mode: _selectedMode,
       );
+      final hostLunchIds = _dishSelection.resolveLunchDishIds(restaurant);
+      if (hostLunchIds.isNotEmpty) {
+        try {
+          table = await repo.updateTableSelection(
+            table.id,
+            lunchDishIds: hostLunchIds,
+          );
+        } catch (_) {
+          // Mantiene la mesa abierta si la selección aún no es aceptada.
+        }
+      }
       if (!mounted) return;
 
       final hostName =
@@ -445,6 +456,21 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
       _evaluateTransitions();
     } on ApiException catch (e) {
       if (!mounted) return;
+      if (e.code == 'LOCAL_LLENO_SOLO_LLEVAR') {
+        setState(() {
+          _busy = false;
+          _dishSelection = _dishSelection.copyWith(takeaway: true);
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            behavior: SnackBarBehavior.floating,
+            content: Text(
+              'El salón está lleno ahora. Activamos "Para llevar" para crear la mesa.',
+            ),
+          ),
+        );
+        return;
+      }
       setState(() {
         _busy = false;
         _failed = true;
@@ -757,6 +783,15 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
     );
     if (participant.isHost) {
       setState(() => _dishSelection = saved);
+      final hostIds = saved.resolveLunchDishIds(_restaurantFor(t.restaurantId));
+      if (hostIds.isNotEmpty) {
+        unawaited(
+          ref
+              .read(customerRepositoryProvider)
+              .updateTableSelection(t.id, lunchDishIds: hostIds)
+              .catchError((_) => t),
+        );
+      }
     }
   }
 

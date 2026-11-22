@@ -121,6 +121,7 @@ class ApiOwnerRepository
   final List<CatalogItem> _catalogCache = [];
   int _cachedLunchPriceCents = 0;
   String? _lastError;
+  Map<String, String> _lastFieldErrors = const {};
 
   bool get _isCashier => _session.isCashierAccount;
 
@@ -130,6 +131,13 @@ class ApiOwnerRepository
     final err = _lastError;
     _lastError = null;
     return err;
+  }
+
+  /// Devuelve y limpia el mapa de errores de validación por campo (`400 problem+json`).
+  Map<String, String> consumeLastFieldErrors() {
+    final errs = _lastFieldErrors;
+    _lastFieldErrors = const {};
+    return errs;
   }
 
   void dispose() {
@@ -3009,30 +3017,13 @@ class ApiOwnerRepository
           }
           if (hasPlan) inferredPlanCount++;
 
-          String? soup;
-          String? main;
-          if (mm['platos'] is List) {
-            for (final p in (mm['platos'] as List).whereType<Map>()) {
-              final sec = (p['seccion'] ?? '').toString().toUpperCase();
-              final nombre = (p['nombre'] ?? '').toString();
-              if (nombre.isEmpty) continue;
-              if (sec == 'SOPA') {
-                soup ??= nombre;
-              } else if (sec == 'FUERTE') {
-                main ??= nombre;
-              } else {
-                main ??= nombre;
-              }
-            }
-          } else {
-            soup = mm['sopa']?.toString();
-            main = (mm['segundo'] ?? mm['plato'])?.toString();
-          }
+          final parsedSel = _parseTableMemberSelection(mm);
           memberDishes.add(
             PendingTableMemberDish(
               memberName: (mm['nombre'] ?? 'Comensal').toString(),
-              soup: (soup != null && soup.isNotEmpty) ? soup : null,
-              main: (main != null && main.isNotEmpty) ? main : null,
+              soup: parsedSel.soup,
+              main: parsedSel.main,
+              extras: parsedSel.extras,
               takeaway: isTakeaway,
               hasPlan: hasPlan,
             ),
@@ -3067,6 +3058,81 @@ class ApiOwnerRepository
       if (e.status == 403) return const [];
       rethrow;
     }
+  }
+
+  /// Extrae sopa, segundo y extras desde `miembros[].seleccion` (Entrega C) o campos planos legacy.
+  static ({String? soup, String? main, List<String> extras})
+      _parseTableMemberSelection(Map mm) {
+    String? soup;
+    String? main;
+    final extras = <String>[];
+
+    void addLunchPlatos(List rawPlatos) {
+      for (final p in rawPlatos) {
+        if (p is Map) {
+          final sec = (p['seccion'] ?? '').toString().toUpperCase();
+          final nombre = (p['nombre'] ?? '').toString().trim();
+          if (nombre.isEmpty) continue;
+          if (sec == 'SOPA') {
+            soup ??= nombre;
+          } else if (sec == 'FUERTE' || sec == 'SEGUNDO' || sec == 'PLATO_FUERTE') {
+            main ??= nombre;
+          } else {
+            if (main != null) {
+              soup ??= nombre;
+            }
+            main ??= nombre;
+          }
+        } else if (p is String && p.trim().isNotEmpty) {
+          main ??= p.trim();
+        }
+      }
+    }
+
+    final seleccion = mm['seleccion'];
+    if (seleccion is Map) {
+      final almuerzo = seleccion['almuerzo'];
+      if (almuerzo is Map) {
+        if (almuerzo['platos'] is List) {
+          addLunchPlatos(almuerzo['platos'] as List);
+        }
+        final sRaw = almuerzo['sopa']?.toString().trim();
+        final mRaw = (almuerzo['segundo'] ?? almuerzo['fuerte'])?.toString().trim();
+        if (sRaw != null && sRaw.isNotEmpty) soup ??= sRaw;
+        if (mRaw != null && mRaw.isNotEmpty) main ??= mRaw;
+      } else if (almuerzo is List) {
+        addLunchPlatos(almuerzo);
+      }
+      if (seleccion['extras'] is List) {
+        for (final ex in seleccion['extras'] as List) {
+          if (ex is Map) {
+            final platoMap = ex['plato'] is Map ? ex['plato'] as Map : null;
+            final nombre = (ex['nombre'] ?? platoMap?['nombre'] ?? '').toString().trim();
+            final qty = _asInt(ex['cantidad'], 1);
+            if (nombre.isNotEmpty) {
+              extras.add(qty > 1 ? '${qty}x $nombre' : nombre);
+            }
+          } else if (ex is String && ex.trim().isNotEmpty) {
+            extras.add(ex.trim());
+          }
+        }
+      }
+    } else if (mm['platos'] is List) {
+      addLunchPlatos(mm['platos'] as List);
+    } else {
+      final sRaw = mm['sopa']?.toString().trim();
+      final mRaw = (mm['segundo'] ?? mm['plato'])?.toString().trim();
+      if (sRaw != null && sRaw.isNotEmpty) soup = sRaw;
+      if (mRaw != null && mRaw.isNotEmpty) main = mRaw;
+    }
+
+    final finalSoup = soup;
+    final finalMain = main;
+    return (
+      soup: (finalSoup != null && finalSoup.isNotEmpty) ? finalSoup : null,
+      main: (finalMain != null && finalMain.isNotEmpty) ? finalMain : null,
+      extras: extras,
+    );
   }
 
   @override
@@ -3128,11 +3194,15 @@ class ApiOwnerRepository
         }
       }
 
+      final parsedSel = _parseTableMemberSelection(m);
       lines.add(
         TableChargeLine(
           name: name,
           via: via,
           amount: Money.fromCents(cashCents),
+          soup: parsedSel.soup,
+          main: parsedSel.main,
+          extras: parsedSel.extras,
           isHost: isHost,
           takeaway: takeaway,
         ),
@@ -3962,6 +4032,7 @@ class ApiOwnerRepository
         price: priceCents != null ? Money.fromCents(priceCents) : null,
         description: desc != null && desc.trim().isNotEmpty ? desc : '',
         archived: raw['activo'] == false,
+        soldOut: raw['agotado'] == true,
         veggie: isVeggie,
         breakfastCategory: bCat,
       );
@@ -4031,6 +4102,42 @@ class ApiOwnerRepository
             restaurant: true,
           ),
     );
+  }
+
+  @override
+  Future<bool> setCatalogDishSoldOut(
+    String restaurantId,
+    String dishId, {
+    required bool soldOut,
+  }) async {
+    _lastError = null;
+    try {
+      await guard(
+        () => _api.send<dynamic>(
+              'PATCH',
+              '${ApiConfig.v1}/menu/platos/$dishId/agotado',
+              body: {'agotado': soldOut},
+              restaurant: true,
+            ),
+      );
+      eventsService.track(
+        'dueno.carta_plato_agotado',
+        restaurantId: restaurantId,
+        props: {'agotado': soldOut},
+      );
+      return true;
+    } on ApiException catch (e) {
+      if (e.status == 403) {
+        _lastError = 'No tienes permisos para modificar este plato.';
+      } else {
+        final detail = e.detail.trim();
+        _lastError = detail.isNotEmpty ? detail : e.userMessage;
+      }
+      return false;
+    } catch (_) {
+      _lastError = 'No se pudo actualizar la disponibilidad del plato.';
+      return false;
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -4644,16 +4751,118 @@ class ApiOwnerRepository
     if (zone.isEmpty) zone = await profile.getZone() ?? '';
     lat ??= await profile.getLat();
     lng ??= await profile.getLng();
+    final rawMaskedCedula =
+        (data['cedulaRucEnmascarada'] ?? data['cedulaRuc'])?.toString().trim();
+    final rawPendientes = data['datosPendientes'] is List
+        ? (data['datosPendientes'] as List)
+            .map((e) => e.toString().trim())
+            .where((e) => e.isNotEmpty)
+            .toList()
+        : const <String>[];
+    final perfilCompleto = data['perfilCompleto'] is bool
+        ? data['perfilCompleto'] as bool
+        : rawPendientes.isEmpty;
     return LocalInfo(
       name: (data['nombre'] ?? '').toString(),
       address: (data['direccion'] ?? '').toString(),
       seats: _asInt(data['puestos']),
+      tablesCount: _asNullableInt(data['mesas']),
+      phone: (data['telefono'] ?? '').toString(),
+      maskedCedulaRuc:
+          (rawMaskedCedula != null && rawMaskedCedula.isNotEmpty)
+              ? rawMaskedCedula
+              : null,
+      takeawaySurchargeCents: _asNullableInt(data['recargoParaLlevarCentavos']),
+      perfilCompleto: perfilCompleto,
+      datosPendientes: rawPendientes,
       zone: zone,
       latitude: lat,
       longitude: lng,
       logo: localLogo,
       logoUrl: remoteLogo != null && remoteLogo.isNotEmpty ? remoteLogo : null,
     );
+  }
+
+  /// Actualiza datos del perfil del local (`PATCH /v1/restaurante`, Entrega B).
+  /// Al fallar con `400 problem+json`, expone errores por campo en [consumeLastFieldErrors].
+  Future<bool> updateRestaurantProfile({
+    String? name,
+    String? address,
+    String? zone,
+    double? lat,
+    double? lng,
+    String? phone,
+    String? cedulaRuc,
+    int? tablesCount,
+    int? seats,
+    int? singleLunchPriceCents,
+    int? takeawaySurchargeCents,
+  }) async {
+    _lastError = null;
+    _lastFieldErrors = const {};
+    try {
+      final knownZoneId = zone != null ? resolveKnownZoneId(zone) : null;
+      final roundedLat =
+          lat != null ? double.parse(lat.toStringAsFixed(6)) : null;
+      final roundedLng =
+          lng != null ? double.parse(lng.toStringAsFixed(6)) : null;
+
+      String? phoneToSend;
+      if (phone != null && phone.trim().isNotEmpty) {
+        final trimmed = phone.trim();
+        final e164 = Phone.toE164(trimmed);
+        phoneToSend = e164.isNotEmpty ? e164 : trimmed;
+      }
+
+      final body = <String, dynamic>{
+        if (name != null && name.trim().isNotEmpty) 'nombre': name.trim(),
+        if (address != null && address.trim().isNotEmpty)
+          'direccion': address.trim(),
+        'telefono': ?phoneToSend,
+        if (cedulaRuc != null && cedulaRuc.trim().isNotEmpty)
+          'cedulaRuc': cedulaRuc.trim(),
+        'mesas': ?tablesCount,
+        'puestos': ?seats,
+        'precioSueltoCentavos': ?singleLunchPriceCents,
+        'recargoParaLlevarCentavos': ?takeawaySurchargeCents,
+        'zonaId': ?knownZoneId,
+        'latitud': ?roundedLat,
+        'longitud': ?roundedLng,
+      };
+      if (body.isEmpty) return true;
+
+      await guard(
+        () => _api.send<Map<String, dynamic>>(
+          'PATCH',
+          '${ApiConfig.v1}/restaurante',
+          restaurant: true,
+          body: body,
+        ),
+      );
+      if (singleLunchPriceCents != null && singleLunchPriceCents > 0) {
+        _cachedLunchPriceCents = singleLunchPriceCents;
+      }
+      if (zone != null || roundedLat != null || roundedLng != null) {
+        await _session.profile.saveDinerProfile(
+          zone: zone,
+          lat: roundedLat,
+          lng: roundedLng,
+        );
+      }
+      if (cedulaRuc != null && cedulaRuc.trim().isNotEmpty) {
+        // Nunca conservar la cédula/RUC en claro en disco.
+        await _session.profile.saveOwnerRuc(null);
+      }
+      return true;
+    } on ApiException catch (e) {
+      _lastFieldErrors = e.fieldErrors;
+      final detail = e.detail.trim();
+      _lastError = detail.isNotEmpty ? detail : e.userMessage;
+      return false;
+    } catch (_) {
+      _lastError = 'No se pudo actualizar los datos del local.';
+      return false;
+    }
   }
 
   @override

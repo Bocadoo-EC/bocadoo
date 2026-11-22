@@ -399,6 +399,9 @@ class CustomerController extends ChangeNotifier {
   /// Último mensaje de error en una acción (preorden o solicitud de plan).
   String? lastActionError;
 
+  /// Código de error de máquina del último fallo (`LOCAL_LLENO_SOLO_LLEVAR`, `RESTAURANTE_PAUSADO`, etc.).
+  String? lastActionErrorCode;
+
   CustomerController({ICustomerRepository? repository})
       : _repository = repository ?? MockCustomerRepository() {
     if (AppMode.useMock) {
@@ -1328,6 +1331,7 @@ class CustomerController extends ChangeNotifier {
     String? estimatedArrival,
   }) async {
     lastActionError = null;
+    lastActionErrorCode = null;
     if (_state.activeOrder != null && !_state.activeOrder!.isDelivered) {
       final latest = await _repository.getActiveOrder();
       if (latest != null && !latest.isDelivered) {
@@ -1370,9 +1374,16 @@ class CustomerController extends ChangeNotifier {
       return true;
     } on ApiException catch (e) {
       lastActionError = e.userMessage;
+      lastActionErrorCode = e.code;
+      if (e.code == 'RESTAURANTE_PAUSADO' ||
+          e.code == 'MENU_NO_PUBLICADO' ||
+          e.code == 'LOCAL_LLENO_SOLO_LLEVAR') {
+        unawaited(refreshRestaurants(forceHydrate: true));
+      }
       return false;
     } catch (_) {
       lastActionError = 'No pudimos enviar tu pedido. Inténtalo de nuevo.';
+      lastActionErrorCode = null;
       return false;
     }
   }
@@ -1620,8 +1631,15 @@ final restaurantDetailProvider =
   return detail;
 });
 
+/// Carta fija pública del restaurante (`GET /v1/restaurantes/{slug}/carta`, Entrega C).
+/// Solo lectura: no habilita cobro de platos a la carta en `POST /v1/mis/pedidos`.
+final restaurantCartaProvider =
+    FutureProvider.autoDispose.family<List<PublicCartaItem>, String>((ref, id) async {
+  return ref.watch(customerRepositoryProvider).getRestaurantCarta(id);
+});
+
 /// Fuente única de verdad en Comensal del estado público efectivo del local
-/// (`libre`, `concurrido`, `lleno` con timer, o `agotadoHoy`), compartida
+/// (`libre`, `concurrido`, `lleno` con timer, `agotadoHoy` o `cerrado`), compartida
 /// entre la tarjeta del Marketplace (`DondeComer`) y `RestaurantSheet`.
 final restaurantPublicStatusProvider =
     Provider.family<RestaurantPublicStatus, String>((ref, restaurantId) {
@@ -1632,10 +1650,11 @@ final restaurantPublicStatusProvider =
   if (fromList != null && fromList.isMenuSoldOutToday) {
     menuAvail = MenuAvailabilityState.agotadoTotal;
   }
+  final isOpen = (fromList?.isOpen ?? true) && !(fromList?.isPaused ?? false);
   return resolveRestaurantPublicStatus(
     menuAvailability: menuAvail,
     manual: parseManualOccupancy(fromList?.occupancy),
-    isOpen: fromList?.isOpen ?? true,
+    isOpen: isOpen,
     fullUntil: fromList?.fullUntil,
     ignoreClock: true,
   );

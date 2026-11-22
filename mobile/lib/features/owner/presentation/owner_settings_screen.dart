@@ -11,6 +11,7 @@ import '../../../core/contracts/models.dart';
 import '../../../core/session/session_notifier.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/external_links.dart';
+import '../../../core/utils/formatters.dart';
 import '../../../core/widgets/appearance_selector.dart';
 import '../../../core/widgets/bocadoo_logo.dart';
 import '../../../core/widgets/location_picker_map.dart';
@@ -79,6 +80,7 @@ class OwnerSettingsScreen extends ConsumerWidget {
           Expanded(
             child: ListView(padding: const EdgeInsets.fromLTRB(16, 16, 16, 32), children: [
               _RoleCard(role: role),
+              if (isOwner) const _IncompleteProfileBanner(),
               const SizedBox(height: 12),
               const _LocalCard(),
               if (isOwner) ...[
@@ -515,10 +517,96 @@ class _SupportCard extends StatelessWidget {
   }
 }
 
+class _IncompleteProfileBanner extends ConsumerWidget {
+  const _IncompleteProfileBanner();
+
+  static String _labelForField(String raw) {
+    final key = raw.trim().toLowerCase();
+    return switch (key) {
+      'cedularuc' || 'cedula_ruc' || 'ruc' => 'Cédula o RUC',
+      'telefono' || 'whatsapp' => 'Teléfono',
+      'mesas' => 'Mesas',
+      'puestos' || 'sillas' => 'Sillas (puestos)',
+      'direccion' => 'Dirección',
+      'ubicacion' || 'coordenadas' || 'latitud' || 'longitud' => 'Ubicación en mapa',
+      'recargoparallevarcentavos' || 'recargo_para_llevar' => 'Recargo para llevar',
+      'preciosueltocentavos' => 'Precio del almuerzo',
+      _ => raw,
+    };
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final info = ref.watch(localInfoProvider).value;
+    if (info == null || info.perfilCompleto) return const SizedBox.shrink();
+
+    final b = context.bocadooColors;
+    final pendingLabels = [
+      for (final p in info.datosPendientes) _labelForField(p),
+    ];
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: b.walletAccent.withValues(alpha: 0.22),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: b.onWalletAccent.withValues(alpha: 0.3)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.info_outline_rounded, size: 18, color: b.onWalletAccent),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Completa el perfil de tu restaurante',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                      color: b.onWalletAccent,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (pendingLabels.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                'Pendiente: ${pendingLabels.join(' · ')}',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: b.onWalletAccent,
+                ),
+              ),
+            ],
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                onPressed: () => _LocalCard.openProfileEditor(context, ref, info),
+                icon: const Icon(Icons.edit_outlined, size: 16),
+                label: const Text('Completar datos'),
+                style: OutlinedButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _LocalCard extends ConsumerWidget {
   const _LocalCard();
 
-  Future<void> _editLocation(
+  static Future<void> openProfileEditor(
     BuildContext context,
     WidgetRef ref,
     LocalInfo? info,
@@ -534,10 +622,31 @@ class _LocalCard extends ConsumerWidget {
       'Villaflora': LatLng(-0.2448, -78.5162),
     };
     final addrCtrl = TextEditingController(text: info?.address ?? '');
-    var selectedZone = zones.containsKey(info?.zone) ? info!.zone : zones.keys.first;
+    final phoneCtrl = TextEditingController(text: info?.phone ?? '');
+    final cedulaCtrl = TextEditingController();
+    final tablesCtrl = TextEditingController(
+      text: info?.tablesCount != null ? '${info!.tablesCount}' : '',
+    );
+    final seatsCtrl = TextEditingController(
+      text: (info != null && info.seats > 0) ? '${info.seats}' : '',
+    );
+    var selectedZone =
+        zones.containsKey(info?.zone) ? info!.zone : zones.keys.first;
     var pin = (info?.latitude != null && info?.longitude != null)
         ? LatLng(info!.latitude!, info.longitude!)
         : zones[selectedZone]!;
+    final fieldErrors = <String, String>{};
+    var saving = false;
+
+    String? errorFor(List<String> keys) {
+      for (final e in fieldErrors.entries) {
+        final k = e.key.toLowerCase();
+        for (final needle in keys) {
+          if (k.contains(needle)) return e.value;
+        }
+      }
+      return null;
+    }
 
     final saved = await showModalBottomSheet<bool>(
       context: context,
@@ -560,7 +669,7 @@ class _LocalCard extends ConsumerWidget {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Text(
-                      'Ubicación del local',
+                      'Datos y ubicación del local',
                       style: TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.w900,
@@ -569,10 +678,61 @@ class _LocalCard extends ConsumerWidget {
                     ),
                     const SizedBox(height: 12),
                     TextField(
+                      controller: phoneCtrl,
+                      keyboardType: TextInputType.phone,
+                      decoration: InputDecoration(
+                        labelText: 'Teléfono / WhatsApp',
+                        hintText: '0987654321',
+                        errorText: errorFor(['telefono', 'whatsapp']),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: cedulaCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: InputDecoration(
+                        labelText: 'Cédula o RUC',
+                        hintText: info?.maskedCedulaRuc != null
+                            ? 'Actual: ${info!.maskedCedulaRuc} (deja vacío para conservar)'
+                            : '1792345678001',
+                        errorText: errorFor(['cedularuc', 'cedula', 'ruc']),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: tablesCtrl,
+                            keyboardType: TextInputType.number,
+                            decoration: InputDecoration(
+                              labelText: 'Mesas',
+                              hintText: 'Ej. 10',
+                              errorText: errorFor(['mesas']),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: TextField(
+                            controller: seatsCtrl,
+                            keyboardType: TextInputType.number,
+                            decoration: InputDecoration(
+                              labelText: 'Sillas (puestos)',
+                              hintText: 'Ej. 40',
+                              errorText: errorFor(['puestos', 'sillas']),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
                       controller: addrCtrl,
-                      decoration: const InputDecoration(
+                      decoration: InputDecoration(
                         labelText: 'Dirección',
                         hintText: 'Ej. Av. 12 de Octubre y Patria',
+                        errorText: errorFor(['direccion']),
                       ),
                     ),
                     const SizedBox(height: 12),
@@ -595,15 +755,60 @@ class _LocalCard extends ConsumerWidget {
                     LocationPickerMap(
                       zones: zones,
                       selectedZone: selectedZone,
-                      onZoneSelected: (z) => setSheetState(() => selectedZone = z),
+                      onZoneSelected: (z) =>
+                          setSheetState(() => selectedZone = z),
                       onLocationChanged: (p) => pin = p,
-                      height: 230,
+                      height: 210,
                     ),
                     const SizedBox(height: 16),
                     ElevatedButton.icon(
-                      onPressed: () => Navigator.of(ctx).pop(true),
+                      onPressed: saving
+                          ? null
+                          : () async {
+                              if (AppMode.useMock) {
+                                Navigator.of(ctx).pop(true);
+                                return;
+                              }
+                              setSheetState(() {
+                                saving = true;
+                                fieldErrors.clear();
+                              });
+                              final repo = ref.read(apiOwnerRepositoryProvider);
+                              final ok = await repo.updateRestaurantProfile(
+                                address: addrCtrl.text,
+                                zone: selectedZone,
+                                lat: pin.latitude,
+                                lng: pin.longitude,
+                                phone: phoneCtrl.text,
+                                cedulaRuc: cedulaCtrl.text.trim().isNotEmpty
+                                    ? cedulaCtrl.text.trim()
+                                    : null,
+                                tablesCount:
+                                    int.tryParse(tablesCtrl.text.trim()),
+                                seats: int.tryParse(seatsCtrl.text.trim()),
+                              );
+                              if (!ctx.mounted) return;
+                              if (ok) {
+                                Navigator.of(ctx).pop(true);
+                              } else {
+                                final errs = repo.consumeLastFieldErrors();
+                                final msg = repo.consumeLastError() ??
+                                    'No se pudieron guardar los datos del local.';
+                                setSheetState(() {
+                                  saving = false;
+                                  fieldErrors
+                                    ..clear()
+                                    ..addAll(errs);
+                                });
+                                if (errs.isEmpty && context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text(msg)),
+                                  );
+                                }
+                              }
+                            },
                       icon: const Icon(Icons.check_rounded),
-                      label: const Text('Guardar ubicación'),
+                      label: Text(saving ? 'Guardando...' : 'Guardar datos'),
                     ),
                   ],
                 ),
@@ -613,27 +818,15 @@ class _LocalCard extends ConsumerWidget {
         },
       ),
     );
-    if (saved != true || !context.mounted) return;
-    if (AppMode.useMock) return;
-    final repo = ref.read(apiOwnerRepositoryProvider);
-    final ok = await repo.updateLocalLocation(
-      address: addrCtrl.text,
-      zone: selectedZone,
-      lat: pin.latitude,
-      lng: pin.longitude,
-    );
-    if (!context.mounted) return;
-    if (ok) {
+    addrCtrl.dispose();
+    phoneCtrl.dispose();
+    cedulaCtrl.dispose();
+    tablesCtrl.dispose();
+    seatsCtrl.dispose();
+    if (saved == true && context.mounted) {
       ref.invalidate(localInfoProvider);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Ubicación actualizada en el mapa.')),
-      );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-              repo.consumeLastError() ?? 'No se pudo guardar la ubicación.'),
-        ),
+        const SnackBar(content: Text('Datos del local actualizados.')),
       );
     }
   }
@@ -664,10 +857,24 @@ class _LocalCard extends ConsumerWidget {
                 [
                   if (info.address.trim().isNotEmpty) info.address.trim(),
                   if (info.zone.trim().isNotEmpty) info.zone.trim(),
-                  '${info.seats} puestos',
+                  if (info.tablesCount != null && info.tablesCount! > 0)
+                    '${info.tablesCount} mesas',
+                  '${info.seats} sillas',
                 ].join(' · '),
                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant),
               ),
+              if (info.phone.trim().isNotEmpty || info.maskedCedulaRuc != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    [
+                      if (info.phone.trim().isNotEmpty) info.phone.trim(),
+                      if (info.maskedCedulaRuc != null)
+                        'RUC/CI: ${info.maskedCedulaRuc}',
+                    ].join(' · '),
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant),
+                  ),
+                ),
               if (info.latitude != null && info.longitude != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 2),
@@ -695,8 +902,8 @@ class _LocalCard extends ConsumerWidget {
         ),
         if (isOwner)
           IconButton(
-            tooltip: 'Editar ubicación',
-            onPressed: () => _editLocation(context, ref, info),
+            tooltip: 'Editar datos del local',
+            onPressed: () => openProfileEditor(context, ref, info),
             icon: Icon(Icons.edit_location_alt_outlined, color: colors.primary),
           ),
       ]),
@@ -719,6 +926,7 @@ class _ExecutivePricesCardState extends ConsumerState<_ExecutivePricesCard> {
   final _takeawayCtrl = TextEditingController();
   bool _seeded = false;
   bool _saving = false;
+  Map<String, String> _fieldErrors = const {};
 
   @override
   void dispose() {
@@ -731,6 +939,16 @@ class _ExecutivePricesCardState extends ConsumerState<_ExecutivePricesCard> {
 
   double? _parsePrice(TextEditingController c) =>
       double.tryParse(c.text.trim().replaceAll(',', '.'));
+
+  String? _errorFor(List<String> needles) {
+    for (final e in _fieldErrors.entries) {
+      final k = e.key.toLowerCase();
+      for (final n in needles) {
+        if (k.contains(n)) return e.value;
+      }
+    }
+    return null;
+  }
 
   Future<void> _save() async {
     final messenger = ScaffoldMessenger.of(context);
@@ -755,7 +973,10 @@ class _ExecutivePricesCardState extends ConsumerState<_ExecutivePricesCard> {
       return;
     }
 
-    setState(() => _saving = true);
+    setState(() {
+      _saving = true;
+      _fieldErrors = const {};
+    });
     ref.read(executivePricesProvider.notifier).setPrices(
           lunch: lunch,
           soloSecond: soloSecond,
@@ -774,10 +995,15 @@ class _ExecutivePricesCardState extends ConsumerState<_ExecutivePricesCard> {
     }
 
     final repo = ref.read(apiOwnerRepositoryProvider);
-    final ok = await repo.updateSingleLunchPriceAndActivate(lunch);
+    final ok = await repo.updateRestaurantProfile(
+      singleLunchPriceCents: Money.toCents(lunch),
+      takeawaySurchargeCents: Money.toCents(takeaway),
+    );
     if (!mounted) return;
-    setState(() => _saving = false);
     if (ok) {
+      await repo.updateSingleLunchPriceAndActivate(lunch);
+      if (!mounted) return;
+      setState(() => _saving = false);
       ref.invalidate(lunchPriceProvider);
       ref.invalidate(localInfoProvider);
       messenger.showSnackBar(
@@ -786,14 +1012,14 @@ class _ExecutivePricesCardState extends ConsumerState<_ExecutivePricesCard> {
         ),
       );
     } else {
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            repo.consumeLastError() ??
-                'No se pudo guardar el precio del almuerzo en el servidor.',
-          ),
-        ),
-      );
+      final fieldErrs = repo.consumeLastFieldErrors();
+      final msg = repo.consumeLastError() ??
+          'No se pudo guardar el precio del almuerzo en el servidor.';
+      setState(() {
+        _saving = false;
+        _fieldErrors = fieldErrs;
+      });
+      messenger.showSnackBar(SnackBar(content: Text(msg)));
     }
   }
 
@@ -801,6 +1027,7 @@ class _ExecutivePricesCardState extends ConsumerState<_ExecutivePricesCard> {
     String label,
     TextEditingController ctrl, {
     required String hint,
+    String? errorText,
   }) {
     return TextField(
       controller: ctrl,
@@ -809,6 +1036,7 @@ class _ExecutivePricesCardState extends ConsumerState<_ExecutivePricesCard> {
         labelText: label,
         hintText: hint,
         prefixText: '\$ ',
+        errorText: errorText,
         isDense: true,
       ),
     );
@@ -818,11 +1046,15 @@ class _ExecutivePricesCardState extends ConsumerState<_ExecutivePricesCard> {
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     final current = ref.watch(executivePricesProvider);
+    final info = ref.watch(localInfoProvider).value;
     if (!_seeded) {
       _lunchCtrl.text = current.lunch.toStringAsFixed(2);
       _secondCtrl.text = current.soloSecond.toStringAsFixed(2);
       _soupCtrl.text = current.soloSoup.toStringAsFixed(2);
-      _takeawayCtrl.text = current.takeawaySurcharge.toStringAsFixed(2);
+      final serverSurcharge = info?.takeawaySurchargeCents != null
+          ? Money.fromCents(info!.takeawaySurchargeCents!)
+          : current.takeawaySurcharge;
+      _takeawayCtrl.text = serverSurcharge.toStringAsFixed(2);
       _seeded = true;
     }
 
@@ -848,6 +1080,7 @@ class _ExecutivePricesCardState extends ConsumerState<_ExecutivePricesCard> {
                   'Almuerzo completo',
                   _lunchCtrl,
                   hint: '3.00',
+                  errorText: _errorFor(['preciosuelto', 'precio']),
                 ),
               ),
               const SizedBox(width: 10),
@@ -876,6 +1109,7 @@ class _ExecutivePricesCardState extends ConsumerState<_ExecutivePricesCard> {
                   'Recargo para llevar',
                   _takeawayCtrl,
                   hint: '0.25',
+                  errorText: _errorFor(['recargoparallevar', 'recargo']),
                 ),
               ),
             ],

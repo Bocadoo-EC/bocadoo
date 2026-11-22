@@ -363,10 +363,12 @@ class _RestaurantCard extends StatelessWidget {
     final isClosed = publicStatus.isClosed;
     final isFull = publicStatus.isFull;
     final canGroupOrder = !isMenuSoldOut && !isClosed && !isDailyMenuUnpublished;
-    final canOpenMenu = !isDailyMenuUnpublished;
+    final canOpenMenu = !isDailyMenuUnpublished && !isClosed;
     final bannerCover = CoverImage(url: rLogoOrImage(r), name: r.name);
 
-    return Material(
+    return Opacity(
+      opacity: isClosed ? 0.65 : 1.0,
+      child: Material(
       color: colors.surface,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(24),
@@ -374,7 +376,15 @@ class _RestaurantCard extends StatelessWidget {
       ),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
-        onTap: canOpenMenu ? onOpen : onUnpublishedTap,
+        onTap: canOpenMenu
+            ? onOpen
+            : (isClosed
+                ? () => ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Este restaurante está cerrado o pausado por ahora.'),
+                      ),
+                    )
+                : onUnpublishedTap),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           SizedBox(
             height: 112,
@@ -582,16 +592,19 @@ class _RestaurantCard extends StatelessWidget {
                           ),
                         )
                       : PillAction(
-                          label: isFull ? 'Pedir para llevar' : 'Ver menú',
-                          icon: Icons.arrow_forward,
-                          trailingIcon: true,
-                          onPressed: onOpen,
+                          label: isClosed
+                              ? 'Cerrado / Pausado'
+                              : (isFull ? 'Pedir para llevar' : 'Ver menú'),
+                          icon: isClosed ? Icons.lock_clock_outlined : Icons.arrow_forward,
+                          trailingIcon: !isClosed,
+                          onPressed: isClosed ? null : onOpen,
                         ),
                 ),
               ]),
             ]),
           ),
         ]),
+      ),
       ),
     );
   }

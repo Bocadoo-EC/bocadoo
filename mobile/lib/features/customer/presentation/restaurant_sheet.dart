@@ -47,7 +47,10 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
       final em = int.tryParse(matches[1].group(2)!) ?? 30;
       return (TimeOfDay(hour: sh, minute: sm), TimeOfDay(hour: eh, minute: em));
     }
-    return (const TimeOfDay(hour: 11, minute: 30), const TimeOfDay(hour: 15, minute: 30));
+    return (
+      const TimeOfDay(hour: 11, minute: 30),
+      const TimeOfDay(hour: 15, minute: 30),
+    );
   }
 
   Future<void> _pickCustomTime(Restaurant r) async {
@@ -68,7 +71,9 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
     if (pickedMins < startMins || pickedMins > endMins) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Elige una hora dentro del horario de atención (${r.schedule}).'),
+          content: Text(
+            'Elige una hora dentro del horario de atención (${r.schedule}).',
+          ),
         ),
       );
       return;
@@ -93,7 +98,8 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
       _breakfastId = r.breakfasts.where((m) => !m.isSoldOut).firstOrNull?.id;
     }
     final options = _availableArrivalOptions();
-    if (_selectedArrival != _customArrival && !options.contains(_selectedArrival)) {
+    if (_selectedArrival != _customArrival &&
+        !options.contains(_selectedArrival)) {
       _selectedArrival = 'En 15 min';
     }
   }
@@ -114,7 +120,8 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
       mainId: _breakfastMode ? null : _mainId,
       breakfastId: _breakfastMode ? _breakfastId : null,
       // Salón lleno: el pedido siempre es para llevar.
-      takeaway: _takeaway || ref.read(restaurantPublicStatusProvider(r.id)).isFull,
+      takeaway:
+          _takeaway || ref.read(restaurantPublicStatusProvider(r.id)).isFull,
       estimatedArrival: _resolveArrivalHhmm(),
     );
     if (!mounted) return;
@@ -123,7 +130,24 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
       context.pop();
       return;
     }
+    final errorCode = controller.lastActionErrorCode;
     final error = controller.lastActionError;
+    if (errorCode == 'LOCAL_LLENO_SOLO_LLEVAR') {
+      setState(() => _takeaway = true);
+      ref.invalidate(restaurantDetailProvider(r.id));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'El salón está lleno ahora. Activamos "Para llevar" para que puedas confirmar tu pedido.',
+          ),
+        ),
+      );
+      return;
+    }
+    if (errorCode == 'RESTAURANTE_PAUSADO' ||
+        errorCode == 'MENU_NO_PUBLICADO') {
+      ref.invalidate(restaurantDetailProvider(r.id));
+    }
     if (error != null && error.isNotEmpty) {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(error)));
@@ -196,7 +220,8 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
     final forceTakeaway = publicStatus.isFull;
     final takeaway = forceTakeaway || _takeaway;
     final isClosed = publicStatus.isClosed;
-    final menuSoldOutAll = publicStatus.isSoldOutToday ||
+    final menuSoldOutAll =
+        publicStatus.isSoldOutToday ||
         (breakfastMode
             ? r.breakfasts.every((b) => b.isSoldOut)
             : r.isMenuSoldOutToday);
@@ -352,6 +377,7 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
                   ],
                 ),
               ],
+              _PublicCartaSection(restaurantId: r.id),
             ],
           ),
         ),
@@ -395,121 +421,134 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
                       ),
                     )
                   : Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    'Hora estimada de consumo',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w800,
-                      color: colors.onSurfaceVariant,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 6,
-                    children: [
-                      for (final opt in _availableArrivalOptions())
-                        ChoiceChip(
-                          label: Text(opt),
-                          selected: _selectedArrival == opt,
-                          onSelected: (_) => setState(() => _selectedArrival = opt),
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          'Hora estimada de consumo',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                            color: colors.onSurfaceVariant,
+                          ),
                         ),
-                      ChoiceChip(
-                        label: Text(_customArrival ?? '+'),
-                        selected: _customArrival != null &&
-                            _selectedArrival == _customArrival,
-                        onSelected: (_) => _pickCustomTime(r),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Builder(
-                    builder: (context) {
-                      final activePass = s.passFor(r.id);
-                      final hasPlanHere = activePass != null &&
-                          activePass.remainingLunches > 0 &&
-                          !activePass.isExpired;
-                      final baseCents = breakfastMode
-                          ? Money.toCents(chosenBreakfast?.price ?? r.singleLunchPrice)
-                          : Money.toCents(r.singleLunchPrice);
-                      final surchargeCents =
-                          takeaway ? Money.toCents(r.takeawaySurcharge) : 0;
-                      final totalCents =
-                          hasPlanHere ? 0 : baseCents + surchargeCents;
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          if (hasPlanHere) ...[
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 8,
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 6,
+                          children: [
+                            for (final opt in _availableArrivalOptions())
+                              ChoiceChip(
+                                label: Text(opt),
+                                selected: _selectedArrival == opt,
+                                onSelected: (_) =>
+                                    setState(() => _selectedArrival = opt),
                               ),
-                              margin: const EdgeInsets.only(bottom: 8),
-                              decoration: BoxDecoration(
-                                color: context.bocadooColors.successContainer,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(
-                                    Icons.verified_rounded,
-                                    size: 16,
-                                    color: context.bocadooColors.success,
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Flexible(
-                                    child: Text(
-                                      'Cubierto por tu Plan (Quedan ${activePass.remainingLunches} almuerzos)',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w800,
-                                        color: context.bocadooColors.success,
-                                      ),
+                            ChoiceChip(
+                              label: Text(_customArrival ?? '+'),
+                              selected:
+                                  _customArrival != null &&
+                                  _selectedArrival == _customArrival,
+                              onSelected: (_) => _pickCustomTime(r),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        Builder(
+                          builder: (context) {
+                            final activePass = s.passFor(r.id);
+                            final hasPlanHere =
+                                activePass != null &&
+                                activePass.remainingLunches > 0 &&
+                                !activePass.isExpired;
+                            final baseCents = breakfastMode
+                                ? Money.toCents(
+                                    chosenBreakfast?.price ??
+                                        r.singleLunchPrice,
+                                  )
+                                : Money.toCents(r.singleLunchPrice);
+                            final surchargeCents = takeaway
+                                ? Money.toCents(r.takeawaySurcharge)
+                                : 0;
+                            final totalCents = hasPlanHere
+                                ? 0
+                                : baseCents + surchargeCents;
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                if (hasPlanHere) ...[
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 8,
+                                    ),
+                                    margin: const EdgeInsets.only(bottom: 8),
+                                    decoration: BoxDecoration(
+                                      color: context
+                                          .bocadooColors
+                                          .successContainer,
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: [
+                                        Icon(
+                                          Icons.verified_rounded,
+                                          size: 16,
+                                          color: context.bocadooColors.success,
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Flexible(
+                                          child: Text(
+                                            'Cubierto por tu Plan (Quedan ${activePass.remainingLunches} almuerzos)',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w800,
+                                              color:
+                                                  context.bocadooColors.success,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ),
                                 ],
-                              ),
-                            ),
-                          ],
-                          ElevatedButton(
-                            onPressed:
-                                canOrder ? () => _order(controller, r) : null,
-                            child: Text(
-                              hasActiveOrder
-                                  ? 'Ya tienes un pedido en camino'
-                                  : menuSoldOutAll
-                                      ? 'Menú agotado por hoy'
-                                      : breakfastMode
-                                          ? (hasPlanHere
+                                ElevatedButton(
+                                  onPressed: canOrder
+                                      ? () => _order(controller, r)
+                                      : null,
+                                  child: Text(
+                                    hasActiveOrder
+                                        ? 'Ya tienes un pedido en camino'
+                                        : menuSoldOutAll
+                                        ? 'Menú agotado por hoy'
+                                        : breakfastMode
+                                        ? (hasPlanHere
                                               ? 'Preordenar desayuno con Plan (\$0,00)'
                                               : 'Preordenar desayuno · ${formatCents(totalCents)}')
-                                          : (hasPlanHere
+                                        : (hasPlanHere
                                               ? 'Preordenar almuerzo con Plan (\$0,00)'
                                               : 'Preordenar almuerzo · ${formatCents(totalCents)}'),
+                                  ),
+                                ),
+                              ],
+                            );
+                          },
+                        ),
+                        if (hasActiveOrder) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            'Límite: tienes una orden activa pendiente.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: context.bocadooColors.danger,
                             ),
                           ),
                         ],
-                      );
-                    },
-                  ),
-                  if (hasActiveOrder) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      'Límite: tienes una orden activa pendiente.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: context.bocadooColors.danger,
-                      ),
+                      ],
                     ),
-                  ],
-                ],
-              ),
             ),
           ),
       ],
@@ -531,10 +570,26 @@ class _HeaderCard extends StatelessWidget {
   });
 
   static const _grayscaleFilter = ColorFilter.matrix(<double>[
-    0.2126, 0.7152, 0.0722, 0, 0,
-    0.2126, 0.7152, 0.0722, 0, 0,
-    0.2126, 0.7152, 0.0722, 0, 0,
-    0, 0, 0, 1, 0,
+    0.2126,
+    0.7152,
+    0.0722,
+    0,
+    0,
+    0.2126,
+    0.7152,
+    0.0722,
+    0,
+    0,
+    0.2126,
+    0.7152,
+    0.0722,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
   ]);
 
   @override
@@ -584,9 +639,7 @@ class _HeaderCard extends StatelessWidget {
                       Flexible(child: OccupancyDetail(status: publicStatus)),
                       if (r.hasLocation) ...[
                         const SizedBox(width: 6),
-                        DistancePill(
-                          text: r.formattedDistance,
-                        ),
+                        DistancePill(text: r.formattedDistance),
                       ],
                     ],
                   ),
@@ -642,7 +695,8 @@ class _HeaderCard extends StatelessWidget {
                       ? 'Pedido grupal (Para llevar)'
                       : 'Pedido grupal',
                   icon: Icons.group_outlined,
-                  onPressed: (publicStatus.isSoldOutToday || publicStatus.isClosed)
+                  onPressed:
+                      (publicStatus.isSoldOutToday || publicStatus.isClosed)
                       ? null
                       : onTable,
                 ),
@@ -953,44 +1007,44 @@ class _ChoiceButton extends StatelessWidget {
     return Opacity(
       opacity: onTap == null ? 0.5 : 1,
       child: Material(
-      color: selected ? colors.primaryContainer : colors.surface,
-      shape: StadiumBorder(
-        side: BorderSide(
-          color: selected ? colors.primary : colors.outlineVariant,
-          width: selected ? 1.5 : 1,
+        color: selected ? colors.primaryContainer : colors.surface,
+        shape: StadiumBorder(
+          side: BorderSide(
+            color: selected ? colors.primary : colors.outlineVariant,
+            width: selected ? 1.5 : 1,
+          ),
         ),
-      ),
-      child: InkWell(
-        customBorder: const StadiumBorder(),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                icon,
-                size: 16,
-                color: selected ? colors.primary : colors.onSurfaceVariant,
-              ),
-              const SizedBox(width: 6),
-              Flexible(
-                child: Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w800,
-                    color: fg,
+        child: InkWell(
+          customBorder: const StadiumBorder(),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  icon,
+                  size: 16,
+                  color: selected ? colors.primary : colors.onSurfaceVariant,
+                ),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      color: fg,
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
-    ),
     );
   }
 }
@@ -1028,6 +1082,190 @@ class _CenteredStatus extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Carta fija pública de solo lectura (`GET /v1/restaurantes/{slug}/carta`, Entrega C).
+/// Ordenada por `A_LA_CARTA` → `BEBIDA` → `EXTRA` y `orden`. No envía platos al pedido.
+class _PublicCartaSection extends ConsumerWidget {
+  final String restaurantId;
+
+  const _PublicCartaSection({required this.restaurantId});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final cartaAsync = ref.watch(restaurantCartaProvider(restaurantId));
+    final items = cartaAsync.value;
+    if (items == null || items.isEmpty) return const SizedBox.shrink();
+
+    final colors = context.colorScheme;
+    final b = context.bocadooColors;
+
+    final groups = <({String title, List<PublicCartaItem> items})>[
+      (
+        title: 'Platos a la carta',
+        items: items.where((i) => i.category == 'A_LA_CARTA').toList(),
+      ),
+      (
+        title: 'Bebidas',
+        items: items.where((i) => i.category == 'BEBIDA').toList(),
+      ),
+      (
+        title: 'Extras',
+        items: items.where((i) => i.category == 'EXTRA').toList(),
+      ),
+      (
+        title: 'Otros',
+        items: items
+            .where(
+              (i) =>
+                  i.category != 'A_LA_CARTA' &&
+                  i.category != 'BEBIDA' &&
+                  i.category != 'EXTRA',
+            )
+            .toList(),
+      ),
+    ].where((g) => g.items.isNotEmpty).toList();
+
+    if (groups.isEmpty) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SizedBox(height: 20),
+        Divider(height: 1, color: colors.outlineVariant),
+        const SizedBox(height: 14),
+        Row(
+          children: [
+            const Expanded(child: SectionLabel('Carta fija del local')),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: colors.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+              ),
+              child: Text(
+                'Solo consulta',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: colors.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Disponible en caja del restaurante.',
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+            color: colors.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 10),
+        for (final group in groups) ...[
+          Padding(
+            padding: const EdgeInsets.only(top: 6, bottom: 6),
+            child: Text(
+              group.title,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+                color: colors.onSurfaceVariant,
+              ),
+            ),
+          ),
+          for (final item in group.items)
+            Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: colors.surface,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: colors.outlineVariant),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                item.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                  color: item.isSoldOut
+                                      ? colors.onSurfaceVariant
+                                      : colors.onSurface,
+                                  decoration: item.isSoldOut
+                                      ? TextDecoration.lineThrough
+                                      : null,
+                                ),
+                              ),
+                            ),
+                            if (item.isSoldOut) ...[
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 7,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: b.dangerContainer,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text(
+                                  'Agotado',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w800,
+                                    color: b.onDangerContainer,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                        if (item.description.isNotEmpty) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            item.description,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: colors.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    formatMoney(item.price),
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                      color: item.isSoldOut
+                          ? colors.onSurfaceVariant
+                          : colors.primary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ],
     );
   }
 }

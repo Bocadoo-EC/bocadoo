@@ -290,8 +290,15 @@ class _TableOrderCard extends StatelessWidget {
                         final chosen = [m.soup, m.main]
                             .where((s) => s != null && s.trim().isNotEmpty)
                             .join(' + ');
+                        final extrasText = m.extras.isNotEmpty
+                            ? 'Extras: ${m.extras.join(', ')}'
+                            : '';
+                        final combined = [
+                          if (chosen.isNotEmpty) chosen,
+                          if (extrasText.isNotEmpty) extrasText,
+                        ].join(' · ');
                         final dishText =
-                            chosen.isNotEmpty ? chosen : 'Almuerzo del día';
+                            combined.isNotEmpty ? combined : 'Sin selección aún';
                         final extraTag = m.takeaway ? ' (Para llevar)' : '';
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 3),

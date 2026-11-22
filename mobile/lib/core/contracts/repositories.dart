@@ -17,6 +17,9 @@ abstract class ICustomerRepository {
   /// Obtiene el menú del día de un restaurante
   Future<List<MenuItem>> getTodayMenu(String restaurantId);
 
+  /// Obtiene la carta fija pública (`GET /v1/restaurantes/{slug}/carta`)
+  Future<List<PublicCartaItem>> getRestaurantCarta(String restaurantId);
+
   /// Obtiene el historial de consumos/almuerzos canjeados
   Future<List<ConsumptionRecord>> getConsumptionHistory(String passId);
 
@@ -101,6 +104,13 @@ abstract class ICustomerRepository {
     required String soup,
     required String main,
     required bool takeaway,
+  });
+
+  /// Guarda la selección del comensal en una mesa (`PUT /v1/mis/mesas/{id}/seleccion`)
+  Future<SharedTable> updateTableSelection(
+    String tableId, {
+    required List<String> lunchDishIds,
+    List<({String dishId, int quantity})> extras = const [],
   });
 
   /// Perfil del comensal (C6)

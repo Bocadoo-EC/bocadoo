@@ -15,20 +15,27 @@ class AuthResult {
     required this.ok,
     this.errorMessage,
     this.hasRestaurant = false,
+    this.fieldErrors = const {},
   });
 
   final bool ok;
   final String? errorMessage;
   final bool hasRestaurant;
+  final Map<String, String> fieldErrors;
 
   factory AuthResult.success({bool hasRestaurant = false}) => AuthResult._(
         ok: true,
         hasRestaurant: hasRestaurant,
       );
 
-  factory AuthResult.failure(String message) => AuthResult._(
+  factory AuthResult.failure(
+    String message, {
+    Map<String, String> fieldErrors = const {},
+  }) =>
+      AuthResult._(
         ok: false,
         errorMessage: message,
+        fieldErrors: fieldErrors,
       );
 }
 
@@ -79,6 +86,9 @@ abstract class IAuthRepository {
     double? lng,
     String? zone,
     required double looseLunchPrice,
+    int? tablesCount,
+    int? seats,
+    int? takeawaySurchargeCents,
     required String password,
   });
 
@@ -143,6 +153,9 @@ class MockAuthRepository implements IAuthRepository {
     double? lng,
     String? zone,
     required double looseLunchPrice,
+    int? tablesCount,
+    int? seats,
+    int? takeawaySurchargeCents,
     required String password,
   }) async {
     await Future<void>.delayed(const Duration(milliseconds: 1200));
@@ -353,9 +366,39 @@ class ApiAuthRepository implements IAuthRepository {
     double? lng,
     String? zone,
     required double looseLunchPrice,
+    int? tablesCount,
+    int? seats,
+    int? takeawaySurchargeCents,
     required String password,
   }) async {
     try {
+      final knownZoneId = resolveKnownZoneId(zone);
+      final trimmedPhone = whatsapp.trim();
+      final e164Phone = Phone.toE164(trimmedPhone);
+      final phoneToSend = e164Phone.isNotEmpty ? e164Phone : trimmedPhone;
+      final cleanCedulaRuc = ruc?.trim() ?? '';
+      final roundedLat =
+          lat != null ? double.parse(lat.toStringAsFixed(6)) : null;
+      final roundedLng =
+          lng != null ? double.parse(lng.toStringAsFixed(6)) : null;
+
+      final restauranteBody = <String, dynamic>{
+        'nombre': restaurantName.trim(),
+        'ciudadId': 1,
+        if (cleanCedulaRuc.isNotEmpty) 'cedulaRuc': cleanCedulaRuc,
+        if (phoneToSend.isNotEmpty) 'telefono': phoneToSend,
+        if (address != null && address.trim().isNotEmpty)
+          'direccion': address.trim(),
+        'latitud': ?roundedLat,
+        'longitud': ?roundedLng,
+        'zonaId': ?knownZoneId,
+        if (tablesCount != null && tablesCount > 0) 'mesas': tablesCount,
+        if (seats != null && seats > 0) 'puestos': seats,
+        'precioSueltoCentavos': Money.toCents(looseLunchPrice),
+        if (takeawaySurchargeCents != null && takeawaySurchargeCents >= 0)
+          'recargoParaLlevarCentavos': takeawaySurchargeCents,
+      };
+
       await guard(
         () => _api.send<Map<String, dynamic>>(
           'POST',
@@ -365,10 +408,7 @@ class ApiAuthRepository implements IAuthRepository {
             'correo': email.trim(),
             'password': password,
             'aceptaTerminos': true,
-            'restaurante': {
-              'nombre': restaurantName.trim(),
-              'ciudadId': 1,
-            },
+            'restaurante': restauranteBody,
           },
           auth: false,
         ),
@@ -381,23 +421,23 @@ class ApiAuthRepository implements IAuthRepository {
       );
       if (!loginResult.ok) return loginResult;
 
-      await _session.profile.saveOwnerRuc(ruc);
+      // No persistimos la cédula/RUC en claro en cliente; se muestra solo la versión enmascarada del servidor.
+      await _session.profile.saveOwnerRuc(null);
       await _session.profile.saveDinerProfile(zone: zone, lat: lat, lng: lng);
 
-      final knownZoneId = resolveKnownZoneId(zone);
-      final e164Phone = Phone.toE164(whatsapp);
-      final roundedLat =
-          lat != null ? double.parse(lat.toStringAsFixed(6)) : null;
-      final roundedLng =
-          lng != null ? double.parse(lng.toStringAsFixed(6)) : null;
       final patchBody = <String, dynamic>{
-        if (e164Phone.isNotEmpty) 'telefono': e164Phone,
+        if (phoneToSend.isNotEmpty) 'telefono': phoneToSend,
         if (address != null && address.trim().isNotEmpty)
           'direccion': address.trim(),
         'latitud': ?roundedLat,
         'longitud': ?roundedLng,
         'zonaId': ?knownZoneId,
+        if (cleanCedulaRuc.isNotEmpty) 'cedulaRuc': cleanCedulaRuc,
+        if (tablesCount != null && tablesCount > 0) 'mesas': tablesCount,
+        if (seats != null && seats > 0) 'puestos': seats,
         'precioSueltoCentavos': Money.toCents(looseLunchPrice),
+        if (takeawaySurchargeCents != null && takeawaySurchargeCents >= 0)
+          'recargoParaLlevarCentavos': takeawaySurchargeCents,
       };
 
       try {
@@ -429,7 +469,10 @@ class ApiAuthRepository implements IAuthRepository {
           'Ya existe una cuenta con ese correo. Entra o recupera tu contraseña.',
         );
       }
-      return AuthResult.failure(e.userMessage);
+      return AuthResult.failure(
+        e.userMessage,
+        fieldErrors: e.fieldErrors,
+      );
     }
   }
 

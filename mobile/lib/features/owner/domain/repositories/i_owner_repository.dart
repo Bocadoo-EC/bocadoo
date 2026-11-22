@@ -45,6 +45,13 @@ abstract class IOwnerCatalogRepository {
   });
 
   Future<void> setDishArchived(String restaurantId, String dishId, {required bool archived});
+
+  /// Alterna disponibilidad (`agotado`) en catálogo fijo (`PATCH /v1/menu/platos/{id}/agotado`).
+  Future<bool> setCatalogDishSoldOut(
+    String restaurantId,
+    String dishId, {
+    required bool soldOut,
+  });
 }
 
 /// "Tus números" (O14).

@@ -8,6 +8,7 @@ class ApiException implements Exception {
     this.detail = '',
     this.requestId,
     this.isNetwork = false,
+    this.fieldErrors = const {},
     this._overrideMessage,
   });
 
@@ -18,12 +19,62 @@ class ApiException implements Exception {
   final String detail;
   final String? requestId;
   final bool isNetwork;
+
+  /// Errores por campo extraídos de respuestas `400 problem+json`.
+  final Map<String, String> fieldErrors;
   final String? _overrideMessage;
 
   factory ApiException.network() => ApiException(
         code: 'SIN_CONEXION',
         isNetwork: true,
       );
+
+  static Map<String, String> _parseFieldErrors(Map<dynamic, dynamic> data) {
+    final out = <String, String>{};
+
+    void addPair(Object? rawKey, Object? rawVal) {
+      final k = rawKey?.toString().trim() ?? '';
+      if (k.isEmpty) return;
+      String msg = '';
+      if (rawVal is List && rawVal.isNotEmpty) {
+        msg = rawVal.first.toString().trim();
+      } else if (rawVal != null) {
+        msg = rawVal.toString().trim();
+      }
+      if (msg.isNotEmpty) {
+        out.putIfAbsent(k, () => msg);
+      }
+    }
+
+    void parseCollection(Object? raw) {
+      if (raw is Map) {
+        raw.forEach((k, v) => addPair(k, v));
+      } else if (raw is List) {
+        for (final item in raw) {
+          if (item is Map) {
+            final field = item['field'] ??
+                item['campo'] ??
+                item['name'] ??
+                item['property'] ??
+                item['path'];
+            final message = item['message'] ??
+                item['mensaje'] ??
+                item['reason'] ??
+                item['detail'] ??
+                item['error'];
+            addPair(field, message);
+          }
+        }
+      }
+    }
+
+    parseCollection(data['errors']);
+    parseCollection(data['campos']);
+    parseCollection(data['fieldErrors']);
+    parseCollection(data['invalidParams']);
+    parseCollection(data['invalid-params']);
+    return out;
+  }
 
   factory ApiException.fromResponse(Response<dynamic> response) {
     final data = response.data is Map ? response.data as Map : const {};
@@ -32,6 +83,7 @@ class ApiException implements Exception {
       code: (data['code'] ?? 'ERROR_INTERNO').toString(),
       detail: (data['detail'] ?? '').toString(),
       requestId: data['requestId']?.toString(),
+      fieldErrors: _parseFieldErrors(data),
     );
   }
 
@@ -90,6 +142,9 @@ class ErrorMessages {
     // Restaurantes
     'RESTAURANTE_NO_ENCONTRADO': 'No encontramos ese restaurante.',
     'RESTAURANTE_NO_DISPONIBLE': 'Este restaurante no está disponible ahora.',
+    'RESTAURANTE_PAUSADO': 'Este restaurante está pausado por ahora.',
+    'LOCAL_LLENO_SOLO_LLEVAR':
+        'El salón está lleno ahora. Activa "Para llevar" para continuar con tu pedido.',
     // Pase y almuerzos
     'CAJERO_SOLO_HOY': 'Solo el dueño puede consultar movimientos de otras fechas.',
     'QR_EXPIRADO': 'El código venció. Pide al comensal que genere y muestre su código actual.',

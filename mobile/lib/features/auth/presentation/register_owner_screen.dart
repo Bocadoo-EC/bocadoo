@@ -46,6 +46,9 @@ class _RegisterOwnerScreenState extends ConsumerState<RegisterOwnerScreen> {
   final _whatsappCtrl = TextEditingController();
   final _searchCtrl = TextEditingController();
   final _priceCtrl = TextEditingController(text: '3.50');
+  final _tablesCtrl = TextEditingController();
+  final _seatsCtrl = TextEditingController();
+  final _takeawaySurchargeCtrl = TextEditingController(text: '0.25');
   final _passCtrl = TextEditingController();
   final _confirmCtrl = TextEditingController();
   final _mapController = MapController();
@@ -65,6 +68,9 @@ class _RegisterOwnerScreenState extends ConsumerState<RegisterOwnerScreen> {
     _whatsappCtrl.dispose();
     _searchCtrl.dispose();
     _priceCtrl.dispose();
+    _tablesCtrl.dispose();
+    _seatsCtrl.dispose();
+    _takeawaySurchargeCtrl.dispose();
     _passCtrl.dispose();
     _confirmCtrl.dispose();
     super.dispose();
@@ -129,6 +135,13 @@ class _RegisterOwnerScreenState extends ConsumerState<RegisterOwnerScreen> {
     } catch (_) {}
     final normalizedPrice = _priceCtrl.text.trim().replaceAll(',', '.');
     final price = double.tryParse(normalizedPrice) ?? 3.50;
+    final tablesCount = int.tryParse(_tablesCtrl.text.trim());
+    final seats = int.tryParse(_seatsCtrl.text.trim());
+    final normalizedSurcharge =
+        _takeawaySurchargeCtrl.text.trim().replaceAll(',', '.');
+    final parsedSurcharge = double.tryParse(normalizedSurcharge);
+    final takeawaySurchargeCents =
+        parsedSurcharge != null ? (parsedSurcharge * 100).round() : null;
 
     final result = await ref.read(authRepositoryProvider).registerOwner(
           restaurantName: _restaurantCtrl.text.trim(),
@@ -141,10 +154,18 @@ class _RegisterOwnerScreenState extends ConsumerState<RegisterOwnerScreen> {
           lng: center.longitude,
           zone: _zone,
           looseLunchPrice: price,
+          tablesCount: tablesCount,
+          seats: seats,
+          takeawaySurchargeCents: takeawaySurchargeCents,
           password: _passCtrl.text,
         );
     if (!mounted) return;
-    setState(() => _loading = false);
+    setState(() {
+      _loading = false;
+      if (!result.ok && result.fieldErrors.isNotEmpty) {
+        _applyServerFieldErrors(result.fieldErrors);
+      }
+    });
     if (!result.ok) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -157,6 +178,37 @@ class _RegisterOwnerScreenState extends ConsumerState<RegisterOwnerScreen> {
     }
     // D4: pasar precio a A7 para calcular planes
     context.go('/auth/bienvenida/dueno', extra: price);
+  }
+
+  void _applyServerFieldErrors(Map<String, String> fieldErrors) {
+    _errors.clear();
+    for (final entry in fieldErrors.entries) {
+      final key = entry.key.toLowerCase();
+      final msg = entry.value;
+      if (key.contains('cedularuc') || key.contains('ruc') || key.contains('cedula')) {
+        _errors['ruc'] = msg;
+      } else if (key.contains('telefono') || key.contains('whatsapp')) {
+        _errors['whatsapp'] = msg;
+      } else if (key.contains('correo') || key.contains('email')) {
+        _errors['email'] = msg;
+      } else if (key.contains('password')) {
+        _errors['pass'] = msg;
+      } else if (key.contains('restaurante.nombre')) {
+        _errors['restaurant'] = msg;
+      } else if (key.contains('nombre')) {
+        _errors['owner'] = msg;
+      } else if (key.contains('direccion')) {
+        _errors['address'] = msg;
+      } else if (key.contains('mesas')) {
+        _errors['mesas'] = msg;
+      } else if (key.contains('puestos') || key.contains('sillas')) {
+        _errors['puestos'] = msg;
+      } else if (key.contains('recargoparallevar') || key.contains('recargo')) {
+        _errors['takeaway'] = msg;
+      } else if (key.contains('preciosuelto') || key.contains('precio')) {
+        _errors['price'] = msg;
+      }
+    }
   }
 
   @override
@@ -256,6 +308,7 @@ class _RegisterOwnerScreenState extends ConsumerState<RegisterOwnerScreen> {
                 decoration: InputDecoration(
                   prefixIcon: Icon(Icons.badge_outlined, color: cs.onSurfaceVariant),
                   hintText: '1792345678001',
+                  errorText: _errors['ruc'],
                 ),
               ),
 
@@ -317,6 +370,7 @@ class _RegisterOwnerScreenState extends ConsumerState<RegisterOwnerScreen> {
                     decoration: InputDecoration(
                       prefixIcon: Icon(Icons.search_rounded, color: cs.onSurfaceVariant),
                       hintText: 'Buscar dirección en Quito (ej. Av. 12 de...)',
+                      errorText: _errors['address'],
                     ),
                   ),
                 ),
@@ -426,16 +480,75 @@ class _RegisterOwnerScreenState extends ConsumerState<RegisterOwnerScreen> {
 
               const SizedBox(height: 16),
 
-              _Label('PRECIO PROMEDIO ALMUERZO EJECUTIVO (\$)'),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _priceCtrl,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: InputDecoration(
-                  prefixText: '\$ ',
-                  hintText: '3.50',
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    _Label('ALMUERZO EJECUTIVO (\$)'),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _priceCtrl,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: InputDecoration(
+                        prefixText: '\$ ',
+                        hintText: '3.50',
+                        errorText: _errors['price'],
+                      ),
+                    ),
+                  ]),
                 ),
-              ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    _Label('RECARGO LLEVAR (\$)'),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _takeawaySurchargeCtrl,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: InputDecoration(
+                        prefixText: '\$ ',
+                        hintText: '0.25',
+                        errorText: _errors['takeaway'],
+                      ),
+                    ),
+                  ]),
+                ),
+              ]),
+
+              const SizedBox(height: 16),
+
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    _Label('MESAS (OPCIONAL)'),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _tablesCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: InputDecoration(
+                        prefixIcon: Icon(Icons.table_restaurant_outlined, color: cs.onSurfaceVariant),
+                        hintText: 'Ej. 10',
+                        errorText: _errors['mesas'],
+                      ),
+                    ),
+                  ]),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    _Label('SILLAS / PUESTOS (OPCIONAL)'),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _seatsCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: InputDecoration(
+                        prefixIcon: Icon(Icons.chair_alt_outlined, color: cs.onSurfaceVariant),
+                        hintText: 'Ej. 40',
+                        errorText: _errors['puestos'],
+                      ),
+                    ),
+                  ]),
+                ),
+              ]),
 
               const SizedBox(height: 16),
 

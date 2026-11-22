@@ -137,7 +137,7 @@ class OccupancyChip extends StatelessWidget {
           b.onDangerContainer,
         ),
       RestaurantEffectiveStatus.cerrado => (
-          'Cerrado',
+          'Cerrado / Pausado',
           colors.onSurface,
           colors.surfaceContainerHighest,
           colors.onSurface,
@@ -201,7 +201,7 @@ class OccupancyDetail extends StatelessWidget {
           b.onDangerContainer,
         ),
       RestaurantEffectiveStatus.cerrado => (
-          'Cerrado por hoy',
+          'Cerrado / Pausado',
           colors.onSurface,
           colors.surfaceContainerHighest,
           colors.onSurface,

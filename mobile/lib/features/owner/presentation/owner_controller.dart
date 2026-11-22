@@ -1130,6 +1130,10 @@ class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
       );
     }
 
+    final soldOutById = <String, bool>{
+      for (final d in dishes) d.id: d.soldOut || d.archived,
+    };
+
     for (final item in posCatalog) {
       final group = switch (item.category) {
         PosCategory.carta => PermanentCatalogGroup.carta,
@@ -1151,7 +1155,7 @@ class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
           name: item.name,
           priceCents: Money.toCents(item.price),
           group: group,
-          available: true,
+          available: !(soldOutById[item.id] ?? false),
           description: item.description,
         ),
       );
@@ -1165,7 +1169,7 @@ class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
           name: d.name,
           priceCents: Money.toCents(d.price ?? 4.50),
           group: PermanentCatalogGroup.carta,
-          available: !d.archived,
+          available: !d.archived && !d.soldOut,
           description: d.description,
         ),
       );
@@ -1226,21 +1230,53 @@ class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
     );
   }
 
-  void setAvailable(String id, bool available) {
+  /// Alterna `Disponible / Agotado` conectando con `PATCH /v1/menu/platos/{id}/agotado`.
+  /// Devuelve `null` si tuvo éxito o un mensaje de error si hubo rollback (p. ej. `403`).
+  Future<String?> setAvailable(String id, bool available) async {
+    final prevOverride = _availableOverrides[id];
+    final prevState = state;
+    final isLocalOnly = id.startsWith('perm_') || id.startsWith('local_');
+
     _availableOverrides[id] = available;
     for (var i = 0; i < _addedItems.length; i++) {
       if (_addedItems[i].id == id) {
         _addedItems[i] = _addedItems[i].copyWith(available: available);
       }
     }
-    _dirty = true;
+    if (isLocalOnly) _dirty = true;
     state = PermanentCatalogState(
       items: [
         for (final item in state.items)
           item.id == id ? item.copyWith(available: available) : item,
       ],
-      dirty: true,
+      dirty: _dirty,
     );
+
+    if (isLocalOnly) return null;
+
+    final rid = ref.read(ownerRestaurantIdProvider);
+    final repo = ref.read(ownerCatalogRepositoryProvider);
+    final ok = await repo.setCatalogDishSoldOut(
+      rid,
+      id,
+      soldOut: !available,
+    );
+    if (ok) {
+      return null;
+    }
+
+    // Rollback optimista si el servidor rechazó el cambio (p. ej. 403 o red).
+    if (prevOverride == null) {
+      _availableOverrides.remove(id);
+    } else {
+      _availableOverrides[id] = prevOverride;
+    }
+    state = prevState;
+    if (repo is ApiOwnerRepository) {
+      return repo.consumeLastError() ??
+          'No se pudo actualizar la disponibilidad del plato.';
+    }
+    return 'No se pudo actualizar la disponibilidad del plato.';
   }
 
   void saveChanges() {

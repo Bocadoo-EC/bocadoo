@@ -10,6 +10,7 @@ import '../../../core/network/api_exception.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/api_owner_repo.dart';
 import '../domain/models/daily_menu.dart';
+import '../domain/models/extras_models.dart';
 import '../domain/models/menu_models.dart';
 import 'owner_controller.dart';
 import 'owner_format.dart';
@@ -604,6 +605,7 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
 
   Widget _permanentCatalogBody(PermanentCatalogState permanentState) {
     final colors = context.colorScheme;
+    final canManageCatalog = ref.watch(ownerRoleProvider) == OwnerRole.owner;
     final filtered = permanentState.items
         .where((item) => item.group == _catalogFilter)
         .toList();
@@ -652,25 +654,27 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
                 ),
               ),
             ),
-            const SizedBox(width: 8),
-            FilledButton.tonal(
-              style: FilledButton.styleFrom(
-                visualDensity: VisualDensity.compact,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
+            if (canManageCatalog) ...[
+              const SizedBox(width: 8),
+              FilledButton.tonal(
+                style: FilledButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                onPressed: () => _openAddPermanentItem(_catalogFilter),
+                child: Text(
+                  addButtonLabel,
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w900,
+                  ),
                 ),
               ),
-              onPressed: () => _openAddPermanentItem(_catalogFilter),
-              child: Text(
-                addButtonLabel,
-                style: const TextStyle(
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-            ),
+            ],
           ],
         ),
         const SizedBox(height: 10),
@@ -680,10 +684,18 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
           for (final item in filtered)
             _PermanentItemCard(
               item: item,
+              canEditPrice: canManageCatalog,
               onEditPrice: () => _editPermanentPrice(item),
-              onToggleAvailable: (val) => ref
-                  .read(permanentCatalogProvider.notifier)
-                  .setAvailable(item.id, val),
+              onToggleAvailable: (val) async {
+                final err = await ref
+                    .read(permanentCatalogProvider.notifier)
+                    .setAvailable(item.id, val);
+                if (err != null && mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(err)),
+                  );
+                }
+              },
             ),
       ],
     );
@@ -792,11 +804,13 @@ class _PermanentItemCard extends StatelessWidget {
     required this.item,
     required this.onEditPrice,
     required this.onToggleAvailable,
+    this.canEditPrice = true,
   });
 
   final PermanentCatalogItem item;
   final VoidCallback onEditPrice;
   final ValueChanged<bool> onToggleAvailable;
+  final bool canEditPrice;
 
   @override
   Widget build(BuildContext context) {
@@ -846,19 +860,21 @@ class _PermanentItemCard extends StatelessWidget {
                           color: colors.primary,
                         ),
                       ),
-                      const SizedBox(width: 4),
-                      InkWell(
-                        borderRadius: BorderRadius.circular(8),
-                        onTap: onEditPrice,
-                        child: Padding(
-                          padding: const EdgeInsets.all(4),
-                          child: Icon(
-                            Icons.edit_outlined,
-                            size: 16,
-                            color: colors.onSurfaceVariant,
+                      if (canEditPrice) ...[
+                        const SizedBox(width: 4),
+                        InkWell(
+                          borderRadius: BorderRadius.circular(8),
+                          onTap: onEditPrice,
+                          child: Padding(
+                            padding: const EdgeInsets.all(4),
+                            child: Icon(
+                              Icons.edit_outlined,
+                              size: 16,
+                              color: colors.onSurfaceVariant,
+                            ),
                           ),
                         ),
-                      ),
+                      ],
                     ],
                   ),
                 ],
