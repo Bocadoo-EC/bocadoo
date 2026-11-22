@@ -8,6 +8,7 @@ import 'package:material_ui/material_ui.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/network/api_exception.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../customer/presentation/widgets/menu_carta_sync.dart';
 import '../data/api_owner_repo.dart';
 import '../domain/models/daily_menu.dart';
 import '../domain/models/extras_models.dart';
@@ -148,6 +149,7 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
     }
     ref.invalidate(posMenuProvider);
     ref.invalidate(activeOffersProvider);
+    MenuAndCartaLiveSync.instance.notifyUpdated(_rid);
     final dishes = ref.read(catalogDishesProvider).value ?? const <CatalogDish>[];
     if (_published &&
         dishes.isNotEmpty &&
@@ -221,6 +223,7 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
     }
     container.invalidate(posMenuProvider);
     container.invalidate(activeOffersProvider);
+    MenuAndCartaLiveSync.instance.notifyUpdated(rid);
     if (menu.availabilityState != MenuAvailabilityState.agotadoTotal) {
       final occupancyErr = await ref
           .read(manualOccupancyProvider.notifier)
@@ -238,6 +241,7 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
       if (undone) {
         container.invalidate(posMenuProvider);
         container.invalidate(activeOffersProvider);
+        MenuAndCartaLiveSync.instance.notifyUpdated(rid);
         if (mounted) setState(() => _published = false);
       } else {
         final err = repo is ApiOwnerRepository

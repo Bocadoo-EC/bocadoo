@@ -938,7 +938,9 @@ class _StepThreeConfirmedQrView extends StatelessWidget {
 
               // 4. Pie
               Text(
-                'Cancelación disponible hasta 15 min antes de la hora programada (${table.time}).',
+                canCancel
+                    ? 'Cancelación disponible hasta 15 min antes de la hora programada (${table.time}).'
+                    : 'Pedido confirmado en cocina. No se puede cancelar gratis; la inasistencia puede generar cargo por No-Show.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 12,

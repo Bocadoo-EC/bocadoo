@@ -354,6 +354,11 @@ class _ScanResultDialogState extends ConsumerState<ScanResultDialog> {
     };
     final pop = Navigator.of(context).pop;
     const buttonSize = Size.fromHeight(52);
+    final shownResult = switch (_shown) {
+      OwnerSuccess(:final result) => result,
+      OwnerError(:final result) => result,
+      _ => null,
+    };
 
     return Dialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 24),
@@ -364,6 +369,14 @@ class _ScanResultDialogState extends ConsumerState<ScanResultDialog> {
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            if (shownResult != null && shownResult.cashToCollectCents > 0) ...[
+              _CashDueBanner(
+                cents: shownResult.cashToCollectCents,
+                items: shownResult.cashItems,
+                planCredits: shownResult.planCreditsUsed,
+              ),
+              const SizedBox(height: 10),
+            ],
             Stack(children: [
               Container(
                 width: double.infinity,
@@ -634,6 +647,74 @@ class _ExtraGuestsSelector extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+
+/// Pedido híbrido: el plan cubre el almuerzo pero hay saldo (carta / extras) por cobrar.
+class _CashDueBanner extends StatelessWidget {
+  const _CashDueBanner({
+    required this.cents,
+    required this.items,
+    required this.planCredits,
+  });
+
+  final int cents;
+  final List<String> items;
+  final int planCredits;
+
+  @override
+  Widget build(BuildContext context) {
+    final b = context.bocadooColors;
+    return Semantics(
+      liveRegion: true,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: b.walletAccent,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: b.onWalletAccent.withValues(alpha: 0.4), width: 1.5),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Icon(Icons.payments_rounded, size: 22, color: b.onWalletAccent),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'COBRAR ${OwnerFormat.money(cents / 100)} EN CAJA (Carta / Extras)',
+                style: TextStyle(
+                  fontSize: 15,
+                  height: 1.2,
+                  fontWeight: FontWeight.w900,
+                  color: b.onWalletAccent,
+                ),
+              ),
+            ),
+          ]),
+          if (planCredits > 0) ...[
+            const SizedBox(height: 4),
+            Text(
+              planCredits == 1 ? 'Plan: 1 cupo usado' : 'Plan: $planCredits cupos usados',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: b.onWalletAccent),
+            ),
+          ],
+          if (items.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              'No cubierto por el plan:',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: b.onWalletAccent),
+            ),
+            for (final item in items)
+              Text(
+                '• $item',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: b.onWalletAccent),
+              ),
+          ],
+        ]),
       ),
     );
   }

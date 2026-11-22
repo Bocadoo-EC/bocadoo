@@ -25,7 +25,15 @@ class OwnerOrder {
     this.takeawaySurchargeCents = 25,
     this.paidByPlan = false,
     this.validated = false,
+    this.planCreditsUsed = 0,
+    this.cashToCollectCents = 0,
+    this.cashItems = const [],
   });
+
+  /// Orden híbrida: cupos de plan usados y saldo a cobrar en caja.
+  final int planCreditsUsed;
+  final int cashToCollectCents;
+  final List<String> cashItems;
 
   final String? id;
   final String? restaurantId;
@@ -50,8 +58,10 @@ class OwnerOrder {
   /// Con plan: ya se validó el QR y se descontó el almuerzo; falta entregar.
   final bool validated;
 
-  int get effectiveTotalCents =>
-      paidByPlan ? 0 : (totalCents ?? (amount * 100).round());
+  /// Con plan solo se cobra el saldo de carta / extras (`cashToCollectCents`).
+  int get effectiveTotalCents => paidByPlan
+      ? cashToCollectCents
+      : (totalCents ?? (amount * 100).round());
 
   /// `BCD-ORD-42`: lo que lee el escáner de Caja.
   String get qrCode => 'BCD-ORD-$number';

@@ -962,6 +962,10 @@ class _ActiveWalletCard extends StatelessWidget {
                       ),
                     ],
                   ),
+                  if (order.cashToCollectCents > 0) ...[
+                    const SizedBox(height: 10),
+                    _CashPendingBadge(cents: order.cashToCollectCents),
+                  ],
                 ] else if (mode == QrMode.mesa && table != null) ...[
                   Text(
                     '${table.membersCount} en la mesa · Llegada ${table.time}',
@@ -1049,6 +1053,44 @@ class _ActiveWalletCard extends StatelessWidget {
                     onOpenMesa: () => context.push(
                       '/customer/mesa?groupOrderId=${table.id}&restaurantId=${simSession.restaurantId}',
                     ),
+                    onCancelMesa: () async {
+                      final confirm = await showDialog<bool>(
+                        context: context,
+                        builder: (ctx) => AlertDialog(
+                          title: const Text('¿Cancelar pedido grupal?'),
+                          content: const Text(
+                            'Se cerrará esta mesa compartida sin costo alguno y tus amigos ya no podrán unirse.',
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.of(ctx).pop(false),
+                              child: const Text('Seguir en la mesa'),
+                            ),
+                            TextButton(
+                              onPressed: () => Navigator.of(ctx).pop(true),
+                              child: Text(
+                                'Cancelar pedido',
+                                style: TextStyle(color: ctx.colorScheme.error),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (confirm != true || !context.mounted) return;
+                      final ok = await controller.cancelSharedTable(table.id);
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          behavior: SnackBarBehavior.floating,
+                          content: Text(
+                            ok
+                                ? 'Pedido grupal cancelado'
+                                : (controller.lastActionError ??
+                                    'No se pudo cancelar el pedido grupal'),
+                          ),
+                        ),
+                      );
+                    },
                   );
                 }
 
@@ -1201,12 +1243,14 @@ class _PendingGroupTableBlock extends StatelessWidget {
     required this.totalCount,
     required this.restaurantName,
     required this.onOpenMesa,
+    required this.onCancelMesa,
   });
 
   final int confirmedCount;
   final int totalCount;
   final String restaurantName;
   final VoidCallback onOpenMesa;
+  final VoidCallback onCancelMesa;
 
   @override
   Widget build(BuildContext context) {
@@ -1277,6 +1321,15 @@ class _PendingGroupTableBlock extends StatelessWidget {
             onPressed: onOpenMesa,
             icon: const Icon(Icons.group_outlined, size: 18),
             label: const Text('Ver mesa y compartir'),
+          ),
+          const SizedBox(height: 8),
+          TextButton.icon(
+            onPressed: onCancelMesa,
+            icon: Icon(Icons.close_rounded, size: 17, color: colors.error),
+            label: Text(
+              'Cancelar pedido grupal',
+              style: TextStyle(color: colors.error),
+            ),
           ),
         ],
       ),
@@ -1995,6 +2048,41 @@ class _PaseSkeleton extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+
+/// Orden híbrida: recuerda el saldo de carta / extras que se paga en el local.
+class _CashPendingBadge extends StatelessWidget {
+  const _CashPendingBadge({required this.cents});
+
+  final int cents;
+
+  @override
+  Widget build(BuildContext context) {
+    final b = context.bocadooColors;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: b.walletAccent,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.payments_outlined, size: 18, color: b.onWalletAccent),
+        const SizedBox(width: 8),
+        Flexible(
+          child: Text(
+            'Saldo pendiente a pagar en local: ${formatCents(cents)}',
+            style: TextStyle(
+              fontSize: 13,
+              height: 1.2,
+              fontWeight: FontWeight.w800,
+              color: b.onWalletAccent,
+            ),
+          ),
+        ),
+      ]),
     );
   }
 }

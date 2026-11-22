@@ -56,6 +56,7 @@ abstract class ICustomerRepository {
     String? offerId,
     required bool takeaway,
     String? estimatedArrival,
+    List<({String platoId, int quantity})> cartaItems = const [],
   });
 
   /// Cancela una preorden recién creada (deshacer)

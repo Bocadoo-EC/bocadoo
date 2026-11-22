@@ -17,7 +17,10 @@ import '../../../core/session/session_notifier.dart';
 import '../data/api_customer_repo.dart';
 import '../data/mock_customer_repo.dart';
 import '../data/pase_events_stream.dart';
+import '../../group_orders/presentation/group_order_models.dart';
+import '../../group_orders/presentation/group_order_simulation_provider.dart';
 import 'widgets/flash_offers_sync.dart';
+import 'widgets/menu_carta_sync.dart';
 import 'widgets/restaurant_status_sync.dart';
 
 enum CustomerStatus { initial, loading, success, error }
@@ -415,6 +418,9 @@ class CustomerController extends ChangeNotifier {
   /// Código de error de máquina del último fallo (`LOCAL_LLENO_SOLO_LLEVAR`, `RESTAURANTE_PAUSADO`, etc.).
   String? lastActionErrorCode;
 
+  /// `true` si el último fallo fue `409 Conflict` (un ítem se agotó justo ahora).
+  bool lastActionConflict = false;
+
   CustomerController({ICustomerRepository? repository})
       : _repository = repository ?? MockCustomerRepository() {
     if (AppMode.useMock) {
@@ -422,6 +428,16 @@ class CustomerController extends ChangeNotifier {
     }
     FlashOffersLiveSync.instance.addListener(_onFlashOfferLiveSync);
     RestaurantStatusLiveSync.instance.addListener(_onRestaurantStatusLiveSync);
+    MenuAndCartaLiveSync.instance.addListener(_onMenuCartaLiveSync);
+  }
+
+  void _onMenuCartaLiveSync() {
+    if (_disposed) return;
+    final rid = MenuAndCartaLiveSync.instance.lastRestaurantId;
+    if (rid == null || rid.isEmpty) return;
+    if (!AppMode.useMock) {
+      unawaited(_hydrateSingleRestaurant(rid));
+    }
   }
 
   void _onRestaurantStatusLiveSync() {
@@ -744,6 +760,7 @@ class CustomerController extends ChangeNotifier {
       final order = await orderFuture;
       final activity = await activityFuture;
       final feedback = await feedbackFuture;
+      final effectiveTable = _pruneExpiredCollectingTable(table);
 
       final stamps = <String, StampCard>{};
       final menuStatesFuture = _resolveMenuStatesForPasses(passes, restaurants);
@@ -765,7 +782,7 @@ class CustomerController extends ChangeNotifier {
         passIndex: _state.passIndex.clamp(0, cleanedPasses.isEmpty ? 0 : cleanedPasses.length - 1),
         selectedQrMode: _state.selectedQrMode,
         stampCards: stamps,
-        activeTable: table,
+        activeTable: effectiveTable,
         activeOrder: order,
         pendingFeedback: feedback,
         recentActivity: activity,
@@ -860,13 +877,14 @@ class CustomerController extends ChangeNotifier {
             : 'Pedido #${previousOrder.orderNumber} confirmado en ${previousOrder.restaurantName}.';
       }
 
+      final effectiveTable = _pruneExpiredCollectingTable(table);
       _emit(_state.copyWith(
         passes: sanitizedPasses,
         recentActivity: updatedActivity,
         activeOrder: order,
         clearActiveOrder: order == null,
-        activeTable: table,
-        clearActiveTable: table == null,
+        activeTable: effectiveTable,
+        clearActiveTable: effectiveTable == null,
         consumptionNotice: notice,
         todayMenuPublishedByRest: nextMenuStates.published,
         todayMenuAvailabilityByRest: nextMenuStates.availability,
@@ -1379,9 +1397,11 @@ class CustomerController extends ChangeNotifier {
     String? offerId,
     bool takeaway = false,
     String? estimatedArrival,
+    List<({String platoId, int quantity})> cartaItems = const [],
   }) async {
     lastActionError = null;
     lastActionErrorCode = null;
+    lastActionConflict = false;
     if (_state.activeOrder != null && !_state.activeOrder!.isDelivered) {
       final latest = await _repository.getActiveOrder();
       if (latest != null && !latest.isDelivered) {
@@ -1400,6 +1420,7 @@ class CustomerController extends ChangeNotifier {
         offerId: offerId,
         takeaway: takeaway,
         estimatedArrival: estimatedArrival,
+        cartaItems: cartaItems,
       );
       final matchingPassIdx =
           _state.passes.indexWhere((p) => p.restaurantId == restaurant.id);
@@ -1423,7 +1444,11 @@ class CustomerController extends ChangeNotifier {
       });
       return true;
     } on ApiException catch (e) {
-      lastActionError = e.userMessage;
+      lastActionConflict = e.status == 409;
+      // 409: un ítem se agotó; la selección se conserva para que el usuario la ajuste.
+      lastActionError = lastActionConflict
+          ? 'Se agotó un ítem de tu pedido. Ajusta tu selección e inténtalo de nuevo.'
+          : e.userMessage;
       lastActionErrorCode = e.code;
       if (e.code == 'RESTAURANTE_PAUSADO' ||
           e.code == 'MENU_NO_PUBLICADO' ||
@@ -1493,10 +1518,45 @@ class CustomerController extends ChangeNotifier {
     _syncOrderPolling(_state.activeOrder, table: activeTable);
   }
 
+  ActiveTable? _pruneExpiredCollectingTable(ActiveTable? table) {
+    if (table == null) return null;
+    final sim = GroupOrderSimulationStore.instance.sessionById(table.id);
+    if (sim != null) {
+      if (sim.status == GroupOrderStatus.cancelled ||
+          sim.status == GroupOrderStatus.expired) {
+        return null;
+      }
+      if (sim.status == GroupOrderStatus.collecting &&
+          DateTime.now().isAfter(sim.estimatedConsumptionTime)) {
+        GroupOrderSimulationStore.instance.markExpired(table.id);
+        unawaited(_repository.cancelSharedTable(table.id).catchError((_) {}));
+        return null;
+      }
+      return table;
+    }
+
+    // Tras reinicio de app: si solo quedó el anfitrión y ya pasó la hora límite, liberar.
+    final parts = table.time.split(':');
+    if (parts.length == 2 && table.membersCount <= 1) {
+      final h = int.tryParse(parts[0].trim());
+      final m = int.tryParse(parts[1].trim());
+      if (h != null && m != null) {
+        final now = DateTime.now();
+        final limit = DateTime(now.year, now.month, now.day, h, m);
+        if (now.isAfter(limit.add(const Duration(minutes: 5)))) {
+          unawaited(_repository.cancelSharedTable(table.id).catchError((_) {}));
+          return null;
+        }
+      }
+    }
+    return table;
+  }
+
   Future<bool> cancelSharedTable(String tableId) async {
     lastActionError = null;
     try {
       await _repository.cancelSharedTable(tableId);
+      GroupOrderSimulationStore.instance.markCancelled(tableId);
       _emit(_state.copyWith(clearActiveTable: true));
       _syncOrderPolling(
         _state.activeOrder,
@@ -1646,6 +1706,7 @@ class CustomerController extends ChangeNotifier {
     _disposed = true;
     FlashOffersLiveSync.instance.removeListener(_onFlashOfferLiveSync);
     RestaurantStatusLiveSync.instance.removeListener(_onRestaurantStatusLiveSync);
+    MenuAndCartaLiveSync.instance.removeListener(_onMenuCartaLiveSync);
     if (AppMode.useMock) {
       DemoStore.instance.removeListener(_onDemoStoreChanged);
     }
@@ -1675,6 +1736,17 @@ final customerControllerProvider = Provider<CustomerController>((ref) {
 /// Local y menú para la ficha (C3), también cuando se abre por ruta directa.
 final restaurantDetailProvider =
     FutureProvider.autoDispose.family<Restaurant?, String>((ref, id) async {
+  final sync = MenuAndCartaLiveSync.instance;
+  void onSync() {
+    final target = sync.lastRestaurantId;
+    if (target == null || target.isEmpty || target == id) {
+      ref.invalidateSelf();
+    }
+  }
+
+  sync.addListener(onSync);
+  ref.onDispose(() => sync.removeListener(onSync));
+
   final detail = await ref.watch(customerRepositoryProvider).getRestaurantById(id);
   if (detail != null) {
     ref.read(customerControllerProvider).syncRestaurantSummary(detail);
@@ -1686,6 +1758,17 @@ final restaurantDetailProvider =
 /// Solo lectura: no habilita cobro de platos a la carta en `POST /v1/mis/pedidos`.
 final restaurantCartaProvider =
     FutureProvider.autoDispose.family<List<PublicCartaItem>, String>((ref, id) async {
+  final sync = MenuAndCartaLiveSync.instance;
+  void onSync() {
+    final target = sync.lastRestaurantId;
+    if (target == null || target.isEmpty || target == id) {
+      ref.invalidateSelf();
+    }
+  }
+
+  sync.addListener(onSync);
+  ref.onDispose(() => sync.removeListener(onSync));
+
   return ref.watch(customerRepositoryProvider).getRestaurantCarta(id);
 });
 

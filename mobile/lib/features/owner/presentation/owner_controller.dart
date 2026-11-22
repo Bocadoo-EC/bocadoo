@@ -12,6 +12,7 @@ import '../../../core/network/api_client.dart';
 import '../../../core/network/api_exception.dart';
 import '../../../core/session/session_notifier.dart';
 import '../../../core/utils/formatters.dart';
+import '../../customer/presentation/widgets/menu_carta_sync.dart';
 import '../../customer/presentation/widgets/restaurant_status_sync.dart';
 import '../../group_orders/presentation/group_order_simulation_provider.dart';
 import '../data/api_owner_repo.dart';
@@ -1272,6 +1273,7 @@ class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
       soldOut: !available,
     );
     if (ok) {
+      MenuAndCartaLiveSync.instance.notifyUpdated(rid);
       return null;
     }
 
@@ -1292,6 +1294,7 @@ class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
   void saveChanges() {
     _dirty = false;
     state = PermanentCatalogState(items: state.items, dirty: false);
+    MenuAndCartaLiveSync.instance.notifyUpdated(ref.read(ownerRestaurantIdProvider));
   }
 }
 

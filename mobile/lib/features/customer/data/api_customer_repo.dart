@@ -575,8 +575,16 @@ class ApiCustomerRepository implements ICustomerRepository {
         final id = (item['id'] ?? '').toString();
         final name = (item['nombre'] ?? '').toString().trim();
         if (name.isEmpty) continue;
-        final categoria =
+        final seccion = (item['seccion'] ?? '').toString().toUpperCase();
+        var categoria =
             (item['categoria'] ?? 'A_LA_CARTA').toString().toUpperCase();
+        if (categoria == 'ALMUERZO' || categoria == 'EXTRA') {
+          if (seccion == 'POSTRE') {
+            categoria = 'POSTRE';
+          } else if (seccion == 'JUGO' || seccion == 'BEBIDA') {
+            categoria = 'BEBIDA';
+          }
+        }
         parsed.add(
           PublicCartaItem(
             id: id,
@@ -734,6 +742,19 @@ class ApiCustomerRepository implements ICustomerRepository {
     return null;
   }
 
+  /// `HH:mm` de Ecuador → instante UTC ISO (`horaLlegada`); `null` si no aplica.
+  static String? _arrivalIso(String? hhmm) {
+    if (hhmm == null || !RegExp(r'^\d{1,2}:\d{2}$').hasMatch(hhmm)) return null;
+    final nowUtc = DateTime.now().toUtc();
+    var at = EcuadorTime.todayAtUtc(hhmm);
+    if (!at.isAfter(nowUtc)) {
+      at = nowUtc.add(const Duration(minutes: 15));
+    } else if (at.difference(nowUtc) > const Duration(hours: 11)) {
+      at = nowUtc.add(const Duration(hours: 11));
+    }
+    return at.toIso8601String();
+  }
+
   @override
   Future<ActiveOrder> preorder({
     required String restaurantId,
@@ -743,6 +764,7 @@ class ApiCustomerRepository implements ICustomerRepository {
     String? offerId,
     required bool takeaway,
     String? estimatedArrival,
+    List<({String platoId, int quantity})> cartaItems = const [],
   }) async {
     final platos = <String>[
       if (soupId != null && soupId.isNotEmpty) soupId,
@@ -753,7 +775,13 @@ class ApiCustomerRepository implements ICustomerRepository {
         {'plato': breakfastId, 'cantidad': 1},
     ];
 
-    if (platos.isEmpty && extras.isEmpty) {
+    final cartaPayload = [
+      for (final c in cartaItems)
+        if (c.platoId.isNotEmpty && c.quantity > 0)
+          {'platoId': c.platoId, 'cantidad': c.quantity},
+    ];
+
+    if (platos.isEmpty && extras.isEmpty && cartaPayload.isEmpty) {
       throw ApiException(
         status: 422,
         code: 'PEDIDO_VACIO',
@@ -766,12 +794,15 @@ class ApiCustomerRepository implements ICustomerRepository {
     final body = <String, dynamic>{
       'restaurante': restaurantId,
       'paraLlevar': takeaway,
+      'horaLlegada': ?_arrivalIso(estimatedArrival),
       if (platos.isNotEmpty) 'almuerzo': {'platos': platos},
       if (extras.isNotEmpty) 'extras': extras,
+      if (cartaPayload.isNotEmpty) 'cartaItems': cartaPayload,
     };
 
+    final cartaKey = cartaPayload.map((c) => '${c['platoId']}x${c['cantidad']}').join(',');
     final intent =
-        'crear-pedido:$restaurantId:${platos.join(",")}:${breakfastId ?? ""}:$takeaway';
+        'crear-pedido:$restaurantId:${platos.join(",")}:${breakfastId ?? ""}:$takeaway:$cartaKey';
     final key = _idempotency.keyFor(intent);
     final res = await guard(
       () => _api.send<Map<String, dynamic>>(
@@ -810,6 +841,9 @@ class ApiCustomerRepository implements ICustomerRepository {
       totalCents: mapped.totalCents,
       estimatedArrivalLabel: eta,
       hasPlan: mapped.hasPlan,
+      planCreditsUsed: mapped.planCreditsUsed,
+      cashToCollectCents: mapped.cashToCollectCents,
+      balancePaymentChannel: mapped.balancePaymentChannel,
       expiresAt: mapped.expiresAt,
       paidAmount: mapped.paidAmount,
     );
@@ -1862,6 +1896,11 @@ class ApiCustomerRepository implements ICustomerRepository {
       final name = (e['nombre'] ?? '').toString();
       if (name.isNotEmpty) parts.add(name);
     }
+    for (final c in _asListOfMaps(json['cartaItems'])) {
+      final name = (c['nombre'] ?? c['plato']?['nombre'] ?? '').toString();
+      final qty = _asInt(c['cantidad']) ?? 1;
+      if (name.isNotEmpty) parts.add(qty > 1 ? '${qty}x $name' : name);
+    }
 
     final estado = (json['estado'] ?? 'EN_CAMINO').toString().toUpperCase();
     final status = switch (estado) {
@@ -1916,6 +1955,9 @@ class ApiCustomerRepository implements ICustomerRepository {
       totalCents: resolvedTotalCents,
       estimatedArrivalLabel: etaLabel,
       hasPlan: hasPlan,
+      planCreditsUsed: _asInt(json['planCreditsUsed']) ?? (hasPlan ? 1 : 0),
+      cashToCollectCents: _asInt(json['cashToCollectCents']) ?? 0,
+      balancePaymentChannel: json['balancePaymentChannel']?.toString(),
       expiresAt: DateTime.tryParse((json['venceEn'] ?? '').toString()),
       paidAmount:
           status == 'ENTREGADO' ? Money.fromCents(resolvedTotalCents) : null,

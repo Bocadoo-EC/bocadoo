@@ -198,6 +198,9 @@ class MockOwnerRepository
         studentName: preorder.dinerName,
         passId: ordKey,
         actionRequired: 'NINGUNA',
+        planCreditsUsed: preorder.planCreditsUsed,
+        cashToCollectCents: preorder.cashToCollectCents,
+        cashItems: preorder.cashItems,
       );
     }
 
@@ -489,8 +492,16 @@ class MockOwnerRepository
     final counted = expectedCash;
     final difference = _round2(counted - expectedCash);
 
+    final deliveredToday = _store.preorders.where((o) =>
+        o.restaurantId == DemoStore.ownerRestaurantId &&
+        o.status == PreorderStatus.delivered);
+
     return TransactionSummary(
       date: now,
+      planCreditsUsedToday:
+          deliveredToday.fold<int>(0, (sum, o) => sum + o.planCreditsUsed),
+      cashToCollectToday:
+          deliveredToday.fold<int>(0, (sum, o) => sum + o.cashToCollectCents),
       lunchesRedeemedToday: redeemed,
       plansSoldToday: plansSold,
       totalIncomeToday: _round2(income),
@@ -1228,6 +1239,9 @@ class MockOwnerRepository
           estimatedArrivalLabel: o.estimatedArrivalLabel,
           paidByPlan: o.hasPlan,
           validated: o.validated,
+          planCreditsUsed: o.planCreditsUsed,
+          cashToCollectCents: o.cashToCollectCents,
+          cashItems: o.cashItems,
         ),
     ];
   }

@@ -29,7 +29,15 @@ class DemoPreorder {
     this.totalCents = 0,
     this.estimatedArrivalLabel,
     this.hasPlan = false,
+    this.planCreditsUsed = 0,
+    this.cashToCollectCents = 0,
+    this.cashItems = const [],
   });
+
+  /// Orden híbrida: cupos de plan usados y saldo de carta / extras a cobrar en caja.
+  final int planCreditsUsed;
+  final int cashToCollectCents;
+  final List<String> cashItems;
 
   final String number;
   final String restaurantId;
@@ -71,7 +79,7 @@ class DemoPreorder {
       : 0;
 
   int get effectiveTotalCents {
-    if (hasPlan) return 0;
+    if (hasPlan) return cashToCollectCents;
     if (totalCents > 0) return totalCents;
     return effectiveBaseCents + effectiveSurchargeCents;
   }

@@ -4,6 +4,7 @@ import 'package:material_ui/material_ui.dart';
 import '../../../core/config/api_capabilities.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/utils/formatters.dart';
 import '../../group_orders/presentation/group_order_simulation_provider.dart';
 import '../domain/models/extras_models.dart';
 import 'owner_controller.dart';
@@ -99,6 +100,44 @@ class _CobrarMesaSheetState extends ConsumerState<CobrarMesaSheet> {
         await container.read(ownerTablesRepositoryProvider).undoTableCharge(chargeId);
         refresh();
       },
+    );
+  }
+
+  Future<void> _reportNoShow(TablePreview p) async {
+    final penaltyCents =
+        GroupOrderSimulationStore.lateCancellationPenaltyCents(p.lines.length);
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('¿Reportar No-Show?'),
+        content: Text(
+          'Se liberará la Mesa #${p.tableId} en caja. Cuando se active la Fase 2 en backend, se aplicará el cargo por inasistencia (${OwnerFormat.money(Money.fromCents(penaltyCents))}) al anfitrión.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Volver'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text(
+              'Confirmar No-Show',
+              style: TextStyle(color: ctx.colorScheme.error),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final container = ProviderScope.containerOf(context, listen: false);
+    final navigator = Navigator.of(context);
+    GroupOrderSimulationStore.instance.markCancelled(widget.tableId);
+    container.invalidate(pendingTablesProvider);
+    navigator.pop(true);
+    showInfoSnackBar(
+      messenger,
+      'Mesa #${p.tableId} liberada por No-Show (${OwnerFormat.money(Money.fromCents(penaltyCents))})',
     );
   }
 
@@ -243,7 +282,7 @@ class _CobrarMesaSheetState extends ConsumerState<CobrarMesaSheet> {
       ],
       if (notFound)
         FilledButton.tonal(onPressed: () => Navigator.of(context).pop(), child: const Text('Volver a caja'))
-      else
+      else ...[
         ElevatedButton.icon(
           onPressed: p.canCharge && !_busy ? _charge : null,
           icon: _busy
@@ -255,6 +294,18 @@ class _CobrarMesaSheetState extends ConsumerState<CobrarMesaSheet> {
               : const Icon(Icons.groups_rounded),
           label: Text(cash > 0 ? 'Cobrar mesa · ${OwnerFormat.money(cash)} en caja' : 'Validar mesa con planes'),
         ),
+        if (!p.settled) ...[
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: _busy ? null : () => _reportNoShow(p),
+            icon: Icon(Icons.person_off_outlined, size: 18, color: colors.error),
+            label: Text(
+              'Reportar No-Show (No asistió)',
+              style: TextStyle(color: colors.error),
+            ),
+          ),
+        ],
+      ],
     ]);
   }
 }

@@ -594,6 +594,8 @@ class MockCustomerRepository implements ICustomerRepository {
         totalCents: o.effectiveTotalCents,
         estimatedArrivalLabel: o.estimatedArrivalLabel,
         hasPlan: o.hasPlan,
+        planCreditsUsed: o.planCreditsUsed,
+        cashToCollectCents: o.cashToCollectCents,
         expiresAt: o.expiresAt,
         paidAmount: o.status == PreorderStatus.delivered
             ? Money.fromCents(o.effectiveTotalCents)
@@ -641,10 +643,25 @@ class MockCustomerRepository implements ICustomerRepository {
     String? offerId,
     required bool takeaway,
     String? estimatedArrival,
+    List<({String platoId, int quantity})> cartaItems = const [],
   }) async {
     // TODO: Conectar con provider de backend
     await _simulateNetwork();
     final restaurant = await getRestaurantById(restaurantId);
+    final carta = cartaItems.isEmpty
+        ? const <PublicCartaItem>[]
+        : await getRestaurantCarta(restaurantId);
+    var cartaCents = 0;
+    final cartaLabels = <String>[];
+    for (final line in cartaItems) {
+      final item = carta.where((c) => c.id == line.platoId).firstOrNull;
+      if (item == null || line.quantity <= 0) continue;
+      if (item.isSoldOut) {
+        throw ApiException(status: 409, code: 'PLATO_AGOTADO');
+      }
+      cartaCents += item.priceCents * line.quantity;
+      cartaLabels.add(line.quantity > 1 ? '${line.quantity}x ${item.name}' : item.name);
+    }
     final menu = restaurant?.todayMenu ?? const <MenuItem>[];
     String nameOf(String? id) {
       for (final m in menu) {
@@ -674,7 +691,13 @@ class MockCustomerRepository implements ICustomerRepository {
     final surchargeCents = Money.toCents(surcharge);
     final hasPlan = (restaurantId == 'r1' || restaurantId == 'r2') &&
         (_store.remainingLunchesByRest[restaurantId] ?? 0) > 0;
-    final totalCents = hasPlan ? 0 : baseCents + (takeaway ? surchargeCents : 0);
+    final hasLunch = (soupId ?? '').isNotEmpty ||
+        (mainId ?? '').isNotEmpty ||
+        (breakfastId ?? '').isNotEmpty ||
+        offerId != null;
+    final lunchCents = hasLunch ? baseCents + (takeaway ? surchargeCents : 0) : 0;
+    // Con plan, el almuerzo sale del cupo y solo la carta se paga en el local.
+    final totalCents = (hasPlan && hasLunch ? 0 : lunchCents) + cartaCents;
     final now = DateTime.now();
     final resolvedEta = (estimatedArrival != null &&
             estimatedArrival.isNotEmpty &&
@@ -690,7 +713,10 @@ class MockCustomerRepository implements ICustomerRepository {
       restaurantName: restaurant?.name ?? 'Restaurante',
       dinerUserId: DemoStore.dinerUserId,
       dinerName: _hostName,
-      detail: parts.join(' · '),
+      detail: [...parts, ...cartaLabels].join(' · '),
+      planCreditsUsed: hasPlan && hasLunch ? 1 : 0,
+      cashToCollectCents: hasPlan ? cartaCents : 0,
+      cashItems: cartaLabels,
       soup: soup.isEmpty ? null : soup,
       main: main.isNotEmpty ? main : (breakfast.isNotEmpty ? breakfast : (offer.isEmpty ? null : offer)),
       takeaway: takeaway,

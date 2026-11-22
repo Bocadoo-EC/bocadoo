@@ -7,11 +7,14 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatters.dart';
 import 'customer_controller.dart';
 import 'customer_widgets.dart';
+import 'widgets/hybrid_carta_view.dart';
+import 'widgets/hybrid_extras_section.dart';
+import 'widgets/hybrid_order_state.dart';
 import 'widgets/individual_menu_accordion.dart';
 import 'widgets/restaurant_preorder_widgets.dart';
 
-/// C3 · Ficha del local: flujo progresivo en 2 pasos (1: acordeón de platos,
-/// 2: modalidad de consumo y hora estimada).
+/// C3 · Ficha del local: Carrito Híbrido en 2 pasos (1: Menú del Día / Carta +
+/// Extras persistentes, 2: Tu Orden editable + Split-Billing + Modalidad/Hora).
 class RestaurantSheet extends ConsumerStatefulWidget {
   final String restaurantId;
 
@@ -22,7 +25,6 @@ class RestaurantSheet extends ConsumerStatefulWidget {
 }
 
 class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
-  IndividualPreorderState _draft = const IndividualPreorderState();
   bool _sending = false;
 
   List<String> _availableArrivalOptions() {
@@ -50,7 +52,10 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
     );
   }
 
-  Future<void> _pickCustomTime(Restaurant r) async {
+  Future<void> _pickCustomTime(
+    Restaurant r,
+    HybridOrderNotifier notifier,
+  ) async {
     final (start, end) = _parseLunchRange(r.schedule);
     final initial = TimeOfDay(
       hour: start.hour < 12 ? 12 : start.hour,
@@ -77,15 +82,10 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
     }
     final formatted =
         '${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}';
-    setState(() {
-      _draft = _draft.copyWith(
-        customArrival: formatted,
-        selectedArrival: formatted,
-      );
-    });
+    notifier.setArrival(formatted, isCustom: true);
   }
 
-  String _resolveArrivalHhmm(IndividualPreorderState draft) {
+  String _resolveArrivalHhmm(HybridOrderState draft) {
     if (draft.selectedArrival != 'En 15 min') return draft.selectedArrival;
     final target = EcuadorTime.now().add(const Duration(minutes: 15));
     final hh = target.hour.toString().padLeft(2, '0');
@@ -96,30 +96,76 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
   Future<void> _order(
     CustomerController controller,
     Restaurant r,
-    IndividualPreorderState draft,
+    HybridOrderState draft,
+    HybridTenderSummary tender,
   ) async {
     setState(() => _sending = true);
+    final messenger = ScaffoldMessenger.of(context);
+    final lunchReady = draft.isLunchReady(r);
     final resolvedSoupId =
         draft.soupId == kIndividualNoSoupId ? null : draft.soupId;
+
     final ok = await controller.preorder(
       restaurant: r,
-      soupId: draft.breakfastMode ? null : resolvedSoupId,
-      mainId: draft.breakfastMode ? null : draft.mainId,
-      breakfastId: draft.breakfastMode ? draft.breakfastId : null,
+      soupId: (lunchReady && !draft.breakfastMode) ? resolvedSoupId : null,
+      mainId: (lunchReady && !draft.breakfastMode) ? draft.mainId : null,
+      breakfastId: (lunchReady && draft.breakfastMode)
+          ? draft.breakfastId
+          : (!lunchReady && draft.hasAddons
+              ? draft.addonsList.first.item.id
+              : null),
       // Salón lleno: el pedido siempre es para llevar.
       takeaway: draft.takeaway ||
           ref.read(restaurantPublicStatusProvider(r.id)).isFull,
       estimatedArrival: _resolveArrivalHhmm(draft),
+      cartaItems: [
+        for (final l in draft.addonsList) (platoId: l.item.id, quantity: l.quantity),
+      ],
     );
     if (!mounted) return;
     setState(() => _sending = false);
     if (ok) {
+      if (draft.hasAddons && tender.cashToCollectCents > 0) {
+        messenger.showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            content: Text(
+              'Preorden confirmada · Adicionales por pagar en caja: ${formatCents(tender.cashToCollectCents)}',
+            ),
+          ),
+        );
+      }
       context.pop();
       return;
     }
-    final error = controller.lastActionError;
+    var error = controller.lastActionError;
+    if (controller.lastActionConflict) {
+      error = await _soldOutMessage(draft) ?? error;
+      if (!mounted) return;
+    }
     if (error != null && error.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));
+      messenger.showSnackBar(SnackBar(
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 6),
+        content: Text(error),
+      ));
+    }
+  }
+
+  /// 409: relee la carta y nombra qué ítems se agotaron; la selección no se borra.
+  Future<String?> _soldOutMessage(HybridOrderState draft) async {
+    ref.invalidate(restaurantCartaProvider(widget.restaurantId));
+    try {
+      final fresh = await ref.read(restaurantCartaProvider(widget.restaurantId).future);
+      final soldOut = {for (final c in fresh) if (c.isSoldOut) c.id};
+      final names = [
+        for (final l in draft.addonsList)
+          if (soldOut.contains(l.item.id)) l.item.name,
+      ];
+      if (names.isEmpty) return null;
+      return 'Se agotó ${names.join(', ')}. Ajusta tu pedido para continuar.';
+    } catch (_) {
+      return null;
     }
   }
 
@@ -178,15 +224,16 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
   ) {
     final colors = context.colorScheme;
     final arrivalOptions = _availableArrivalOptions();
-    final draft = _draft.sanitizeFor(r, arrivalOptions);
+    ref.watch(hybridOrderProvider(widget.restaurantId));
+    final notifier = ref.read(hybridOrderProvider(widget.restaurantId).notifier);
+    final draft = notifier.sanitizeView(r, arrivalOptions);
+    final cartaAsync = ref.watch(restaurantCartaProvider(widget.restaurantId));
+    final cartaItems = cartaAsync.value ?? const <PublicCartaItem>[];
+
     final hasBreakfasts = r.breakfasts.isNotEmpty;
     final breakfastMode = hasBreakfasts && draft.breakfastMode;
     final hasActiveOrder = s.activeOrder != null;
-    final chosenBreakfast = r.breakfasts
-        .where((b) => b.id == draft.breakfastId && !b.isSoldOut)
-        .firstOrNull;
     final publicStatus = ref.watch(restaurantPublicStatusProvider(r.id));
-    // Lleno = solo para llevar: se fuerza la modalidad y se bloquea "comer aquí".
     final forceTakeaway = publicStatus.isFull;
     final takeaway = forceTakeaway || draft.takeaway;
     final isClosed = publicStatus.isClosed;
@@ -199,19 +246,21 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
     final hasPlanHere = activePass != null &&
         activePass.remainingLunches > 0 &&
         !activePass.isExpired;
-    final baseCents = breakfastMode
-        ? Money.toCents(chosenBreakfast?.price ?? r.singleLunchPrice)
-        : Money.toCents(r.singleLunchPrice);
-    final surchargeCents = takeaway ? Money.toCents(r.takeawaySurcharge) : 0;
-    final totalCents = hasPlanHere ? 0 : baseCents + surchargeCents;
 
-    final step1Ready = draft.isStepOneComplete(r);
+    final tender = draft.resolveTender(
+      r: r,
+      hasPlanHere: hasPlanHere,
+      takeaway: takeaway,
+    );
+
+    final canOrderAnyMenu = r.hasMenu && !menuSoldOutAll;
+    final canOrderAddonsOnly = draft.hasAddons && !draft.hasPartialLunch(r);
     final canContinue = !isClosed &&
         !hasActiveOrder &&
         !_sending &&
-        r.hasMenu &&
-        !menuSoldOutAll &&
-        step1Ready;
+        (canOrderAnyMenu || cartaItems.isNotEmpty) &&
+        draft.canContinue(r) &&
+        (draft.isLunchReady(r) ? !menuSoldOutAll : canOrderAddonsOnly);
     final canOrder = canContinue && draft.step == 2;
 
     return Column(
@@ -221,9 +270,13 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
           restaurantName: r.name,
           step: draft.step,
           totalSteps: 2,
-          subtitle: draft.step == 1 ? 'Arma tu almuerzo' : 'Modalidad y hora',
+          subtitle: draft.step == 1
+              ? (draft.activeTab == RestaurantOrderTab.menuDelDia
+                  ? 'Arma tu almuerzo'
+                  : 'Arma tu pedido a la carta')
+              : 'Confirmar orden',
           onBack: draft.step == 2 && !_sending
-              ? () => setState(() => _draft = draft.copyWith(step: 1))
+              ? () => notifier.setStep(1)
               : null,
         ),
         Expanded(
@@ -248,6 +301,9 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
                     s: s,
                     r: r,
                     draft: draft,
+                    notifier: notifier,
+                    cartaAsync: cartaAsync,
+                    cartaItems: cartaItems,
                     publicStatus: publicStatus,
                     hasPlanHere: hasPlanHere || r.hasPlan,
                     hasBreakfasts: hasBreakfasts,
@@ -258,26 +314,27 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
                     colors: colors,
                     r: r,
                     draft: draft,
+                    notifier: notifier,
+                    tender: tender,
+                    hasPlanHere: hasPlanHere,
+                    remainingLunches: activePass?.remainingLunches ?? 0,
                     arrivalOptions: arrivalOptions,
                     forceTakeaway: forceTakeaway,
                     takeaway: takeaway,
                   ),
           ),
         ),
-        if (r.hasMenu)
+        if (r.hasMenu || cartaItems.isNotEmpty)
           _buildBottomBar(
             colors: colors,
             r: r,
             draft: draft,
+            notifier: notifier,
+            tender: tender,
             controller: controller,
             isClosed: isClosed,
             hasActiveOrder: hasActiveOrder,
             menuSoldOutAll: menuSoldOutAll,
-            breakfastMode: breakfastMode,
-            hasPlanHere: hasPlanHere,
-            remainingLunches: activePass?.remainingLunches ?? 0,
-            baseCents: baseCents,
-            totalCents: totalCents,
             canContinue: canContinue,
             canOrder: canOrder,
           ),
@@ -288,7 +345,10 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
   Widget _buildStepOne({
     required CustomerUiState s,
     required Restaurant r,
-    required IndividualPreorderState draft,
+    required HybridOrderState draft,
+    required HybridOrderNotifier notifier,
+    required AsyncValue<List<PublicCartaItem>> cartaAsync,
+    required List<PublicCartaItem> cartaItems,
     required RestaurantPublicStatus publicStatus,
     required bool hasPlanHere,
     required bool hasBreakfasts,
@@ -296,6 +356,8 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
     required bool isClosed,
   }) {
     final colors = context.colorScheme;
+    final addonsCount = draft.addonsList.fold<int>(0, (sum, l) => sum + l.quantity);
+
     return ListView(
       key: const ValueKey(1),
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -319,41 +381,62 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
           hasPlanHere: hasPlanHere,
           onTable: _openTable,
         ),
+        const SizedBox(height: 12),
+        OrderTypeSegmentedBar(
+          activeTab: draft.activeTab,
+          addonsCount: addonsCount,
+          onChanged: notifier.setTab,
+        ),
         const SizedBox(height: 16),
-        if (!r.hasMenu)
-          _CenteredStatus(
-            text: isClosed
-                ? 'Este restaurante está cerrado por hoy'
-                : 'Sin menú publicado hoy',
-          )
-        else ...[
-          if (hasBreakfasts) ...[
-            _ModeTabs(
-              breakfast: breakfastMode,
-              onChanged: (v) => setState(
-                () => _draft = draft.copyWith(breakfastMode: v, step: 1),
+        if (draft.activeTab == RestaurantOrderTab.menuDelDia) ...[
+          if (!r.hasMenu)
+            _CenteredStatus(
+              text: isClosed
+                  ? 'Este restaurante está cerrado por hoy'
+                  : 'Sin menú publicado hoy',
+            )
+          else ...[
+            if (hasBreakfasts) ...[
+              _ModeTabs(
+                breakfast: breakfastMode,
+                onChanged: notifier.setBreakfastMode,
               ),
+              const SizedBox(height: 16),
+            ],
+            IndividualMenuAccordion(
+              restaurant: r,
+              breakfastMode: breakfastMode,
+              soupId: draft.soupId,
+              mainId: draft.mainId,
+              breakfastId: draft.breakfastId,
+              selectedDrink: draft.drinkName,
+              selectedDessert: draft.dessertName,
+              onSelectSoup: notifier.selectSoup,
+              onSelectMain: notifier.selectMain,
+              onSelectBreakfast: notifier.selectBreakfast,
+              onSelectDrink: notifier.selectDrink,
+              onSelectDessert: notifier.selectDessert,
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 18),
+            HybridExtrasSection(
+              restaurant: r,
+              cartaItems: cartaItems,
+              orderState: draft,
+              showIncluded: true,
+              onAdd: notifier.incrementItem,
+              onDecrement: (id) => notifier.decrementItem(id, restaurant: r),
+              onSelectIncludedDrink: notifier.selectDrink,
+              onSelectIncludedDessert: notifier.selectDessert,
+            ),
           ],
-          IndividualMenuAccordion(
+        ] else ...[
+          HybridCartaView(
             restaurant: r,
-            breakfastMode: breakfastMode,
-            soupId: draft.soupId,
-            mainId: draft.mainId,
-            breakfastId: draft.breakfastId,
-            selectedDrink: draft.drinkName,
-            selectedDessert: draft.dessertName,
-            onSelectSoup: (id) =>
-                setState(() => _draft = draft.copyWith(soupId: id)),
-            onSelectMain: (id) =>
-                setState(() => _draft = draft.copyWith(mainId: id)),
-            onSelectBreakfast: (id) =>
-                setState(() => _draft = draft.copyWith(breakfastId: id)),
-            onSelectDrink: (name) =>
-                setState(() => _draft = draft.copyWith(drinkName: name)),
-            onSelectDessert: (name) =>
-                setState(() => _draft = draft.copyWith(dessertName: name)),
+            cartaItems: cartaItems,
+            isLoading: cartaAsync.isLoading,
+            orderState: draft,
+            onAdd: notifier.incrementItem,
+            onDecrement: (id) => notifier.decrementItem(id, restaurant: r),
           ),
         ],
       ],
@@ -363,7 +446,11 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
   Widget _buildStepTwo({
     required ColorScheme colors,
     required Restaurant r,
-    required IndividualPreorderState draft,
+    required HybridOrderState draft,
+    required HybridOrderNotifier notifier,
+    required HybridTenderSummary tender,
+    required bool hasPlanHere,
+    required int remainingLunches,
     required List<String> arrivalOptions,
     required bool forceTakeaway,
     required bool takeaway,
@@ -372,9 +459,23 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
       key: const ValueKey(2),
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
       children: [
-        SelectedDishSummaryTile(
-          summary: draft.summaryLine(r),
-          onEdit: () => setState(() => _draft = draft.copyWith(step: 1)),
+        EditableHybridOrderCard(
+          restaurant: r,
+          state: draft,
+          hasPlanHere: hasPlanHere,
+          onEditLunch: () {
+            notifier.setTab(RestaurantOrderTab.menuDelDia);
+            notifier.setStep(1);
+          },
+          onClearLunch: notifier.clearLunchSelection,
+          onIncrementItem: notifier.incrementItem,
+          onDecrementItem: (id) => notifier.decrementItem(id, restaurant: r),
+          onRemoveItem: (id) => notifier.removeItem(id, restaurant: r),
+        ),
+        const SizedBox(height: 14),
+        SplitBillingSummaryCard(
+          tender: tender,
+          remainingLunches: remainingLunches,
         ),
         const SizedBox(height: 18),
         if (forceTakeaway) ...[
@@ -426,11 +527,7 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
                 label: 'Para comer aquí',
                 icon: Icons.restaurant_rounded,
                 selected: !takeaway,
-                onTap: forceTakeaway
-                    ? null
-                    : () => setState(
-                          () => _draft = draft.copyWith(takeaway: false),
-                        ),
+                onTap: forceTakeaway ? null : () => notifier.setTakeaway(false),
               ),
             ),
             const SizedBox(width: 8),
@@ -439,9 +536,7 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
                 label: 'Para llevar (+${formatMoney(r.takeawaySurcharge)})',
                 icon: Icons.takeout_dining_outlined,
                 selected: takeaway,
-                onTap: () => setState(
-                  () => _draft = draft.copyWith(takeaway: true),
-                ),
+                onTap: () => notifier.setTakeaway(true),
               ),
             ),
           ],
@@ -464,15 +559,13 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
               ChoiceChip(
                 label: Text(opt),
                 selected: draft.selectedArrival == opt,
-                onSelected: (_) => setState(
-                  () => _draft = draft.copyWith(selectedArrival: opt),
-                ),
+                onSelected: (_) => notifier.setArrival(opt),
               ),
             ChoiceChip(
               label: Text(draft.customArrival ?? '+'),
               selected: draft.customArrival != null &&
                   draft.selectedArrival == draft.customArrival,
-              onSelected: (_) => _pickCustomTime(r),
+              onSelected: (_) => _pickCustomTime(r, notifier),
             ),
           ],
         ),
@@ -483,38 +576,38 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
   Widget _buildBottomBar({
     required ColorScheme colors,
     required Restaurant r,
-    required IndividualPreorderState draft,
+    required HybridOrderState draft,
+    required HybridOrderNotifier notifier,
+    required HybridTenderSummary tender,
     required CustomerController controller,
     required bool isClosed,
     required bool hasActiveOrder,
     required bool menuSoldOutAll,
-    required bool breakfastMode,
-    required bool hasPlanHere,
-    required int remainingLunches,
-    required int baseCents,
-    required int totalCents,
     required bool canContinue,
     required bool canOrder,
   }) {
-    final stepOneCtaLabel = hasActiveOrder
-        ? 'Ya tienes un pedido en camino'
-        : menuSoldOutAll
-            ? 'Menú agotado por hoy'
-            : hasPlanHere
-                ? 'Continuar · Con Plan (\$0,00)'
-                : 'Continuar · ${formatCents(baseCents)}';
+    final String stepOneCtaLabel;
+    if (hasActiveOrder) {
+      stepOneCtaLabel = 'Ya tienes un pedido en camino';
+    } else if (menuSoldOutAll && !draft.hasAddons) {
+      stepOneCtaLabel = 'Menú agotado por hoy';
+    } else if (!draft.canContinue(r)) {
+      stepOneCtaLabel = draft.activeTab == RestaurantOrderTab.carta
+          ? 'Elige un plato o extra para continuar'
+          : 'Completa los platos requeridos · ${formatMoney(r.singleLunchPrice)}';
+    } else {
+      stepOneCtaLabel = switch (tender) {
+        HybridPlanOnlyTender() => 'Continuar · 1 cupo de plan',
+        HybridMixedTender(:final cashToCollectCents) =>
+          'Continuar · 1 cupo + ${formatCents(cashToCollectCents)} en local',
+        HybridCashOnlyTender(:final cashToCollectCents) =>
+          'Continuar · ${formatCents(cashToCollectCents)} en local',
+      };
+    }
 
     final stepTwoCtaLabel = hasActiveOrder
         ? 'Ya tienes un pedido en camino'
-        : menuSoldOutAll
-            ? 'Menú agotado por hoy'
-            : breakfastMode
-                ? (hasPlanHere
-                    ? 'Preordenar desayuno con Plan (\$0,00)'
-                    : 'Preordenar desayuno · ${formatCents(totalCents)}')
-                : (hasPlanHere
-                    ? 'Preordenar almuerzo con Plan (\$0,00)'
-                    : 'Preordenar almuerzo · ${formatCents(totalCents)}');
+        : 'Confirmar preorden';
 
     return SafeArea(
       top: false,
@@ -562,50 +655,15 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  if (draft.step == 2 && hasPlanHere)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
-                      ),
-                      margin: const EdgeInsets.only(bottom: 10),
-                      decoration: BoxDecoration(
-                        color: context.bocadooColors.successContainer,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            Icons.verified_rounded,
-                            size: 16,
-                            color: context.bocadooColors.success,
-                          ),
-                          const SizedBox(width: 6),
-                          Flexible(
-                            child: Text(
-                              'Cubierto por tu Plan (Quedan $remainingLunches almuerzos)',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w800,
-                                color: context.bocadooColors.success,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
                   if (draft.step == 1)
                     ElevatedButton(
-                      onPressed: canContinue
-                          ? () => setState(() => _draft = draft.copyWith(step: 2))
-                          : null,
+                      onPressed: canContinue ? () => notifier.setStep(2) : null,
                       child: Text(stepOneCtaLabel),
                     )
                   else
                     ElevatedButton(
                       onPressed: canOrder
-                          ? () => _order(controller, r, draft)
+                          ? () => _order(controller, r, draft, tender)
                           : null,
                       child: _sending
                           ? SizedBox(

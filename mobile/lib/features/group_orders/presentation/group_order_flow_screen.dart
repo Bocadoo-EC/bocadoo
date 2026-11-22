@@ -1171,7 +1171,7 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
                                     participants: participants,
                                     consolidatedDishes:
                                         _consolidateDishes(participants),
-                                    canCancel: _canCancelTable(t),
+                                    canCancel: false,
                                     busy: _busy,
                                     onDone: () {
                                       if (Navigator.of(context).canPop()) {

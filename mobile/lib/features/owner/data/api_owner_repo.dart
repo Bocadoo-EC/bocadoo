@@ -366,6 +366,22 @@ class ApiOwnerRepository
     return orders.where((o) => o.number == number).firstOrNull;
   }
 
+  /// `["2x Churrasco", "Cola"]` a partir de `cartaItems` (`nombre` + `cantidad`).
+  static List<String> _cartaItemLabels(Object? raw) {
+    if (raw is! List) return const [];
+    return [
+      for (final c in raw.whereType<Map>())
+        if ((c['nombre'] ?? (c['plato'] is Map ? (c['plato'] as Map)['nombre'] : null) ?? '')
+            .toString()
+            .isNotEmpty)
+          () {
+            final name = (c['nombre'] ?? (c['plato'] as Map)['nombre']).toString();
+            final qty = _asInt(c['cantidad'], 1);
+            return qty > 1 ? '${qty}x $name' : name;
+          }(),
+    ];
+  }
+
   OwnerOrder _mapOrder(Map<String, dynamic> json) {
     final almuerzo = json['almuerzo'] is Map
         ? Map<String, dynamic>.from(json['almuerzo'] as Map)
@@ -432,7 +448,12 @@ class ApiOwnerRepository
             : (rawTotalCents > 0
                 ? rawTotalCents
                 : (baseCents > 0 ? baseCents + recargoCents : 0)));
-    final amount = Money.fromCents(resolvedTotalCents);
+    final planCreditsUsed = _asInt(json['planCreditsUsed']);
+    final cashToCollectCents = _asInt(json['cashToCollectCents']);
+    final cashItems = _cartaItemLabels(json['cartaItems']);
+    final amount = Money.fromCents(
+      paidByPlan && cashToCollectCents > 0 ? cashToCollectCents : resolvedTotalCents,
+    );
     final validated = estado == 'CANJEADA';
 
     if (id.isNotEmpty && number.isNotEmpty) {
@@ -465,6 +486,9 @@ class ApiOwnerRepository
       dinerName: dinerName,
       amount: amount,
       totalCents: resolvedTotalCents,
+      planCreditsUsed: planCreditsUsed,
+      cashToCollectCents: cashToCollectCents,
+      cashItems: cashItems,
       createdAt: createdAt,
       soup: soup,
       main: mainDish,
@@ -718,6 +742,9 @@ class ApiOwnerRepository
 
       final remaining = _asNullableInt(data['almuerzosRestantes']);
       final daysToExpire = _asNullableInt(data['diasParaVencer']);
+      final planCreditsUsed = _asInt(data['planCreditsUsed']);
+      final cashToCollectCents = _asInt(data['cashToCollectCents']);
+      final cashItems = _cartaItemLabels(data['cartaItems']);
 
       eventsService.track(
         'dueno.qr_validado',
@@ -803,6 +830,9 @@ class ApiOwnerRepository
             redeemedAt: redeemedAt ?? DateTime.now(),
             dishName: dishDisplay,
             actionRequired: 'NINGUNA',
+            planCreditsUsed: planCreditsUsed,
+            cashToCollectCents: cashToCollectCents,
+            cashItems: cashItems,
           );
         case 'OK_ADVERTENCIA':
           final lowDays = daysToExpire != null && daysToExpire <= 3;
@@ -821,6 +851,9 @@ class ApiOwnerRepository
             redeemedAt: redeemedAt ?? DateTime.now(),
             dishName: dishDisplay,
             actionRequired: 'VENDER_PLAN',
+            planCreditsUsed: planCreditsUsed,
+            cashToCollectCents: cashToCollectCents,
+            cashItems: cashItems,
           );
         case 'DUPLICADO':
           final String dupLine;
@@ -1028,8 +1061,37 @@ class ApiOwnerRepository
       cashStatus = 'Cuadra';
     }
 
+    var planCreditsToday = _asInt(cierre['planCreditsUsed'], -1);
+    var cashToCollectToday = _asInt(cierre['cashToCollectCents'], -1);
+    if (planCreditsToday < 0 || cashToCollectToday < 0) {
+      // El cierre aún no trae el desglose híbrido: se suma desde los pedidos servidos de hoy.
+      planCreditsToday = planCreditsToday < 0 ? 0 : planCreditsToday;
+      cashToCollectToday = cashToCollectToday < 0 ? 0 : cashToCollectToday;
+      try {
+        final servidas = await guard(
+          () => _api.getList(
+            '${ApiConfig.v1}/caja/pedidos',
+            query: {'estado': 'SERVIDA'},
+            restaurant: true,
+          ),
+        );
+        var credits = 0;
+        var cash = 0;
+        for (final p in servidas.whereType<Map>()) {
+          final fecha = (p['fecha'] ?? '').toString();
+          if (fecha.isNotEmpty && fecha != today) continue;
+          credits += _asInt(p['planCreditsUsed']);
+          cash += _asInt(p['cashToCollectCents']);
+        }
+        if (cierre['planCreditsUsed'] == null) planCreditsToday = credits;
+        if (cierre['cashToCollectCents'] == null) cashToCollectToday = cash;
+      } catch (_) {}
+    }
+
     return TransactionSummary(
       date: EcuadorTime.now(),
+      planCreditsUsedToday: planCreditsToday,
+      cashToCollectToday: cashToCollectToday,
       lunchesRedeemedToday: lunchesWithPlan,
       plansSoldToday: plansSoldToday,
       totalIncomeToday: Money.fromCents(totalIncomeCents),
@@ -2674,6 +2736,9 @@ class ApiOwnerRepository
         passId: ordKey,
         dishName: dishSummary,
         actionRequired: 'NINGUNA',
+        planCreditsUsed: order.planCreditsUsed,
+        cashToCollectCents: order.cashToCollectCents,
+        cashItems: order.cashItems,
       );
     } finally {
       _inFlightOrders.remove(order.number);
@@ -2928,14 +2993,24 @@ class ApiOwnerRepository
     try {
       final results = await Future.wait([
         guard(
-          () => _api.getList(
+          () => _api.send<dynamic>(
+            'GET',
             '${ApiConfig.v1}/restaurante/mesas',
             restaurant: true,
           ),
         ),
         _fetchRestaurantMap().catchError((_) => const <String, dynamic>{}),
       ]);
-      final list = results[0] as List<dynamic>;
+      final rawList = results[0];
+      final List<dynamic> list = rawList is List
+          ? rawList
+          : (rawList is Map
+              ? ((rawList['items'] ?? rawList['mesas'] ?? rawList['data'])
+                      is List
+                  ? (rawList['items'] ?? rawList['mesas'] ?? rawList['data'])
+                      as List<dynamic>
+                  : const <dynamic>[])
+              : const <dynamic>[]);
       final rest = results[1] as Map<String, dynamic>;
       final rawRecargo = _asInt(rest['recargoParaLlevarCentavos']);
       final recargoUnitCents = rawRecargo > 0 ? rawRecargo : 25;

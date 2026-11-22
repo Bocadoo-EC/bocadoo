@@ -624,6 +624,15 @@ class ActiveOrder {
   /// Lo que pagó en caja al recibirlo (solo con estado ENTREGADO).
   final double? paidAmount;
 
+  /// Orden híbrida (split-tender): cupos de plan consumidos.
+  final int planCreditsUsed;
+
+  /// Saldo en efectivo que el comensal paga en el local (carta / extras).
+  final int cashToCollectCents;
+
+  /// Canal en que se paga el saldo (p. ej. `EFECTIVO`), si el backend lo informa.
+  final String? balancePaymentChannel;
+
   bool get isDelivered => status == 'ENTREGADO';
 
   int get effectiveBaseCents =>
@@ -661,6 +670,9 @@ class ActiveOrder {
     this.hasPlan = false,
     this.expiresAt,
     this.paidAmount,
+    this.planCreditsUsed = 0,
+    this.cashToCollectCents = 0,
+    this.balancePaymentChannel,
   });
 }
 
@@ -1100,6 +1112,15 @@ class ScanResult {
   final String? dishName;
   final String? actionRequired; // VENDER_PLAN, COBRAR_SUELTO, NINGUNA
 
+  /// Orden híbrida: cupos de plan consumidos en este canje.
+  final int planCreditsUsed;
+
+  /// Saldo a cobrar en caja por ítems no cubiertos por el plan (carta / extras).
+  final int cashToCollectCents;
+
+  /// Detalle de los ítems no cubiertos por el plan.
+  final List<String> cashItems;
+
   const ScanResult({
     required this.isValid,
     required this.outcome,
@@ -1116,6 +1137,9 @@ class ScanResult {
     this.redeemedAt,
     this.dishName,
     this.actionRequired,
+    this.planCreditsUsed = 0,
+    this.cashToCollectCents = 0,
+    this.cashItems = const [],
   });
 
   bool get isSuccess => outcome == 'VERDE';
@@ -1139,6 +1163,9 @@ class ScanResult {
     DateTime? redeemedAt,
     String? dishName,
     String? actionRequired,
+    int? planCreditsUsed,
+    int? cashToCollectCents,
+    List<String>? cashItems,
   }) {
     return ScanResult(
       isValid: isValid ?? this.isValid,
@@ -1156,6 +1183,9 @@ class ScanResult {
       redeemedAt: redeemedAt ?? this.redeemedAt,
       dishName: dishName ?? this.dishName,
       actionRequired: actionRequired ?? this.actionRequired,
+      planCreditsUsed: planCreditsUsed ?? this.planCreditsUsed,
+      cashToCollectCents: cashToCollectCents ?? this.cashToCollectCents,
+      cashItems: cashItems ?? this.cashItems,
     );
   }
 }
@@ -1215,6 +1245,12 @@ class TransactionSummary {
   final String cashStatus; // Cuadra, Falta, Sobra
   final List<TransactionItem> transactions;
 
+  /// Cupos de plan redimidos hoy (`planCreditsUsed` de las órdenes).
+  final int planCreditsUsedToday;
+
+  /// Efectivo recaudado hoy por carta / extras (`cashToCollectCents`).
+  final int cashToCollectToday;
+
   const TransactionSummary({
     required this.date,
     this.lunchesRedeemedToday = 0,
@@ -1225,6 +1261,8 @@ class TransactionSummary {
     this.cashDifference = 0.0,
     this.cashStatus = 'Cuadra',
     this.transactions = const [],
+    this.planCreditsUsedToday = 0,
+    this.cashToCollectToday = 0,
   });
 
   TransactionSummary copyWith({
@@ -1237,6 +1275,8 @@ class TransactionSummary {
     double? cashDifference,
     String? cashStatus,
     List<TransactionItem>? transactions,
+    int? planCreditsUsedToday,
+    int? cashToCollectToday,
   }) {
     return TransactionSummary(
       date: date ?? this.date,
@@ -1248,6 +1288,8 @@ class TransactionSummary {
       cashDifference: cashDifference ?? this.cashDifference,
       cashStatus: cashStatus ?? this.cashStatus,
       transactions: transactions ?? this.transactions,
+      planCreditsUsedToday: planCreditsUsedToday ?? this.planCreditsUsedToday,
+      cashToCollectToday: cashToCollectToday ?? this.cashToCollectToday,
     );
   }
 }

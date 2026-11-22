@@ -33,6 +33,7 @@ class IndividualMenuAccordion extends StatefulWidget {
     required this.onSelectBreakfast,
     required this.onSelectDrink,
     required this.onSelectDessert,
+    this.includeDrinkDessert = false,
   });
 
   final Restaurant restaurant;
@@ -47,6 +48,7 @@ class IndividualMenuAccordion extends StatefulWidget {
   final ValueChanged<String> onSelectBreakfast;
   final ValueChanged<String> onSelectDrink;
   final ValueChanged<String> onSelectDessert;
+  final bool includeDrinkDessert;
 
   @override
   State<IndividualMenuAccordion> createState() => _IndividualMenuAccordionState();
@@ -87,8 +89,10 @@ class _IndividualMenuAccordionState extends State<IndividualMenuAccordion> {
     return [
       if (_soups.isNotEmpty) _AccordionSection.soup,
       if (_mains.isNotEmpty) _AccordionSection.main,
-      if (_hasDrinkSection) _AccordionSection.drink,
-      if (_hasDessertSection) _AccordionSection.dessert,
+      if (widget.includeDrinkDessert && _hasDrinkSection)
+        _AccordionSection.drink,
+      if (widget.includeDrinkDessert && _hasDessertSection)
+        _AccordionSection.dessert,
     ];
   }
 

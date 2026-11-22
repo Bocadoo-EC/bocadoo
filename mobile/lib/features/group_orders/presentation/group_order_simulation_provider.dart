@@ -97,18 +97,24 @@ class GroupOrderSimulationStore extends ChangeNotifier {
           .where((s) => s.shortCode == tableId.toUpperCase())
           .firstOrNull;
 
+  /// Calcula la penalización por cancelación tardía / No-Show ($0,50 por cupo, tope $2,50).
+  static int lateCancellationPenaltyCents(int confirmedParticipants) =>
+      (confirmedParticipants.clamp(1, 5) * 50);
+
   /// Pedidos grupales activos (recolectando o confirmados) para "Pedidos en camino" del Dueño.
   List<PendingTable> get confirmedOwnerTables => ownerTablesFor('');
 
   List<PendingTable> ownerTablesFor(String restaurantId) {
     final out = <PendingTable>[];
+    final targetRid = restaurantId.trim().toLowerCase();
     for (final s in _sessionsById.values) {
       final activeStatus = s.status == GroupOrderStatus.collecting ||
           s.status == GroupOrderStatus.confirmed;
       if (!activeStatus) continue;
-      if (restaurantId.isNotEmpty &&
-          s.restaurantId.isNotEmpty &&
-          s.restaurantId != restaurantId) {
+      final sessionRid = s.restaurantId.trim().toLowerCase();
+      if (targetRid.isNotEmpty &&
+          sessionRid.isNotEmpty &&
+          sessionRid != targetRid) {
         continue;
       }
       final takeawayCount =
