@@ -363,7 +363,17 @@ class _RegisterOwnerScreenState extends ConsumerState<RegisterOwnerScreen> {
           : null,
       prefixText: prefixText,
       hintText: hintText,
-      errorText: error,
+      error: error == null
+          ? null
+          : Text(
+              error,
+              softWrap: true,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                color: cs.error,
+              ),
+            ),
       errorMaxLines: errorMaxLines,
       enabledBorder: validEnabledBorder,
       focusedBorder: validFocusedBorder,
@@ -665,14 +675,22 @@ class _RegisterOwnerScreenState extends ConsumerState<RegisterOwnerScreen> {
           }
         });
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            result.errorMessage ??
-                'No pudimos registrar tu restaurante. Inténtalo de nuevo.',
+      final activeErrorCount =
+          _errors.values.where((v) => v != null && v.isNotEmpty).length;
+      final onlyDuplicateEmailError =
+          _duplicateEmailValue != null &&
+          activeErrorCount == 1 &&
+          _errors['email'] != null;
+      if (!onlyDuplicateEmailError) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              result.errorMessage ??
+                  'No pudimos registrar tu restaurante. Inténtalo de nuevo.',
+            ),
           ),
-        ),
-      );
+        );
+      }
       return;
     }
     // D4: pasar precio a A7 para calcular planes
