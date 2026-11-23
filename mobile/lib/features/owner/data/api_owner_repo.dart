@@ -455,7 +455,13 @@ class ApiOwnerRepository
                     ? rawTotalCents
                     : (baseCents > 0 ? baseCents + recargoCents : 0)));
     final planCreditsUsed = _asInt(json['planCreditsUsed']);
-    final cashToCollectCents = _asInt(json['cashToCollectCents']);
+    final rawCashToCollect =
+        json['cashToCollectCents'] ??
+        json['saldoPorCobrarCentavos'] ??
+        json['porCobrarCentavos'];
+    final cashToCollectCents = rawCashToCollect != null
+        ? _asInt(rawCashToCollect)
+        : (paidByPlan ? rawTotalCents : 0);
     final cashItems = _cartaItemLabels(json['cartaItems']);
     final amount = Money.fromCents(
       paidByPlan && cashToCollectCents > 0
@@ -3008,9 +3014,11 @@ class ApiOwnerRepository
           customerName: 'Pedido #${order.number} · ${order.dinerName}',
           type: order.paidByPlan ? 'Canje de plan' : 'Pedido #${order.number}',
           amount: order.paidByPlan
-              ? 0
+              ? Money.fromCents(order.cashToCollectCents)
               : Money.fromCents(order.effectiveTotalCents),
-          paymentMethod: order.paidByPlan ? 'Plan' : paymentMethod.label,
+          paymentMethod: order.paidByPlan
+              ? (order.cashToCollectCents > 0 ? paymentMethod.label : 'Plan')
+              : paymentMethod.label,
           timestamp: scanTs,
           detail: order.paidByPlan
               ? 'Canje de plan · ${dishSummary ?? 'Almuerzo del día'} (Prepagado)'
@@ -3213,7 +3221,7 @@ class ApiOwnerRepository
           _idempotency.done(intent);
         }
       } else {
-        porCobrarCents = entry.paidByPlan ? 0 : Money.toCents(entry.amount);
+        porCobrarCents = Money.toCents(entry.amount);
       }
 
       await guard(

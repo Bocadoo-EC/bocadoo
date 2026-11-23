@@ -1523,6 +1523,19 @@ class MockOwnerRepository
         timestamp: now,
         detail: 'Canje de plan · $dishLabel (Prepagado)',
       ));
+      if (order.cashToCollectCents > 0) {
+        _transactions.add(TransactionItem(
+          id: _nextId('ext'),
+          customerName: 'Pedido #${order.number} · ${order.dinerName}',
+          type: 'Extras / Diferencia',
+          amount: Money.fromCents(order.cashToCollectCents),
+          paymentMethod: paymentMethod.label,
+          timestamp: now,
+          detail: order.cashItems.isNotEmpty
+              ? order.cashItems.join(', ')
+              : (order.takeaway ? 'Recargo para llevar' : null),
+        ));
+      }
       order
         ..validated = true
         ..status = PreorderStatus.delivered
@@ -1539,6 +1552,9 @@ class MockOwnerRepository
         redemptionId: r.id,
         redeemedAt: now,
         actionRequired: 'NINGUNA',
+        planCreditsUsed: 1,
+        cashToCollectCents: order.cashToCollectCents,
+        cashItems: order.cashItems,
       );
     }
 

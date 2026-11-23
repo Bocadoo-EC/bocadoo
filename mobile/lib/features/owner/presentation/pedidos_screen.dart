@@ -24,15 +24,8 @@ String _arrivalLabel(OwnerOrder order) {
   return OwnerFormat.time24(target);
 }
 
-/// "Locro de papa con queso" → "Locro de papa".
-String _short(String? dish) {
-  if (dish == null) return '';
-  final i = dish.indexOf(' con ');
-  return i > 0 ? dish.substring(0, i) : dish;
-}
-
-/// O12 · Pedidos en camino: preórdenes por cobrar (Efectivo / Transfer. / Deuna) y entregar.
-/// [chargeNumber] abre directo el modal Confirmar cobro (QR `BCD-ORD-…` del escáner).
+/// O12 · Pedidos en camino: preórdenes por cobrar o canjear (Efectivo / Transfer. / Deuna) y entregar.
+/// [chargeNumber] abre directo el modal POS (QR `BCD-ORD-…` del escáner).
 class PedidosScreen extends ConsumerStatefulWidget {
   const PedidosScreen({super.key, this.chargeNumber});
 
@@ -67,31 +60,13 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
         );
         return;
       }
-      _openDirectConfirmForOrder(order);
+      _openPosChargeSheet(order);
     });
   }
 
-  Future<void> _openDirectConfirmForOrder(OwnerOrder order) async {
-    if (order.paidByPlan && order.cashToCollectCents <= 0) {
-      if (!order.validated) {
-        final ok = await _openSheet<bool>(_ValidateOrderSheet(order: order));
-        if (ok != true || !mounted) return;
-      }
-      await _confirmOrder(order);
-      return;
-    }
-    await _openPosChargeSheet(order);
-  }
-
-  /// Flujo principal de tarjeta:
-  /// - Con plan sin saldo adicional: confirma canje y entrega.
-  /// - Con cobro pendiente (sin plan o con extras/carta): abre escáner QR o POS Confirmar cobro.
+  /// Flujo unificado de tarjeta (`Cobrar y entregar` y `Canjear y entregar`):
+  /// navega directo al escáner QR pasando el pedido esperado y luego abre el modal POS.
   Future<void> _act(OwnerOrder order) async {
-    if (order.paidByPlan && order.cashToCollectCents <= 0) {
-      await _openDirectConfirmForOrder(order);
-      return;
-    }
-
     final verifiedOrder = await context.push<OwnerOrder?>(
       '/owner/scanner',
       extra: order,
@@ -478,6 +453,11 @@ class _OrderCard extends StatelessWidget {
                 if (order.soup != null || order.main != null) const TextSpan(text: '\n'),
                 line('Jugo', order.drink!),
               ],
+              if (order.cashItems.isNotEmpty) ...[
+                if (order.soup != null || order.main != null || order.drink != null)
+                  const TextSpan(text: '\n'),
+                line('Carta / Extras', order.cashItems.join(', ')),
+              ],
               const TextSpan(text: '\n'),
               line(
                 'Modalidad',
@@ -490,6 +470,12 @@ class _OrderCard extends StatelessWidget {
               if (!order.paidByPlan) ...[
                 const TextSpan(text: '\n'),
                 line('Pago', 'Pago por confirmar en caja'),
+              ] else if (order.cashToCollectCents > 0) ...[
+                const TextSpan(text: '\n'),
+                line(
+                  'Saldo por cobrar',
+                  OwnerFormat.money(Money.fromCents(order.cashToCollectCents)),
+                ),
               ],
             ]),
             style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, height: 1.4, color: colors.onSurface),
@@ -586,72 +572,8 @@ class _OrderCard extends StatelessWidget {
   }
 }
 
-/// Hoja "Canjear pedido #N": un pedido cubierto por plan descuenta 1 almuerzo
-/// mediante `POST /v1/caja/pedidos/{id}/canjear` y se entrega. No se cobra nada.
-class _ValidateOrderSheet extends StatelessWidget {
-  const _ValidateOrderSheet({required this.order});
-
-  final OwnerOrder order;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colorScheme;
-    final dishes = [_short(order.soup), _short(order.main)].where((d) => d.isNotEmpty).join(' + ');
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Row(children: [
-            Expanded(
-              child: Text('Canjear pedido #${order.number}',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: colors.onSurface)),
-            ),
-            IconButton.filledTonal(
-              tooltip: 'Cerrar',
-              onPressed: () => Navigator.of(context).pop(false),
-              icon: const Icon(Icons.close_rounded),
-            ),
-          ]),
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: colors.primaryContainer.withValues(alpha: 0.35),
-              borderRadius: BorderRadius.circular(18),
-            ),
-            child: Column(children: [
-              CircleAvatar(
-                radius: 28,
-                backgroundColor: colors.primary,
-                child: Icon(Icons.qr_code_2_rounded, size: 32, color: colors.onPrimary),
-              ),
-              const SizedBox(height: 10),
-              Text(order.dinerName, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900, color: colors.onSurface)),
-              if (dishes.isNotEmpty)
-                Text(dishes, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant)),
-              const SizedBox(height: 4),
-              Text('Llega ${_arrivalLabel(order)} · Plan activo (Prepagado)',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: colors.primary)),
-            ]),
-          ),
-          const SizedBox(height: 8),
-          Text('Se descuenta 1 almuerzo de su plan. No se cobra nada.',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant)),
-          const SizedBox(height: 14),
-          ElevatedButton.icon(
-            onPressed: () => Navigator.of(context).pop(true),
-            icon: const Icon(Icons.check_circle_outline_rounded),
-            label: const Text('Canjear y entregar'),
-          ),
-        ]),
-      ),
-    );
-  }
-}
-
-/// Modal POS "Confirmar cobro" abierto al validar el QR de una preorden sin plan.
-/// Reutiliza el patrón de acordeón + 3 métodos + bloque de vuelto de caja POS.
+/// Modal POS unificado ("Confirmar canje" para pedidos con plan activo y
+/// "Confirmar cobro" para pedidos sin plan) abierto tras validar el QR.
 class _OrderConfirmChargeSheet extends StatefulWidget {
   const _OrderConfirmChargeSheet({required this.order});
 
@@ -688,17 +610,21 @@ class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
     final colors = context.colorScheme;
     final b = context.bocadooColors;
     final order = widget.order;
+    final isPlan = order.paidByPlan;
     final totalCents = order.effectiveTotalCents;
+    final hasCashToCollect = totalCents > 0;
     final arrival = _arrivalLabel(order);
     final dishesParts = [
       if (order.soup != null && order.soup!.trim().isNotEmpty) order.soup!.trim(),
       if (order.main != null && order.main!.trim().isNotEmpty) order.main!.trim(),
+      if (order.drink != null && order.drink!.trim().isNotEmpty) order.drink!.trim(),
+      ...order.cashItems,
     ];
     final dishesSummary =
         dishesParts.isNotEmpty ? dishesParts.join(' · ') : 'Almuerzo del día';
     final modalityLabel = order.takeaway ? 'Para llevar' : 'En local';
 
-    final isCash = _method == OwnerPayMethod.efectivo && totalCents > 0;
+    final isCash = _method == OwnerPayMethod.efectivo && hasCashToCollect;
     final receivedCents = isCash ? _parseCents(_cash.text) : null;
     final invalid =
         isCash && _cash.text.trim().isNotEmpty && receivedCents == null;
@@ -710,282 +636,224 @@ class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
     final bills = [5, 10, 20].where((v) => v * 100 >= totalCents).toList();
     final totalFormatted = _fmt(totalCents);
 
-    return SafeArea(
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(
-          20,
-          0,
-          20,
-          MediaQuery.of(context).viewInsets.bottom + 20,
-        ),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Confirmar cobro',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w900,
-                        color: colors.onSurface,
-                      ),
-                    ),
-                  ),
-                  IconButton.filledTonal(
-                    tooltip: 'Cerrar',
-                    onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(Icons.close_rounded),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Material(
-                color: colors.primaryContainer.withValues(alpha: 0.4),
-                borderRadius: BorderRadius.circular(18),
-                clipBehavior: Clip.antiAlias,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    InkWell(
-                      onTap: () => setState(() => _expanded = !_expanded),
-                      child: Padding(
-                        padding: const EdgeInsets.all(14),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    '${order.dinerName} · Pedido #${order.number}',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontSize: 13.5,
-                                      fontWeight: FontWeight.w800,
-                                      color: colors.onSurfaceVariant,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  totalFormatted,
-                                  style: TextStyle(
-                                    fontSize: 24,
-                                    fontWeight: FontWeight.w900,
-                                    color: colors.primary,
-                                  ),
-                                ),
-                                const SizedBox(width: 4),
-                                Icon(
-                                  _expanded
-                                      ? Icons.keyboard_arrow_up_rounded
-                                      : Icons.keyboard_arrow_down_rounded,
-                                  size: 22,
-                                  color: colors.primary,
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              '$dishesSummary · $modalityLabel',
-                              maxLines: _expanded ? 3 : 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 12.5,
-                                fontWeight: FontWeight.w700,
-                                color: colors.onSurface,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    AnimatedCrossFade(
-                      firstChild: const SizedBox.shrink(),
-                      secondChild: Container(
-                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                        decoration: BoxDecoration(
-                          border: Border(
-                            top: BorderSide(
-                              color: colors.outlineVariant.withValues(alpha: 0.6),
-                            ),
-                          ),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            const SizedBox(height: 10),
-                            Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: colors.surface,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  _OrderDetailLine(
-                                    label: 'Turno',
-                                    value: '#${order.number} · Llega $arrival',
-                                  ),
-                                  if (order.soup != null &&
-                                      order.soup!.trim().isNotEmpty)
-                                    _OrderDetailLine(
-                                      label: 'Sopa',
-                                      value: order.soup!.trim(),
-                                    ),
-                                  if (order.main != null &&
-                                      order.main!.trim().isNotEmpty)
-                                    _OrderDetailLine(
-                                      label: 'Segundo',
-                                      value: order.main!.trim(),
-                                    ),
-                                  if (order.drink != null &&
-                                      order.drink!.trim().isNotEmpty)
-                                    _OrderDetailLine(
-                                      label: 'Jugo',
-                                      value: order.drink!.trim(),
-                                    ),
-                                  if (order.cashItems.isNotEmpty)
-                                    _OrderDetailLine(
-                                      label: 'Carta / Extras',
-                                      value: order.cashItems.join(', '),
-                                    ),
-                                  _OrderDetailLine(
-                                    label: 'Modalidad',
-                                    value: order.takeaway
-                                        ? 'Para llevar (+${_fmt(order.takeawaySurchargeCents)})'
-                                        : 'En local',
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      crossFadeState: _expanded
-                          ? CrossFadeState.showSecond
-                          : CrossFadeState.showFirst,
-                      duration: const Duration(milliseconds: 180),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 14),
-              const OwnerSectionLabel('Método de pago'),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  for (final (m, icon) in const [
-                    (OwnerPayMethod.efectivo, Icons.payments_outlined),
-                    (
-                      OwnerPayMethod.transferencia,
-                      Icons.account_balance_outlined
-                    ),
-                    (OwnerPayMethod.deuna, Icons.bolt_rounded),
-                  ]) ...[
-                    if (m != OwnerPayMethod.efectivo) const SizedBox(width: 8),
-                    Expanded(
-                      child: Material(
-                        color: _method == m
-                            ? colors.primary
-                            : Theme.of(context).scaffoldBackgroundColor,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
-                          side: BorderSide(
-                            color: _method == m
-                                ? colors.primary
-                                : colors.outlineVariant,
-                          ),
-                        ),
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(14),
-                          onTap: () => setState(() {
-                            _method = m;
-                            if (m != OwnerPayMethod.efectivo) _cash.clear();
-                          }),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  icon,
-                                  size: 20,
-                                  color: _method == m
-                                      ? colors.onPrimary
-                                      : colors.onSurface,
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  m.shortLabel,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w900,
-                                    color: _method == m
-                                        ? colors.onPrimary
-                                        : colors.onSurface,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-              if (isCash) ...[
-                const SizedBox(height: 12),
+    final mq = MediaQuery.of(context);
+    final keyboard = mq.viewInsets.bottom;
+    final sysNav = mq.viewPadding.bottom;
+    final safeBottom = mq.padding.bottom;
+    final navClearance =
+        keyboard > 0 ? 0.0 : (sysNav - safeBottom).clamp(0.0, double.infinity);
+
+    final primaryButtonLabel = isPlan
+        ? (hasCashToCollect
+            ? 'Confirmar canje y cobro · $totalFormatted'
+            : 'Confirmar canje y entrega')
+        : 'Confirmar cobro y entrega · $totalFormatted';
+
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.9,
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: EdgeInsets.only(bottom: keyboard),
+          child: SingleChildScrollView(
+            padding: EdgeInsets.fromLTRB(20, 0, 20, navClearance + 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
                 Row(
                   children: [
                     Expanded(
-                      child: TextField(
-                        controller: _cash,
-                        onChanged: (_) => setState(() {}),
-                        keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true,
-                        ),
-                        inputFormatters: [
-                          FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
-                        ],
-                        decoration: InputDecoration(
-                          isDense: true,
-                          prefixText: '\$ ',
-                          hintText: 'Efectivo recibido (opcional)',
-                          errorText: invalid
-                              ? 'Monto inválido'
-                              : (shortfall
-                                  ? 'Faltan ${_fmt(totalCents - receivedCents)}'
-                                  : null),
+                      child: Text(
+                        isPlan ? 'Confirmar canje' : 'Confirmar cobro',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w900,
+                          color: colors.onSurface,
                         ),
                       ),
                     ),
-                    if (changeCents > 0) ...[
-                      const SizedBox(width: 10),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 8,
+                    IconButton.filledTonal(
+                      tooltip: 'Cerrar',
+                      onPressed: () => Navigator.of(context).pop(),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Material(
+                  color: colors.primaryContainer.withValues(alpha: 0.4),
+                  borderRadius: BorderRadius.circular(18),
+                  clipBehavior: Clip.antiAlias,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      InkWell(
+                        onTap: () => setState(() => _expanded = !_expanded),
+                        child: Padding(
+                          padding: const EdgeInsets.all(14),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      '${order.dinerName} · Pedido #${order.number}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 13.5,
+                                        fontWeight: FontWeight.w800,
+                                        color: colors.onSurfaceVariant,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    totalFormatted,
+                                    style: TextStyle(
+                                      fontSize: 24,
+                                      fontWeight: FontWeight.w900,
+                                      color: colors.primary,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Icon(
+                                    _expanded
+                                        ? Icons.keyboard_arrow_up_rounded
+                                        : Icons.keyboard_arrow_down_rounded,
+                                    size: 22,
+                                    color: colors.primary,
+                                  ),
+                                ],
+                              ),
+                              if (isPlan) ...[
+                                const SizedBox(height: 6),
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 4,
+                                  crossAxisAlignment: WrapCrossAlignment.center,
+                                  children: [
+                                    OwnerBadge(
+                                      label: 'Plan activo · -1 almuerzo',
+                                      background: b.successContainer,
+                                      foreground: b.onSuccessContainer,
+                                    ),
+                                  ],
+                                ),
+                              ],
+                              const SizedBox(height: 6),
+                              Text(
+                                '$dishesSummary · $modalityLabel',
+                                maxLines: _expanded ? 4 : 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: colors.onSurface,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                        decoration: BoxDecoration(
-                          color: b.successContainer,
-                          borderRadius: BorderRadius.circular(12),
+                      ),
+                      AnimatedCrossFade(
+                        firstChild: const SizedBox.shrink(),
+                        secondChild: Container(
+                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                          decoration: BoxDecoration(
+                            border: Border(
+                              top: BorderSide(
+                                color: colors.outlineVariant.withValues(alpha: 0.6),
+                              ),
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              const SizedBox(height: 10),
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: colors.surface,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    _OrderDetailLine(
+                                      label: 'Turno',
+                                      value: '#${order.number} · Llega $arrival',
+                                    ),
+                                    if (order.soup != null &&
+                                        order.soup!.trim().isNotEmpty)
+                                      _OrderDetailLine(
+                                        label: 'Sopa',
+                                        value: order.soup!.trim(),
+                                      ),
+                                    if (order.main != null &&
+                                        order.main!.trim().isNotEmpty)
+                                      _OrderDetailLine(
+                                        label: 'Segundo',
+                                        value: order.main!.trim(),
+                                      ),
+                                    if (order.drink != null &&
+                                        order.drink!.trim().isNotEmpty)
+                                      _OrderDetailLine(
+                                        label: 'Jugo',
+                                        value: order.drink!.trim(),
+                                      ),
+                                    if (order.cashItems.isNotEmpty)
+                                      _OrderDetailLine(
+                                        label: 'Carta / Extras',
+                                        value: order.cashItems.join(', '),
+                                      ),
+                                    _OrderDetailLine(
+                                      label: 'Modalidad',
+                                      value: order.takeaway
+                                          ? 'Para llevar (+${_fmt(order.takeawaySurchargeCents)})'
+                                          : 'En local',
+                                    ),
+                                    if (isPlan)
+                                      _OrderDetailLine(
+                                        label: 'Saldo por cobrar',
+                                        value: totalFormatted,
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
+                        crossFadeState: _expanded
+                            ? CrossFadeState.showSecond
+                            : CrossFadeState.showFirst,
+                        duration: const Duration(milliseconds: 180),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    const OwnerSectionLabel('Método de pago'),
+                    if (!hasCashToCollect) ...[
+                      const SizedBox(width: 8),
+                      Expanded(
                         child: Text(
-                          'Cambio ${_fmt(changeCents)}',
+                          'Cubierto por tu plan · \$0,00',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.end,
                           style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w900,
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w800,
                             color: b.success,
                           ),
                         ),
@@ -994,38 +862,162 @@ class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
                   ],
                 ),
                 const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 6,
+                Row(
                   children: [
-                    for (final v in bills)
-                      ActionChip(
-                        label: Text('\$$v'),
-                        onPressed: () => setState(() => _cash.text = '$v'),
+                    for (final (m, icon) in const [
+                      (OwnerPayMethod.efectivo, Icons.payments_outlined),
+                      (
+                        OwnerPayMethod.transferencia,
+                        Icons.account_balance_outlined
                       ),
-                    ActionChip(
-                      label: const Text('Exacto'),
-                      onPressed: () => setState(() => _cash.clear()),
-                    ),
+                      (OwnerPayMethod.deuna, Icons.bolt_rounded),
+                    ]) ...[
+                      if (m != OwnerPayMethod.efectivo) const SizedBox(width: 8),
+                      Expanded(
+                        child: Builder(
+                          builder: (context) {
+                            final selected = hasCashToCollect && _method == m;
+                            final bg = !hasCashToCollect
+                                ? colors.surfaceContainerHighest.withValues(alpha: 0.45)
+                                : (selected
+                                    ? colors.primary
+                                    : Theme.of(context).scaffoldBackgroundColor);
+                            final fg = !hasCashToCollect
+                                ? colors.onSurfaceVariant.withValues(alpha: 0.55)
+                                : (selected ? colors.onPrimary : colors.onSurface);
+                            return Material(
+                              color: bg,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                                side: BorderSide(
+                                  color: selected
+                                      ? colors.primary
+                                      : colors.outlineVariant.withValues(
+                                          alpha: hasCashToCollect ? 1 : 0.6,
+                                        ),
+                                ),
+                              ),
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(14),
+                                onTap: hasCashToCollect
+                                    ? () => setState(() {
+                                          _method = m;
+                                          if (m != OwnerPayMethod.efectivo) {
+                                            _cash.clear();
+                                          }
+                                        })
+                                    : null,
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(icon, size: 20, color: fg),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        m.shortLabel,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w900,
+                                          color: fg,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
                   ],
                 ),
-              ],
-              const SizedBox(height: 16),
-              ElevatedButton.icon(
-                onPressed: canConfirm
-                    ? () => Navigator.of(context).pop((
-                          method: _method,
-                          changeCents: changeCents > 0 ? changeCents : 0,
-                        ))
-                    : null,
-                icon: const Icon(Icons.check_circle_outline_rounded),
-                label: Text(
-                  'Confirmar cobro y entrega · $totalFormatted',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                if (isCash) ...[
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _cash,
+                          onChanged: (_) => setState(() {}),
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          inputFormatters: [
+                            FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+                          ],
+                          decoration: InputDecoration(
+                            isDense: true,
+                            prefixText: '\$ ',
+                            hintText: 'Efectivo recibido (opcional)',
+                            errorText: invalid
+                                ? 'Monto inválido'
+                                : (shortfall
+                                    ? 'Faltan ${_fmt(totalCents - receivedCents)}'
+                                    : null),
+                          ),
+                        ),
+                      ),
+                      if (changeCents > 0) ...[
+                        const SizedBox(width: 10),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: b.successContainer,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            'Cambio ${_fmt(changeCents)}',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w900,
+                              color: b.success,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: [
+                      for (final v in bills)
+                        ActionChip(
+                          label: Text('\$$v'),
+                          onPressed: () => setState(() => _cash.text = '$v'),
+                        ),
+                      ActionChip(
+                        label: const Text('Exacto'),
+                        onPressed: () => setState(() => _cash.clear()),
+                      ),
+                    ],
+                  ),
+                ],
+                const SizedBox(height: 16),
+                ElevatedButton.icon(
+                  onPressed: canConfirm
+                      ? () => Navigator.of(context).pop((
+                            method: _method,
+                            changeCents: changeCents > 0 ? changeCents : 0,
+                          ))
+                      : null,
+                  icon: const Icon(Icons.check_circle_outline_rounded),
+                  label: Text(
+                    primaryButtonLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

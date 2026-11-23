@@ -246,7 +246,9 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
                   camera: _camera,
                   onClose: _close,
                   title: expected != null
-                      ? 'Cobrar pedido #${expected.number}'
+                      ? (expected.paidByPlan
+                          ? 'Canjear pedido #${expected.number}'
+                          : 'Cobrar pedido #${expected.number}')
                       : (widget.pickCodeOnly ? widget.pickTitle : 'Escanear QR'),
                 ),
                 if (expected != null)
@@ -262,7 +264,9 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(
-                        '${expected.dinerName} · Escanea su QR para confirmar cobro',
+                        expected.paidByPlan
+                            ? '${expected.dinerName} · Escanea su QR para confirmar canje'
+                            : '${expected.dinerName} · Escanea su QR para confirmar cobro',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         textAlign: TextAlign.center,
@@ -488,7 +492,11 @@ class _SimulatorSheet extends StatelessWidget {
             ListTile(
               leading: Icon(Icons.qr_code_2_rounded, color: scheme.primary),
               title: Text('Pedido #${expected.number} (${expected.dinerName})'),
-              subtitle: const Text('QR del pedido esperado · abre Confirmar cobro'),
+              subtitle: Text(
+                expected.paidByPlan
+                    ? 'QR del pedido esperado · abre Confirmar canje'
+                    : 'QR del pedido esperado · abre Confirmar cobro',
+              ),
               onTap: () => Navigator.pop(
                 context,
                 BocadooQrParser.generateOrderCode(
