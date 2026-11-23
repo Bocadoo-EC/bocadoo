@@ -464,9 +464,17 @@ class ApiAuthRepository implements IAuthRepository {
       );
       return AuthResult.success(hasRestaurant: true);
     } on ApiException catch (e) {
-      if (e.status == 409 || e.code == 'CONFLICT') {
+      if (e.status == 409 ||
+          e.code == 'CONFLICT' ||
+          e.code == 'EMAIL_YA_EXISTE') {
+        const duplicateMsg =
+            'Este correo ya está registrado. Utiliza otro correo para crear tu cuenta.';
         return AuthResult.failure(
-          'Ya existe una cuenta con ese correo. Entra o recupera tu contraseña.',
+          duplicateMsg,
+          fieldErrors: {
+            ...e.fieldErrors,
+            'correo': duplicateMsg,
+          },
         );
       }
       return AuthResult.failure(
