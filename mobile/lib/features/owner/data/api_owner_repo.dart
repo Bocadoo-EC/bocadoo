@@ -2056,6 +2056,7 @@ class ApiOwnerRepository
       final PosCategory cat = switch (categoria) {
         'A_LA_CARTA' => PosCategory.carta,
         'BEBIDA' => PosCategory.bebidas,
+        _ when seccion == 'JUGO' || seccion == 'BEBIDA' => PosCategory.bebidas,
         _ =>
           (etiquetas.contains('desayuno') ||
                   nombre.toLowerCase().contains('desayuno'))
@@ -4505,12 +4506,14 @@ class ApiOwnerRepository
           'descripcion': description.trim(),
       };
       final res = await guard(
-        () => _api.send<Map<String, dynamic>>(
+        () => _api
+            .send<Map<String, dynamic>>(
               'POST',
               '${ApiConfig.v1}/menu/platos',
               body: body,
               restaurant: true,
-            ).then((v) => v ?? <String, dynamic>{}),
+            )
+            .then((v) => v ?? <String, dynamic>{}),
       );
       final id = (res['id'] ?? '').toString();
       if (id.isEmpty) return null;
@@ -4527,8 +4530,21 @@ class ApiOwnerRepository
         soldOut: res['agotado'] == true,
       );
     } on ApiException catch (e) {
-      final detail = e.detail.trim();
-      _lastError = detail.isNotEmpty ? detail : e.userMessage;
+      final rawNameErr = e.fieldErrors['nombre']?.trim() ?? '';
+      final isTechnical = e.detail.contains('must be') ||
+          e.detail.contains('following values') ||
+          e.detail.contains('should not') ||
+          e.detail.toLowerCase().contains('seccion') ||
+          e.detail.toLowerCase().contains('categoria') ||
+          e.detail.toLowerCase().contains('preciocentavos');
+      if (rawNameErr.isNotEmpty && !rawNameErr.contains('must be')) {
+        _lastError = rawNameErr;
+      } else if (e.status == 400 || isTechnical) {
+        _lastError =
+            'No se pudo guardar el ítem. Verifica los datos e intenta de nuevo.';
+      } else {
+        _lastError = e.userMessage;
+      }
       return null;
     }
   }
@@ -4543,11 +4559,11 @@ class ApiOwnerRepository
     try {
       await guard(
         () => _api.send<dynamic>(
-              'PATCH',
-              '${ApiConfig.v1}/menu/platos/$dishId',
-              body: {'precioCentavos': priceCents},
-              restaurant: true,
-            ),
+          'PATCH',
+          '${ApiConfig.v1}/menu/platos/$dishId',
+          body: {'precioCentavos': priceCents},
+          restaurant: true,
+        ),
       );
       return true;
     } on ApiException catch (e) {

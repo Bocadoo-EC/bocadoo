@@ -1253,7 +1253,7 @@ class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
       final (String categoria, String seccion, List<String> etiquetas) =
           switch (group) {
         PermanentCatalogGroup.carta => ('A_LA_CARTA', 'FUERTE', const <String>[]),
-        PermanentCatalogGroup.bebidas => ('BEBIDA', 'BEBIDA', const <String>[]),
+        PermanentCatalogGroup.bebidas => ('BEBIDA', 'JUGO', const <String>[]),
         PermanentCatalogGroup.extras => (
             'EXTRA',
             isDessert ? 'POSTRE' : 'ADICIONAL',

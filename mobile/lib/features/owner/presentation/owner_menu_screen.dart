@@ -1037,7 +1037,8 @@ class _NewPermanentItemSheetState
   bool _available = true;
   late bool _isDessert = widget.initialIsDessert;
   bool _saving = false;
-  String? _error;
+  String? _nameError;
+  String? _priceError;
 
   @override
   void dispose() {
@@ -1046,20 +1047,34 @@ class _NewPermanentItemSheetState
     super.dispose();
   }
 
+  static String _sanitizeSaveError(String raw) {
+    final lower = raw.toLowerCase();
+    if (lower.contains('must be') ||
+        lower.contains('following values') ||
+        lower.contains('should not') ||
+        lower.contains('seccion') ||
+        lower.contains('categoria') ||
+        lower.contains('preciocentavos')) {
+      return 'No se pudo guardar el ítem. Verifica los datos e intenta de nuevo.';
+    }
+    return raw;
+  }
+
   Future<void> _save() async {
     final name = _name.text.trim();
     if (name.isEmpty) {
-      setState(() => _error = 'Escribe el nombre del ítem.');
+      setState(() => _nameError = 'Escribe el nombre del ítem.');
       return;
     }
     final price = double.tryParse(_price.text.trim().replaceAll(',', '.'));
     if (price == null || price <= 0) {
-      setState(() => _error = 'Ingresa un precio válido, ej. 4.50.');
+      setState(() => _priceError = 'Ingresa un precio válido, ej. 4.50.');
       return;
     }
     setState(() {
       _saving = true;
-      _error = null;
+      _nameError = null;
+      _priceError = null;
     });
     final err = await ref.read(permanentCatalogProvider.notifier).addItem(
           name: name,
@@ -1070,10 +1085,11 @@ class _NewPermanentItemSheetState
         );
     if (!mounted) return;
     if (err != null) {
-      setState(() {
-        _saving = false;
-        _error = err;
-      });
+      setState(() => _saving = false);
+      showInfoSnackBar(
+        ScaffoldMessenger.of(context),
+        _sanitizeSaveError(err),
+      );
       return;
     }
     Navigator.of(context).pop();
@@ -1127,10 +1143,10 @@ class _NewPermanentItemSheetState
               decoration: InputDecoration(
                 labelText: 'Nombre',
                 hintText: hint,
-                errorText: _error,
+                errorText: _nameError,
               ),
               onChanged: (_) {
-                if (_error != null) setState(() => _error = null);
+                if (_nameError != null) setState(() => _nameError = null);
               },
             ),
             const SizedBox(height: 12),
@@ -1141,13 +1157,14 @@ class _NewPermanentItemSheetState
               inputFormatters: [
                 FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
               ],
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: 'Precio (\$)',
                 prefixText: '\$ ',
                 hintText: 'Ej. 4.50',
+                errorText: _priceError,
               ),
               onChanged: (_) {
-                if (_error != null) setState(() => _error = null);
+                if (_priceError != null) setState(() => _priceError = null);
               },
             ),
             const SizedBox(height: 8),
