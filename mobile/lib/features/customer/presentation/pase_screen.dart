@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -27,10 +25,7 @@ class PaseScreen extends ConsumerStatefulWidget {
 
 class _PaseScreenState extends ConsumerState<PaseScreen>
     with WidgetsBindingObserver {
-  Timer? _qrTimer;
   late final CustomerController _controller;
-  bool _isForeground = true;
-  bool _isRefreshingQr = false;
   int _lastCelebrationTick = 0;
 
   @override
@@ -42,52 +37,19 @@ class _PaseScreenState extends ConsumerState<PaseScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         _controller.onPaseVisibilityChanged(true);
-        _checkQrExpiryAndRefresh();
       }
     });
-    // Refresca el QR 3–4 s antes de `expiraEn` (solo en primer plano y con menú disponible).
-    _qrTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      _checkQrExpiryAndRefresh();
-    });
-  }
-
-  void _checkQrExpiryAndRefresh() {
-    if (!mounted || !_isForeground || _isRefreshingQr) return;
-    final s = _controller.state;
-    final pass = s.currentPass;
-    if (pass == null || s.qrMode != QrMode.plan) return;
-    if (!s.hasPublishedTodayMenu(pass.restaurantId)) return;
-    if (AppMode.useMock) return;
-
-    final exp = pass.qrExpiresAt;
-    final secondsLeft = exp?.difference(DateTime.now()).inSeconds ?? 0;
-    if (pass.qrToken.isEmpty || exp == null || secondsLeft <= 4) {
-      unawaited(_triggerQrRefresh());
-    }
-  }
-
-  Future<void> _triggerQrRefresh() async {
-    if (_isRefreshingQr || !mounted || !_isForeground) return;
-    _isRefreshingQr = true;
-    try {
-      await _controller.refreshQr();
-    } finally {
-      _isRefreshingQr = false;
-    }
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final resumed = state == AppLifecycleState.resumed;
     if (resumed) {
-      _isForeground = true;
       _controller.onPaseVisibilityChanged(true, resumedFromBackground: true);
-      _checkQrExpiryAndRefresh();
     } else if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.hidden ||
         state == AppLifecycleState.detached) {
-      _isForeground = false;
       _controller.onPaseVisibilityChanged(false);
     }
   }
@@ -95,7 +57,6 @@ class _PaseScreenState extends ConsumerState<PaseScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _qrTimer?.cancel();
     _controller.onPaseVisibilityChanged(false);
     super.dispose();
   }
@@ -1106,6 +1067,16 @@ class _ActiveWalletCard extends StatelessWidget {
                   );
                 }
 
+                if (mode == QrMode.plan && pass != null) {
+                  return _ReserveForQrBlock(
+                    restaurantId: pass.restaurantId,
+                    remainingLunches: pass.remainingLunches,
+                    onOpenOrderQr: order != null
+                        ? () => controller.selectQrMode(QrMode.preorden)
+                        : null,
+                  );
+                }
+
                 final qrData = isMesaConfirmed
                     ? simSession.qrPayload
                     : (AppMode.useMock ? shortCode : state.qrValue);
@@ -1200,16 +1171,6 @@ class _ActiveWalletCard extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
-                        color: colors.onSurfaceVariant,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Vuelve a presentar tu QR después de 30 segundos.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
                         color: colors.onSurfaceVariant,
                       ),
                     ),
@@ -2093,6 +2054,58 @@ class _CashPendingBadge extends StatelessWidget {
               color: b.onWalletAccent,
             ),
           ),
+        ),
+      ]),
+    );
+  }
+}
+
+class _ReserveForQrBlock extends StatelessWidget {
+  const _ReserveForQrBlock({
+    required this.restaurantId,
+    required this.remainingLunches,
+    this.onOpenOrderQr,
+  });
+
+  final String restaurantId;
+  final int remainingLunches;
+  final VoidCallback? onOpenOrderQr;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    final hasOrder = onOpenOrderQr != null;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Theme.of(context).scaffoldBackgroundColor,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: colors.outlineVariant),
+      ),
+      child: Column(children: [
+        Icon(Icons.qr_code_2_rounded, size: 40, color: colors.primary),
+        const SizedBox(height: 10),
+        Text(
+          hasOrder
+              ? 'Tu pedido ya tiene QR'
+              : 'Reserva tu almuerzo para generar tu QR',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: colors.onSurface),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          hasOrder
+              ? 'Muéstralo en caja para validar tu almuerzo.'
+              : 'Te quedan $remainingLunches almuerzos. El QR se crea al hacer tu pedido y solo se muestra mientras esté activo.',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant),
+        ),
+        const SizedBox(height: 14),
+        FilledButton(
+          onPressed: onOpenOrderQr ??
+              () => context.push('/customer/restaurants/$restaurantId'),
+          child: Text(hasOrder ? 'Ver QR de mi pedido' : 'Ver menú de hoy y elegir platos'),
         ),
       ]),
     );

@@ -10,7 +10,6 @@ import '../domain/models/cash_models.dart';
 import 'owner_controller.dart';
 import 'owner_format.dart';
 import 'owner_widgets.dart';
-import 'scanner_screen.dart';
 
 /// O3 · Vender plan en caja: comensal (búsqueda o QR) → plan → método de pago.
 class SellPlanSheet extends ConsumerStatefulWidget {
@@ -30,7 +29,6 @@ class _SellPlanSheetState extends ConsumerState<SellPlanSheet> {
   String? _planId;
   OwnerPayMethod _method = OwnerPayMethod.efectivo;
   bool _deductToday = false;
-  bool _scanningQr = false;
   bool _saving = false;
   bool _prefilled = false;
   String? _error;
@@ -52,47 +50,6 @@ class _SellPlanSheetState extends ConsumerState<SellPlanSheet> {
     } else {
       _newName = name;
     }
-  }
-
-  Future<void> _scanDinerQr() async {
-    if (_scanningQr || _saving) return;
-    final rawQr = await Navigator.of(context, rootNavigator: true).push<String>(
-      MaterialPageRoute(
-        builder: (_) => const ScannerScreen(
-          pickCodeOnly: true,
-          pickTitle: 'Escanear QR del comensal',
-        ),
-      ),
-    );
-    if (rawQr == null || rawQr.trim().isEmpty || !mounted) return;
-
-    setState(() {
-      _scanningQr = true;
-      _error = null;
-    });
-    final rid = ref.read(ownerRestaurantIdProvider);
-    final repo = ref.read(ownerCashRepositoryProvider);
-    final found = await repo.identifyClientByQr(rid, rawQr);
-    if (!mounted) return;
-
-    if (found == null) {
-      final apiErr = AppMode.useMock
-          ? null
-          : ref.read(apiOwnerRepositoryProvider).consumeLastError();
-      setState(() {
-        _scanningQr = false;
-        _error = apiErr ??
-            'No encontramos un comensal con ese QR. Búscalo por nombre o teléfono.';
-      });
-      return;
-    }
-
-    setState(() {
-      _scanningQr = false;
-      _client = found;
-      _newName = null;
-      _error = null;
-    });
   }
 
   Future<void> _confirm(OwnerPlanTemplate plan) async {
@@ -168,7 +125,7 @@ class _SellPlanSheetState extends ConsumerState<SellPlanSheet> {
         templates.firstOrNull;
     final hasClient =
         _client != null || (_newName != null && _newName!.trim().isNotEmpty);
-    final canActivate = hasClient && plan != null && !_saving && !_scanningQr;
+    final canActivate = hasClient && plan != null && !_saving;
 
     final keyboard = MediaQuery.viewInsetsOf(context).bottom;
     final sysNav = MediaQuery.viewPaddingOf(context).bottom;
@@ -215,9 +172,7 @@ class _SellPlanSheetState extends ConsumerState<SellPlanSheet> {
                   _ClientPicker(
                     controller: _search,
                     clients: clients,
-                    loading: clientsAsync.isLoading || _scanningQr,
-                    scanningQr: _scanningQr,
-                    onScanQr: _scanDinerQr,
+                    loading: clientsAsync.isLoading,
                     onChanged: () => setState(() {}),
                     onPick: (c) => setState(() {
                       _client = c;
@@ -373,8 +328,6 @@ class _ClientPicker extends StatelessWidget {
     required this.controller,
     required this.clients,
     required this.loading,
-    required this.scanningQr,
-    required this.onScanQr,
     required this.onChanged,
     required this.onPick,
     required this.onCreate,
@@ -383,8 +336,6 @@ class _ClientPicker extends StatelessWidget {
   final TextEditingController controller;
   final List<OwnerClient> clients;
   final bool loading;
-  final bool scanningQr;
-  final VoidCallback onScanQr;
   final VoidCallback onChanged;
   final ValueChanged<OwnerClient> onPick;
   final ValueChanged<String> onCreate;
@@ -426,22 +377,6 @@ class _ClientPicker extends StatelessWidget {
                     borderSide: BorderSide(color: colors.primary, width: 2),
                   ),
                 ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            SizedBox(
-              width: 48,
-              height: 48,
-              child: IconButton.filledTonal(
-                tooltip: 'Escanear QR del comensal',
-                onPressed: scanningQr ? null : onScanQr,
-                icon: scanningQr
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.qr_code_scanner_rounded),
               ),
             ),
           ],

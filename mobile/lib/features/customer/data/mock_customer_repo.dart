@@ -68,7 +68,6 @@ class MockCustomerRepository implements ICustomerRepository {
         totalLunches: 20,
         remainingLunches: _store.remainingLunchesByRest['r1'] ?? 14,
         expiresAt: now.add(const Duration(days: 27)),
-        qrToken: BocadooQrParser.generateQrPayload(targetUserId, now, 'r1'),
         restaurantId: 'r1',
         restaurantName: 'La Cuchara de San Blas',
       ),
@@ -80,7 +79,6 @@ class MockCustomerRepository implements ICustomerRepository {
         totalLunches: 20,
         remainingLunches: _store.remainingLunchesByRest['r2'] ?? 6,
         expiresAt: now.add(const Duration(days: 12)),
-        qrToken: BocadooQrParser.generateQrPayload('${targetUserId}_r2', now, 'r2'),
         restaurantId: 'r2',
         restaurantName: 'Verde Limón',
       ),
@@ -88,23 +86,6 @@ class MockCustomerRepository implements ICustomerRepository {
 
     await _cache.savePass(passes.first);
     return passes;
-  }
-
-  @override
-  Future<String> refreshQrToken(String passId) async {
-    // TODO: Conectar con provider de backend
-    await _simulateNetwork();
-    final isR2 = passId == 'sub-2';
-    final newToken = BocadooQrParser.generateQrPayload(
-      isR2 ? 'u1_r2' : 'u1',
-      DateTime.now(),
-      isR2 ? 'r2' : 'r1',
-    );
-    final cached = await _cache.getPass();
-    if (cached != null && cached.id == passId) {
-      await _cache.savePass(cached.copyWith(qrToken: newToken));
-    }
-    return newToken;
   }
 
   Restaurant _withLiveGeoAndOccupancy(Restaurant r, LatLng userPos) {

@@ -5,9 +5,6 @@ abstract class ICustomerRepository {
   /// Obtiene el pase activo del usuario comensal
   Future<CustomerPass> getActivePass({String? userId});
 
-  /// Solicita refrescar o regenerar el token dinámico de QR
-  Future<String> refreshQrToken(String passId);
-
   /// Obtiene el catálogo de restaurantes universitarios con filtros opcionales
   Future<List<Restaurant>> getRestaurants({String? query, String? category});
 

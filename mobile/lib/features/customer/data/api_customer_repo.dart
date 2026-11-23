@@ -72,14 +72,11 @@ class ApiCustomerRepository implements ICustomerRepository {
   Future<List<CustomerPass>> getActivePasses({String? userId}) async {
     final data = await guard(() => _api.getMap('${ApiConfig.v1}/pase'));
     final usuario = _asMap(data['usuario']);
-    final codigo = _asMap(data['codigo']);
     final locales = _asListOfMaps(data['locales']);
 
     final uid = (usuario['id'] ?? _session?.userId ?? userId ?? '').toString();
     final studentName =
         (usuario['nombre'] ?? _session?.userName ?? 'Comensal').toString();
-    final qrToken = (codigo['codigo'] ?? '').toString();
-    final qrExpiresAt = _parseQrExpiry(codigo);
 
     final passes = <CustomerPass>[];
     for (final local in locales) {
@@ -90,10 +87,8 @@ class ApiCustomerRepository implements ICustomerRepository {
       if (restId.isNotEmpty && slug.isNotEmpty) {
         _slugById[restId] = slug;
       }
-      var menuReadyForLocal = true;
       if (restId.isNotEmpty && local['menuHoyPublicado'] is bool) {
         final published = local['menuHoyPublicado'] as bool;
-        menuReadyForLocal = published;
         _todayMenuPublishedByRest[restId] = published;
         if (!published) {
           _todayMenuAvailabilityByRest[restId] =
@@ -105,9 +100,6 @@ class ApiCustomerRepository implements ICustomerRepository {
               MenuAvailabilityState.disponible;
         }
       }
-      final cachedAvail = _todayMenuAvailabilityByRest[restId];
-      final allowQrForLocal =
-          menuReadyForLocal && cachedAvail != MenuAvailabilityState.agotadoTotal;
 
       final planes = _asListOfMaps(local['planes']);
       if (planes.isEmpty) continue;
@@ -145,8 +137,6 @@ class ApiCustomerRepository implements ICustomerRepository {
             remainingLunches: remaining,
             expiresAt: expiresAt,
             status: status,
-            qrToken: allowQrForLocal ? qrToken : '',
-            qrExpiresAt: allowQrForLocal ? qrExpiresAt : null,
             restaurantId: restId,
             restaurantName: restName,
             avatarUrl: rest['logoUrl']?.toString(),
@@ -184,8 +174,6 @@ class ApiCustomerRepository implements ICustomerRepository {
           remainingLunches: remaining,
           expiresAt: expiresAt,
           status: status,
-          qrToken: allowQrForLocal ? qrToken : '',
-          qrExpiresAt: allowQrForLocal ? qrExpiresAt : null,
           restaurantId: restId,
           restaurantName: restName,
           avatarUrl: rest['logoUrl']?.toString(),
@@ -193,25 +181,12 @@ class ApiCustomerRepository implements ICustomerRepository {
       }
     }
 
-    if (passes.isNotEmpty && passes.first.qrToken.isNotEmpty) {
+    if (passes.isNotEmpty) {
       await saveCachedPass(passes.first);
     } else {
       await _passCache.clear();
     }
     return passes;
-  }
-
-  DateTime? _parseQrExpiry(Map<dynamic, dynamic> map) {
-    final rawExp = map['expiraEn']?.toString();
-    if (rawExp != null && rawExp.trim().isNotEmpty) {
-      final dt = DateTime.tryParse(rawExp.trim())?.toLocal();
-      if (dt != null) return dt;
-    }
-    final secs = _asInt(map['validoSegundos']);
-    if (secs != null && secs > 0) {
-      return DateTime.now().add(Duration(seconds: secs));
-    }
-    return null;
   }
 
   @override
@@ -221,35 +196,6 @@ class ApiCustomerRepository implements ICustomerRepository {
     final cached = await getCachedPass();
     if (cached != null) return cached;
     throw ApiException(status: 404, code: 'PASE_NO_ENCONTRADO');
-  }
-
-  /// Pide un token QR firmado fresco a `GET /v1/pase/codigo` junto a su `expiraEn`.
-  Future<({String token, DateTime expiresAt})> fetchQrTokenWithExpiry(
-    String passId,
-  ) async {
-    final restId = _restaurantByPassId[passId];
-    final data = await guard(
-      () => _api.getMap(
-        '${ApiConfig.v1}/pase/codigo',
-        query: {
-          if (restId != null && restId.isNotEmpty) 'restaurante': restId,
-        },
-      ),
-    );
-    eventsService.track('comensal.qr_generado', restaurantId: restId);
-    final raw = (data['codigo'] ?? '').toString();
-    if (raw.isEmpty) {
-      throw ApiException(status: 500, code: 'ERROR_INTERNO');
-    }
-    final expiresAt =
-        _parseQrExpiry(data) ?? DateTime.now().add(const Duration(seconds: 30));
-    return (token: raw, expiresAt: expiresAt);
-  }
-
-  @override
-  Future<String> refreshQrToken(String passId) async {
-    final res = await fetchQrTokenWithExpiry(passId);
-    return res.token;
   }
 
   Future<void> clearCachedPass() => _passCache.clear();
@@ -268,11 +214,6 @@ class ApiCustomerRepository implements ICustomerRepository {
     }
     if (pass != null && pass.id.isNotEmpty && pass.restaurantId.isNotEmpty) {
       _restaurantByPassId[pass.id] = pass.restaurantId;
-    }
-    if (pass != null &&
-        pass.qrExpiresAt != null &&
-        !pass.qrExpiresAt!.isAfter(DateTime.now())) {
-      return pass.copyWith(qrToken: '', clearQrExpiresAt: true);
     }
     return pass;
   }
