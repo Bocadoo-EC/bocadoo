@@ -207,7 +207,7 @@ jobs:
 
       - name: Publicar GitHub Release
         if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_release == true
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('release-{0}-{1}', env.RESOLVED_ENV, github.run_number) }}
           name: "Bocadoo ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('{0} #{1}', env.RESOLVED_ENV, github.run_number) }}"
