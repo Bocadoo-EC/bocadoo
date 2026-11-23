@@ -126,7 +126,6 @@ class _RegistrarConsumoScreenState
   final List<_Line> _planExtrasCart = [];
   _ScannedPlanClient? _scannedPlan;
 
-  String _quickNote = '';
   bool _charging = false;
 
   List<_Line> get _activeCart => _planMode ? _planExtrasCart : _directCart;
@@ -245,42 +244,6 @@ class _RegistrarConsumoScreenState
     controller.reset();
   }
 
-  Future<String?> _editQuickNote() async {
-    final ctrl = TextEditingController(text: _quickNote);
-    final res = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Observación de cocina'),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          maxLength: 48,
-          textCapitalization: TextCapitalization.sentences,
-          decoration: const InputDecoration(
-            hintText: 'Ej: Sin ají, Juan, sin cebolla…',
-          ),
-          onSubmitted: (v) => Navigator.of(ctx).pop(v.trim()),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(''),
-            child: const Text('Limpiar'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
-            child: const Text('Guardar'),
-          ),
-        ],
-      ),
-    );
-    ctrl.dispose();
-    if (res != null && mounted) {
-      setState(() => _quickNote = res);
-      return res;
-    }
-    return null;
-  }
-
   Future<void> _handlePrimaryAction(int takeawaySurchargeCents) async {
     if (_charging) return;
     if (_planMode && _scannedPlan == null) return;
@@ -305,14 +268,12 @@ class _RegistrarConsumoScreenState
         planClientName: _planMode ? _scannedPlan?.name : null,
         initialPlanLunchParaLlevar: _planLunchParaLlevar,
         takeawaySurchargeCents: takeawaySurchargeCents,
-        initialObservation: _quickNote,
         onChangeQty: _changeQty,
         onRemoveLine: _removeLine,
         onToggleParaLlevar: _toggleLineParaLlevar,
         onTogglePlanLunchParaLlevar: () {
           setState(() => _planLunchParaLlevar = !_planLunchParaLlevar);
         },
-        onEditObservation: _editQuickNote,
       ),
     );
 
@@ -331,7 +292,6 @@ class _RegistrarConsumoScreenState
         _scannedPlan = null;
         _planExtrasCart.clear();
         _planLunchParaLlevar = false;
-        _quickNote = '';
       });
       ref.invalidate(dailySummaryProvider);
       showInfoSnackBar(messenger, 'Plan canjeado · $who');
@@ -363,11 +323,7 @@ class _RegistrarConsumoScreenState
     final itemCount =
         snapshot.fold<int>(0, (s, l) => s + l.qty) + (planClient != null ? 1 : 0);
     final hasTakeaway = takeawayCount > 0;
-    final modality = hasTakeaway
-        ? (_quickNote.isNotEmpty
-            ? 'Para llevar ($takeawayCount · $_quickNote)'
-            : 'Para llevar ($takeawayCount)')
-        : (_quickNote.isNotEmpty ? _quickNote : 'En local');
+    final modality = hasTakeaway ? 'Para llevar ($takeawayCount)' : 'En local';
     final baseLabel =
         planClient != null ? 'Plan ${planClient.name} · $modality' : modality;
     final saleLabel = '$baseLabel · $itemCount productos';
@@ -422,7 +378,6 @@ class _RegistrarConsumoScreenState
       } else {
         _directCart.clear();
       }
-      _quickNote = '';
     });
 
     final prefix = planClient != null ? 'Canjeado y cobrado' : 'Cobrado';
@@ -1606,12 +1561,10 @@ class _ChargeBottomSheet extends StatefulWidget {
     required this.hasPlanLunch,
     required this.initialPlanLunchParaLlevar,
     required this.takeawaySurchargeCents,
-    required this.initialObservation,
     required this.onChangeQty,
     required this.onRemoveLine,
     required this.onToggleParaLlevar,
     required this.onTogglePlanLunchParaLlevar,
-    required this.onEditObservation,
     this.planClientName,
   });
 
@@ -1620,13 +1573,11 @@ class _ChargeBottomSheet extends StatefulWidget {
   final bool hasPlanLunch;
   final bool initialPlanLunchParaLlevar;
   final int takeawaySurchargeCents;
-  final String initialObservation;
   final String? planClientName;
   final void Function(String key, int delta) onChangeQty;
   final void Function(String key) onRemoveLine;
   final void Function(String key) onToggleParaLlevar;
   final VoidCallback onTogglePlanLunchParaLlevar;
-  final Future<String?> Function() onEditObservation;
 
   @override
   State<_ChargeBottomSheet> createState() => _ChargeBottomSheetState();
@@ -1637,7 +1588,6 @@ class _ChargeBottomSheetState extends State<_ChargeBottomSheet> {
   final TextEditingController _cash = TextEditingController();
   bool _expanded = false;
   late bool _planLunchParaLlevar = widget.initialPlanLunchParaLlevar;
-  late String _observation = widget.initialObservation;
 
   @override
   void dispose() {
@@ -2055,47 +2005,6 @@ class _ChargeBottomSheetState extends State<_ChargeBottomSheet> {
                                 ),
                               ),
                             ],
-                            Align(
-                              alignment: Alignment.centerLeft,
-                              child: TextButton.icon(
-                                style: TextButton.styleFrom(
-                                  foregroundColor: _observation.isNotEmpty
-                                      ? colors.primary
-                                      : colors.onSurfaceVariant,
-                                  visualDensity: VisualDensity.compact,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 4,
-                                    vertical: 4,
-                                  ),
-                                  tapTargetSize:
-                                      MaterialTapTargetSize.shrinkWrap,
-                                ),
-                                onPressed: () async {
-                                  final updated =
-                                      await widget.onEditObservation();
-                                  if (updated != null && mounted) {
-                                    setState(() => _observation = updated);
-                                  }
-                                },
-                                icon: Icon(
-                                  _observation.isNotEmpty
-                                      ? Icons.edit_note_rounded
-                                      : Icons.add_comment_outlined,
-                                  size: 16,
-                                ),
-                                label: Text(
-                                  _observation.isNotEmpty
-                                      ? 'Observación: $_observation'
-                                      : '+ Agregar observación',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ),
-                            ),
                             if (takeawayCount > 0) ...[
                               const SizedBox(height: 6),
                               Row(
