@@ -399,7 +399,7 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
             : ElevatedButton.icon(
                 onPressed: _savePermanentChanges,
                 icon: const Icon(Icons.check_rounded),
-                label: const Text('✓ Guardar cambios'),
+                label: const Text('Guardar cambios'),
               ),
       ),
     );
