@@ -102,7 +102,8 @@ class _DailyMenuAccordionSelectorState
 
   String _titleOf(_Section s) => switch (s) {
         _Section.soup => '1. Sopa',
-        _Section.main => '2. Segundo / Opción Fit',
+        _Section.main =>
+          widget.flashMode ? '2. Segundo' : '2. Segundo / Opción Fit',
         _Section.drink => '3. Bebida',
         _Section.dessert => '4. Postre',
       };
