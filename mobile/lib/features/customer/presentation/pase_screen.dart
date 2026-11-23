@@ -109,7 +109,7 @@ class _PaseScreenState extends ConsumerState<PaseScreen>
       barrierColor: context.colorScheme.scrim.withValues(alpha: 0.45),
       transitionDuration: const Duration(milliseconds: 280),
       pageBuilder: (ctx, anim, _) {
-        Future.delayed(const Duration(milliseconds: 2400), () {
+        Future.delayed(const Duration(milliseconds: 3500), () {
           if (ctx.mounted && Navigator.of(ctx).canPop()) {
             Navigator.of(ctx).pop();
           }
@@ -124,8 +124,8 @@ class _PaseScreenState extends ConsumerState<PaseScreen>
               borderRadius: BorderRadius.circular(28),
               elevation: 8,
               child: Container(
-                width: 280,
-                padding: const EdgeInsets.all(24),
+                width: 296,
+                padding: const EdgeInsets.fromLTRB(24, 24, 24, 18),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -164,6 +164,18 @@ class _PaseScreenState extends ConsumerState<PaseScreen>
                         ),
                       ),
                     ],
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: () {
+                          if (Navigator.of(ctx).canPop()) {
+                            Navigator.of(ctx).pop();
+                          }
+                        },
+                        child: const Text('Entendido'),
+                      ),
+                    ),
                   ],
                 ),
               ),

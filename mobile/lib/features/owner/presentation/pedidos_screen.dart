@@ -72,7 +72,7 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
   }
 
   Future<void> _openDirectConfirmForOrder(OwnerOrder order) async {
-    if (order.paidByPlan) {
+    if (order.paidByPlan && order.cashToCollectCents <= 0) {
       if (!order.validated) {
         final ok = await _openSheet<bool>(_ValidateOrderSheet(order: order));
         if (ok != true || !mounted) return;
@@ -84,11 +84,10 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
   }
 
   /// Flujo principal de tarjeta:
-  /// - Con plan: confirma canje y entrega.
-  /// - Sin plan ("Cobrar y entregar"): abre directo el escáner QR pasando el
-  ///   pedido esperado y, al validar el QR, abre el modal Confirmar cobro estilo POS.
+  /// - Con plan sin saldo adicional: confirma canje y entrega.
+  /// - Con cobro pendiente (sin plan o con extras/carta): abre escáner QR o POS Confirmar cobro.
   Future<void> _act(OwnerOrder order) async {
-    if (order.paidByPlan) {
+    if (order.paidByPlan && order.cashToCollectCents <= 0) {
       await _openDirectConfirmForOrder(order);
       return;
     }
@@ -141,20 +140,24 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
       return;
     }
 
-    if (order.paidByPlan) {
+    if (order.paidByPlan && order.cashToCollectCents <= 0) {
       showInfoSnackBar(messenger, '${res.title} · ${res.supportingLine}');
       return;
     }
 
     final totalText = OwnerFormat.money(
-      Money.fromCents(order.effectiveTotalCents),
+      Money.fromCents(
+        order.paidByPlan ? order.cashToCollectCents : order.effectiveTotalCents,
+      ),
     );
     final changeText = changeCents > 0
         ? ' · Cambio ${OwnerFormat.money(Money.fromCents(changeCents))}'
         : '';
     showInfoSnackBar(
       messenger,
-      'Pedido #${order.number} cobrado ($totalText · ${paymentMethod.label})$changeText y entregado',
+      order.paidByPlan
+          ? 'Plan canjeado y diferencia cobrada ($totalText · ${paymentMethod.label})$changeText'
+          : 'Pedido #${order.number} cobrado ($totalText · ${paymentMethod.label})$changeText y entregado',
     );
   }
 

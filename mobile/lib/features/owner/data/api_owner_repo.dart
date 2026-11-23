@@ -428,7 +428,22 @@ class ApiOwnerRepository
         .toString();
 
     final estado = (json['estado'] ?? '').toString().toUpperCase();
-    final paidByPlan = almuerzo?['cubiertoPorPlan'] == true;
+    final cotizacion = json['cotizacion'] is Map
+        ? Map<String, dynamic>.from(json['cotizacion'] as Map)
+        : null;
+    final cotLineas = cotizacion != null && cotizacion['lineas'] is List
+        ? (cotizacion['lineas'] as List).whereType<Map>().toList()
+        : const <Map>[];
+    final cotPlanCredits = cotLineas
+        .where(
+          (l) =>
+              (l['fuente'] ?? '').toString().toUpperCase() == 'PLAN' &&
+              l['omitida'] == null,
+        )
+        .length;
+    final paidByPlan = cotizacion != null
+        ? cotPlanCredits > 0
+        : almuerzo?['cubiertoPorPlan'] == true;
     final takeaway = json['paraLlevar'] == true;
     final number = _asInt(json['numero']).toString();
     final id = (json['id'] ?? '').toString();
@@ -441,21 +456,33 @@ class ApiOwnerRepository
             .toString();
 
     final baseCents = _asInt(almuerzo?['precioCentavos']);
-    final recargoCents = takeaway
-        ? (_asInt(json['recargoLlevarCentavos']) > 0
-              ? _asInt(json['recargoLlevarCentavos'])
-              : 25)
-        : 0;
-    final rawTotalCents = _asInt(json['totalCentavos']);
-    final resolvedTotalCents = paidByPlan
-        ? 0
-        : (takeaway && baseCents > 0 && rawTotalCents <= baseCents
-              ? baseCents + recargoCents
-              : (rawTotalCents > 0
-                    ? rawTotalCents
-                    : (baseCents > 0 ? baseCents + recargoCents : 0)));
-    final planCreditsUsed = _asInt(json['planCreditsUsed']);
-    final cashToCollectCents = _asInt(json['cashToCollectCents']);
+    final recargoCents = cotizacion != null
+        ? _asInt(cotizacion['recargoCentavos'])
+        : (takeaway
+              ? (_asInt(json['recargoLlevarCentavos']) > 0
+                    ? _asInt(json['recargoLlevarCentavos'])
+                    : 25)
+              : 0);
+    final rawTotalCents = cotizacion != null
+        ? _asInt(cotizacion['saldoPorCobrarCentavos'])
+        : _asInt(json['totalCentavos']);
+    final resolvedTotalCents = cotizacion != null
+        ? rawTotalCents
+        : (paidByPlan
+              ? 0
+              : (takeaway && baseCents > 0 && rawTotalCents <= baseCents
+                    ? baseCents + recargoCents
+                    : (rawTotalCents > 0
+                          ? rawTotalCents
+                          : (baseCents > 0 ? baseCents + recargoCents : 0))));
+    final planCreditsUsed = cotizacion != null
+        ? cotPlanCredits
+        : (_asInt(json['planCreditsUsed']) > 0
+              ? _asInt(json['planCreditsUsed'])
+              : (paidByPlan ? 1 : 0));
+    final cashToCollectCents = cotizacion != null
+        ? _asInt(cotizacion['saldoPorCobrarCentavos'])
+        : _asInt(json['cashToCollectCents']);
     final cashItems = _cartaItemLabels(json['cartaItems']);
     final amount = Money.fromCents(
       paidByPlan && cashToCollectCents > 0
@@ -3110,16 +3137,14 @@ class ApiOwnerRepository
                 )
                 .then((v) => v ?? <String, dynamic>{}),
           );
-          final localCents = entry.paidByPlan ? 0 : Money.toCents(entry.amount);
+          final localCents = Money.toCents(entry.amount);
           final remoteCents = _asInt(canje['porCobrarCentavos'], localCents);
-          porCobrarCents = entry.paidByPlan
-              ? remoteCents
-              : (localCents > remoteCents ? localCents : remoteCents);
+          porCobrarCents = localCents > remoteCents ? localCents : remoteCents;
         } finally {
           _idempotency.done(intent);
         }
       } else {
-        porCobrarCents = entry.paidByPlan ? 0 : Money.toCents(entry.amount);
+        porCobrarCents = Money.toCents(entry.amount);
       }
 
       await guard(

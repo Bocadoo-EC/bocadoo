@@ -305,10 +305,13 @@ class CustomerUiState {
   }
 
   CustomerPass? passFor(String restaurantId) {
+    CustomerPass? fallback;
     for (final p in passes) {
-      if (p.restaurantId == restaurantId) return p;
+      if (p.restaurantId != restaurantId) continue;
+      if (p.remainingLunches > 0 && !p.isExpired) return p;
+      fallback ??= p;
     }
-    return null;
+    return fallback;
   }
 
   Restaurant? restaurantById(String id) {
@@ -871,10 +874,20 @@ class CustomerController extends ChangeNotifier {
               MenuAvailabilityState.disponible;
 
       String? notice;
+      String? celebrationTitle;
+      String? celebrationSubtitle;
+      var celebrationTick = _state.redemptionCelebrationTick;
       if (orderJustFinished && previousOrder != null) {
         notice = previousOrder.hasPlan
             ? 'Almuerzo confirmado en ${previousOrder.restaurantName} (-1 de tu plan).'
             : 'Pedido #${previousOrder.orderNumber} confirmado en ${previousOrder.restaurantName}.';
+        celebrationTick += 1;
+        celebrationTitle = '¡Orden aprobada!';
+        celebrationSubtitle = previousOrder.hasPlan
+            ? (previousOrder.cashToCollectCents > 0
+                ? '${previousOrder.restaurantName} · -1 cupo de tu plan + adicionales confirmados'
+                : '${previousOrder.restaurantName} · Descontado 1 almuerzo de tu plan')
+            : '${previousOrder.restaurantName} · Pedido #${previousOrder.orderNumber} confirmado';
       }
 
       final effectiveTable = _pruneExpiredCollectingTable(table);
@@ -886,6 +899,9 @@ class CustomerController extends ChangeNotifier {
         activeTable: effectiveTable,
         clearActiveTable: effectiveTable == null,
         consumptionNotice: notice,
+        redemptionCelebrationTick: celebrationTick,
+        redemptionCelebrationTitle: celebrationTitle,
+        redemptionCelebrationSubtitle: celebrationSubtitle,
         todayMenuPublishedByRest: nextMenuStates.published,
         todayMenuAvailabilityByRest: nextMenuStates.availability,
       ));

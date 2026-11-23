@@ -500,6 +500,24 @@ class SplitBillingSummaryCard extends StatelessWidget {
               color: colors.primary.withValues(alpha: 0.15),
             ),
             const SizedBox(height: 10),
+          ] else if (cashCents > 0) ...[
+            Row(
+              children: [
+                Icon(Icons.payments_outlined, size: 16, color: colors.primary),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Sin cupos en tu plan · Cobro requerido en caja',
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w700,
+                      color: colors.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
           ],
           Row(
             children: [
