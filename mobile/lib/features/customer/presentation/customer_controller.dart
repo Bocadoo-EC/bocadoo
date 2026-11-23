@@ -138,6 +138,7 @@ class CustomerUiState {
   List<QrMode> get availableQrModes => [
         if (activeOrder != null) QrMode.preorden,
         if (activeTable != null) QrMode.mesa,
+        if (passes.isNotEmpty) QrMode.plan,
       ];
 
   QrMode get qrMode {
