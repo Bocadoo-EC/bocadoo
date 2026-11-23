@@ -702,6 +702,69 @@ class PublicCartaItem {
   double get price => priceCents / 100.0;
 }
 
+/// Línea individual devuelta por `POST /v1/mis/pedidos/cotizar` y `PedidoResponse.cotizacion`.
+@immutable
+class OrderQuoteLine {
+  final String ref;
+  final String tipo; // ALMUERZO, A_LA_CARTA, EXTRA, BEBIDA, OFERTA, LIBRE
+  final String nombre;
+  final String? platoId;
+  final int cantidad;
+  final int precioUnitarioCentavos;
+  final int subtotalCentavos;
+  final int recargoCentavos;
+  final String fuente; // PLAN, CAJA, OFERTA
+  final int cubiertoPorPlanCentavos;
+  final int porCobrarCentavos;
+  final String? omitida;
+
+  const OrderQuoteLine({
+    required this.ref,
+    required this.tipo,
+    required this.nombre,
+    this.platoId,
+    required this.cantidad,
+    required this.precioUnitarioCentavos,
+    required this.subtotalCentavos,
+    required this.recargoCentavos,
+    required this.fuente,
+    required this.cubiertoPorPlanCentavos,
+    required this.porCobrarCentavos,
+    this.omitida,
+  });
+
+  bool get isPlanCovered => fuente == 'PLAN';
+}
+
+/// Cotización oficial de solo lectura (`POST /v1/mis/pedidos/cotizar` o `cotizacion`).
+@immutable
+class OrderQuote {
+  final bool estimada;
+  final int subtotalCentavos;
+  final int recargoCentavos;
+  final int totalCentavos;
+  final int cubiertoPorPlanCentavos;
+  final int saldoPorCobrarCentavos;
+  final List<OrderQuoteLine> lineas;
+  final List<({String codigo, String? lineaRef})> avisos;
+  final String monedaCodigo;
+
+  const OrderQuote({
+    required this.estimada,
+    required this.subtotalCentavos,
+    required this.recargoCentavos,
+    required this.totalCentavos,
+    required this.cubiertoPorPlanCentavos,
+    required this.saldoPorCobrarCentavos,
+    this.lineas = const [],
+    this.avisos = const [],
+    this.monedaCodigo = 'USD',
+  });
+
+  int get planCreditsUsed =>
+      lineas.where((l) => l.fuente == 'PLAN' && l.omitida == null).length;
+}
+
 /// Extra elegido dentro de la selección de un miembro de mesa grupal.
 @immutable
 class TableSelectionExtra {

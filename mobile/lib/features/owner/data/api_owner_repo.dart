@@ -4349,6 +4349,78 @@ class ApiOwnerRepository
     }
   }
 
+  @override
+  Future<CatalogDish?> addPermanentDish(
+    String restaurantId, {
+    required String name,
+    required int priceCents,
+    required String categoria,
+    required String seccion,
+    String? description,
+  }) async {
+    _lastError = null;
+    try {
+      final body = <String, dynamic>{
+        'categoria': categoria,
+        'seccion': seccion,
+        'nombre': name.trim(),
+        'precioCentavos': priceCents,
+        if (description != null && description.trim().isNotEmpty)
+          'descripcion': description.trim(),
+      };
+      final res = await guard(
+        () => _api.send<Map<String, dynamic>>(
+              'POST',
+              '${ApiConfig.v1}/menu/platos',
+              body: body,
+              restaurant: true,
+            ).then((v) => v ?? <String, dynamic>{}),
+      );
+      final id = (res['id'] ?? '').toString();
+      if (id.isEmpty) return null;
+      final resPrice = _asNullableInt(res['precioCentavos']) ?? priceCents;
+      return CatalogDish(
+        id: id,
+        name: (res['nombre'] ?? name.trim()).toString(),
+        kind: categoria == 'A_LA_CARTA'
+            ? DishKind.carta
+            : (seccion == 'POSTRE' ? DishKind.postre : DishKind.bebida),
+        price: Money.fromCents(resPrice),
+        description: res['descripcion']?.toString() ?? description ?? '',
+        archived: res['activo'] == false,
+        soldOut: res['agotado'] == true,
+      );
+    } on ApiException catch (e) {
+      final detail = e.detail.trim();
+      _lastError = detail.isNotEmpty ? detail : e.userMessage;
+      return null;
+    }
+  }
+
+  @override
+  Future<bool> updateCatalogDishPrice(
+    String restaurantId,
+    String dishId, {
+    required int priceCents,
+  }) async {
+    _lastError = null;
+    try {
+      await guard(
+        () => _api.send<dynamic>(
+              'PATCH',
+              '${ApiConfig.v1}/menu/platos/$dishId',
+              body: {'precioCentavos': priceCents},
+              restaurant: true,
+            ),
+      );
+      return true;
+    } on ApiException catch (e) {
+      final detail = e.detail.trim();
+      _lastError = detail.isNotEmpty ? detail : e.userMessage;
+      return false;
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // IOwnerCashRepository — Plantillas de planes y Cartulina (O8, O9, O10)
   // ---------------------------------------------------------------------------

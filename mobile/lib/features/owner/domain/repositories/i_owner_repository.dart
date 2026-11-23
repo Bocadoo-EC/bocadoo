@@ -52,6 +52,23 @@ abstract class IOwnerCatalogRepository {
     String dishId, {
     required bool soldOut,
   });
+
+  /// Crea un plato permanente de Carta, Bebida o Extra (`POST /v1/menu/platos`).
+  Future<CatalogDish?> addPermanentDish(
+    String restaurantId, {
+    required String name,
+    required int priceCents,
+    required String categoria,
+    required String seccion,
+    String? description,
+  });
+
+  /// Actualiza el precio en centavos de un plato (`PATCH /v1/menu/platos/{id}`).
+  Future<bool> updateCatalogDishPrice(
+    String restaurantId,
+    String dishId, {
+    required int priceCents,
+  });
 }
 
 /// "Tus números" (O14).

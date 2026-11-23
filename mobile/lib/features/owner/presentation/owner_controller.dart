@@ -1212,10 +1212,12 @@ class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
       addCandidate(added);
     }
 
-    for (final g in PermanentCatalogGroup.values) {
-      if (merged.where((e) => e.group == g).isEmpty) {
-        for (final def in _defaultItems.where((d) => d.group == g)) {
-          addCandidate(def);
+    if (AppMode.useMock) {
+      for (final g in PermanentCatalogGroup.values) {
+        if (merged.where((e) => e.group == g).isEmpty) {
+          for (final def in _defaultItems.where((d) => d.group == g)) {
+            addCandidate(def);
+          }
         }
       }
     }
@@ -1223,13 +1225,59 @@ class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
     return PermanentCatalogState(items: merged, dirty: _dirty);
   }
 
-  void addItem({
+  Future<String?> addItem({
     required String name,
     required int priceCents,
     required PermanentCatalogGroup group,
     bool available = true,
+    bool isDessert = false,
     String description = '',
-  }) {
+  }) async {
+    final rid = ref.read(ownerRestaurantIdProvider);
+    if (!AppMode.useMock) {
+      final repo = ref.read(ownerCatalogRepositoryProvider);
+      final (String categoria, String seccion) = switch (group) {
+        PermanentCatalogGroup.carta => ('A_LA_CARTA', 'FUERTE'),
+        PermanentCatalogGroup.bebidas => ('BEBIDA', 'BEBIDA'),
+        PermanentCatalogGroup.extras =>
+          ('EXTRA', isDessert ? 'POSTRE' : 'ADICIONAL'),
+      };
+      final created = await repo.addPermanentDish(
+        rid,
+        name: name.trim(),
+        priceCents: priceCents,
+        categoria: categoria,
+        seccion: seccion,
+        description: description.trim(),
+      );
+      if (created == null) {
+        if (repo is ApiOwnerRepository) {
+          return repo.consumeLastError() ??
+              'No se pudo publicar el plato en el catálogo.';
+        }
+        return 'No se pudo publicar el plato en el catálogo.';
+      }
+      if (!available) {
+        await repo.setCatalogDishSoldOut(rid, created.id, soldOut: true);
+      }
+      final newItem = PermanentCatalogItem(
+        id: created.id,
+        name: created.name,
+        priceCents: Money.toCents(created.price ?? (priceCents / 100.0)),
+        group: group,
+        available: available,
+        description: created.description,
+      );
+      state = PermanentCatalogState(
+        items: [...state.items, newItem],
+        dirty: _dirty,
+      );
+      ref.invalidate(catalogProvider);
+      ref.invalidate(catalogDishesProvider);
+      MenuAndCartaLiveSync.instance.notifyUpdated(rid);
+      return null;
+    }
+
     final item = PermanentCatalogItem(
       id: 'local_${group.name}_${_seq++}',
       name: name.trim(),
@@ -1244,23 +1292,56 @@ class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
       items: [...state.items, item],
       dirty: true,
     );
+    MenuAndCartaLiveSync.instance.notifyUpdated(rid);
+    return null;
   }
 
-  void updatePrice(String id, int priceCents) {
+  Future<String?> updatePrice(String id, int priceCents) async {
+    final prevOverride = _priceOverrides[id];
+    final prevState = state;
+    final isLocalOnly = id.startsWith('perm_') || id.startsWith('local_');
+
     _priceOverrides[id] = priceCents;
     for (var i = 0; i < _addedItems.length; i++) {
       if (_addedItems[i].id == id) {
         _addedItems[i] = _addedItems[i].copyWith(priceCents: priceCents);
       }
     }
-    _dirty = true;
+    if (isLocalOnly) _dirty = true;
     state = PermanentCatalogState(
       items: [
         for (final item in state.items)
           item.id == id ? item.copyWith(priceCents: priceCents) : item,
       ],
-      dirty: true,
+      dirty: _dirty,
     );
+
+    if (AppMode.useMock || isLocalOnly) return null;
+
+    final rid = ref.read(ownerRestaurantIdProvider);
+    final repo = ref.read(ownerCatalogRepositoryProvider);
+    final ok = await repo.updateCatalogDishPrice(
+      rid,
+      id,
+      priceCents: priceCents,
+    );
+    if (ok) {
+      ref.invalidate(catalogProvider);
+      ref.invalidate(catalogDishesProvider);
+      MenuAndCartaLiveSync.instance.notifyUpdated(rid);
+      return null;
+    }
+
+    if (prevOverride == null) {
+      _priceOverrides.remove(id);
+    } else {
+      _priceOverrides[id] = prevOverride;
+    }
+    state = prevState;
+    if (repo is ApiOwnerRepository) {
+      return repo.consumeLastError() ?? 'No se pudo actualizar el precio.';
+    }
+    return 'No se pudo actualizar el precio.';
   }
 
   /// Alterna `Disponible / Agotado` conectando con `PATCH /v1/menu/platos/{id}/agotado`.

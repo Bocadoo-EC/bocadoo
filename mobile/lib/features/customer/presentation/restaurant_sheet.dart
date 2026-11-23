@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -26,6 +28,95 @@ class RestaurantSheet extends ConsumerStatefulWidget {
 
 class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
   bool _sending = false;
+  Timer? _quoteTimer;
+  String? _requestedQuoteKey;
+  String? _resolvedQuoteKey;
+  OrderQuote? _liveQuote;
+
+  @override
+  void dispose() {
+    _quoteTimer?.cancel();
+    super.dispose();
+  }
+
+  String _buildQuoteKey(Restaurant r, HybridOrderState draft, bool takeaway) {
+    final addons = [
+      for (final l in draft.addonsList) '${l.item.id}x${l.quantity}',
+    ].join(',');
+    return '${r.id}|${draft.breakfastMode}|${draft.soupId}|${draft.mainId}|${draft.breakfastId}|$takeaway|$addons';
+  }
+
+  void _syncQuote({
+    required CustomerController controller,
+    required Restaurant r,
+    required HybridOrderState draft,
+    required bool takeaway,
+    required bool enabled,
+  }) {
+    final key = _buildQuoteKey(r, draft, takeaway);
+    if (!enabled) {
+      if (_requestedQuoteKey != null || _liveQuote != null) {
+        _quoteTimer?.cancel();
+        _requestedQuoteKey = null;
+        _resolvedQuoteKey = null;
+        _liveQuote = null;
+      }
+      return;
+    }
+    if (_requestedQuoteKey == key) return;
+    _requestedQuoteKey = key;
+    _quoteTimer?.cancel();
+    _quoteTimer = Timer(const Duration(milliseconds: 220), () async {
+      if (!mounted) return;
+      final lunchReady = draft.isLunchReady(r);
+      final resolvedSoupId =
+          draft.soupId == kIndividualNoSoupId ? null : draft.soupId;
+      final quote = await controller.quotePreorder(
+        restaurant: r,
+        soupId: (lunchReady && !draft.breakfastMode) ? resolvedSoupId : null,
+        mainId: (lunchReady && !draft.breakfastMode) ? draft.mainId : null,
+        breakfastId:
+            (lunchReady && draft.breakfastMode) ? draft.breakfastId : null,
+        takeaway: takeaway,
+        cartaItems: [
+          for (final l in draft.addonsList)
+            (platoId: l.item.id, quantity: l.quantity.clamp(1, 10)),
+        ],
+      );
+      if (!mounted || _requestedQuoteKey != key) return;
+      setState(() {
+        _resolvedQuoteKey = key;
+        _liveQuote = quote;
+      });
+    });
+  }
+
+  HybridTenderSummary _resolveEffectiveTender({
+    required Restaurant r,
+    required HybridOrderState draft,
+    required bool hasPlanHere,
+    required bool takeaway,
+    required String quoteKey,
+  }) {
+    final q = (_resolvedQuoteKey == quoteKey) ? _liveQuote : null;
+    if (q != null) {
+      final credits = q.planCreditsUsed;
+      final cash = q.saldoPorCobrarCentavos;
+      if (credits > 0 && cash <= 0) return HybridPlanOnlyTender(credits);
+      if (credits > 0) {
+        return HybridMixedTender(
+          planCreditsUsed: credits,
+          cashToCollectCents: cash,
+        );
+      }
+      return HybridCashOnlyTender(cash);
+    }
+    return draft.resolveTender(
+      r: r,
+      hasPlanHere: hasPlanHere,
+      takeaway: takeaway,
+    );
+  }
 
   List<String> _availableArrivalOptions() {
     final now = EcuadorTime.now();
@@ -109,17 +200,14 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
       restaurant: r,
       soupId: (lunchReady && !draft.breakfastMode) ? resolvedSoupId : null,
       mainId: (lunchReady && !draft.breakfastMode) ? draft.mainId : null,
-      breakfastId: (lunchReady && draft.breakfastMode)
-          ? draft.breakfastId
-          : (!lunchReady && draft.hasAddons
-              ? draft.addonsList.first.item.id
-              : null),
+      breakfastId: (lunchReady && draft.breakfastMode) ? draft.breakfastId : null,
       // Salón lleno: el pedido siempre es para llevar.
       takeaway: draft.takeaway ||
           ref.read(restaurantPublicStatusProvider(r.id)).isFull,
       estimatedArrival: _resolveArrivalHhmm(draft),
       cartaItems: [
-        for (final l in draft.addonsList) (platoId: l.item.id, quantity: l.quantity),
+        for (final l in draft.addonsList)
+          (platoId: l.item.id, quantity: l.quantity.clamp(1, 10)),
       ],
     );
     if (!mounted) return;
@@ -247,12 +335,7 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
         activePass.remainingLunches > 0 &&
         !activePass.isExpired;
 
-    final tender = draft.resolveTender(
-      r: r,
-      hasPlanHere: hasPlanHere,
-      takeaway: takeaway,
-    );
-
+    final quoteKey = _buildQuoteKey(r, draft, takeaway);
     final canOrderAnyMenu = r.hasMenu && !menuSoldOutAll;
     final canOrderAddonsOnly = draft.hasAddons && !draft.hasPartialLunch(r);
     final canContinue = !isClosed &&
@@ -262,6 +345,22 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
         draft.canContinue(r) &&
         (draft.isLunchReady(r) ? !menuSoldOutAll : canOrderAddonsOnly);
     final canOrder = canContinue && draft.step == 2;
+
+    _syncQuote(
+      controller: controller,
+      r: r,
+      draft: draft,
+      takeaway: takeaway,
+      enabled: !isClosed && !hasActiveOrder && draft.canContinue(r),
+    );
+
+    final tender = _resolveEffectiveTender(
+      r: r,
+      draft: draft,
+      hasPlanHere: hasPlanHere,
+      takeaway: takeaway,
+      quoteKey: quoteKey,
+    );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,

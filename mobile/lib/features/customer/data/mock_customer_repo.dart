@@ -635,6 +635,97 @@ class MockCustomerRepository implements ICustomerRepository {
   }
 
   @override
+  Future<OrderQuote?> quotePreorder({
+    required String restaurantId,
+    String? soupId,
+    String? mainId,
+    String? breakfastId,
+    required bool takeaway,
+    List<({String platoId, int quantity})> cartaItems = const [],
+  }) async {
+    await _simulateNetwork();
+    final restaurant = await getRestaurantById(restaurantId);
+    final carta = cartaItems.isEmpty
+        ? const <PublicCartaItem>[]
+        : await getRestaurantCarta(restaurantId);
+    final cartaById = {for (final item in carta) item.id: item};
+    final hasLunch = (soupId ?? '').isNotEmpty ||
+        (mainId ?? '').isNotEmpty ||
+        (breakfastId ?? '').isNotEmpty;
+    final hasPlan = hasLunch &&
+        (restaurantId == 'r1' || restaurantId == 'r2') &&
+        (_store.remainingLunchesByRest[restaurantId] ?? 0) > 0;
+    final baseCents = Money.toCents(restaurant?.singleLunchPrice ?? 3.00);
+    final surchargeCents =
+        takeaway ? Money.toCents(restaurant?.takeawaySurcharge ?? 0.25) : 0;
+
+    final lines = <OrderQuoteLine>[];
+    var subtotal = 0;
+    var recargo = 0;
+    var cubierto = 0;
+
+    if (hasLunch) {
+      subtotal += baseCents;
+      recargo += surchargeCents;
+      final planCov = hasPlan ? baseCents : 0;
+      cubierto += planCov;
+      lines.add(
+        OrderQuoteLine(
+          ref: hasPlan ? 'almuerzo#1' : 'almuerzo',
+          tipo: 'ALMUERZO',
+          nombre: 'Almuerzo',
+          cantidad: 1,
+          precioUnitarioCentavos: baseCents,
+          subtotalCentavos: baseCents,
+          recargoCentavos: surchargeCents,
+          fuente: hasPlan ? 'PLAN' : 'CAJA',
+          cubiertoPorPlanCentavos: planCov,
+          porCobrarCentavos: (baseCents - planCov) + surchargeCents,
+        ),
+      );
+    }
+
+    for (var i = 0; i < cartaItems.length; i++) {
+      final entry = cartaItems[i];
+      final item = cartaById[entry.platoId];
+      if (item == null || entry.quantity <= 0) continue;
+      final sub = item.priceCents * entry.quantity;
+      final itemRec =
+          (takeaway && item.category.toUpperCase() == 'A_LA_CARTA')
+              ? surchargeCents * entry.quantity
+              : 0;
+      subtotal += sub;
+      recargo += itemRec;
+      lines.add(
+        OrderQuoteLine(
+          ref: 'extra:$i',
+          tipo: item.category,
+          nombre: item.name,
+          platoId: item.id,
+          cantidad: entry.quantity,
+          precioUnitarioCentavos: item.priceCents,
+          subtotalCentavos: sub,
+          recargoCentavos: itemRec,
+          fuente: 'CAJA',
+          cubiertoPorPlanCentavos: 0,
+          porCobrarCentavos: sub + itemRec,
+        ),
+      );
+    }
+
+    final total = subtotal + recargo;
+    return OrderQuote(
+      estimada: true,
+      subtotalCentavos: subtotal,
+      recargoCentavos: recargo,
+      totalCentavos: total,
+      cubiertoPorPlanCentavos: cubierto,
+      saldoPorCobrarCentavos: total - cubierto,
+      lineas: lines,
+    );
+  }
+
+  @override
   Future<ActiveOrder> preorder({
     required String restaurantId,
     String? soupId,

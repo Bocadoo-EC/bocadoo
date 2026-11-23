@@ -301,17 +301,21 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
               child: const Text('Cancelar'),
             ),
             FilledButton(
-              onPressed: () {
+              onPressed: () async {
                 final parsed =
                     double.tryParse(ctrl.text.trim().replaceAll(',', '.'));
                 if (parsed == null || parsed <= 0) {
                   setDialogState(() => error = 'Ingresa un precio válido.');
                   return;
                 }
-                ref
+                final messenger = ScaffoldMessenger.of(context);
+                Navigator.of(ctx).pop();
+                final err = await ref
                     .read(permanentCatalogProvider.notifier)
                     .updatePrice(item.id, (parsed * 100).round());
-                Navigator.of(ctx).pop();
+                if (err != null && mounted) {
+                  showInfoSnackBar(messenger, err);
+                }
               },
               child: const Text('Aplicar'),
             ),
@@ -925,6 +929,8 @@ class _NewPermanentItemSheetState
   final _name = TextEditingController();
   final _price = TextEditingController();
   bool _available = true;
+  bool _isDessert = false;
+  bool _saving = false;
   String? _error;
 
   @override
@@ -934,7 +940,7 @@ class _NewPermanentItemSheetState
     super.dispose();
   }
 
-  void _save() {
+  Future<void> _save() async {
     final name = _name.text.trim();
     if (name.isEmpty) {
       setState(() => _error = 'Escribe el nombre del ítem.');
@@ -945,12 +951,25 @@ class _NewPermanentItemSheetState
       setState(() => _error = 'Ingresa un precio válido, ej. 4.50.');
       return;
     }
-    ref.read(permanentCatalogProvider.notifier).addItem(
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    final err = await ref.read(permanentCatalogProvider.notifier).addItem(
           name: name,
           priceCents: (price * 100).round(),
           group: widget.group,
           available: _available,
+          isDessert: _isDessert,
         );
+    if (!mounted) return;
+    if (err != null) {
+      setState(() {
+        _saving = false;
+        _error = err;
+      });
+      return;
+    }
     Navigator.of(context).pop();
   }
 
@@ -1023,6 +1042,20 @@ class _NewPermanentItemSheetState
               },
             ),
             const SizedBox(height: 8),
+            if (widget.group == PermanentCatalogGroup.extras)
+              SwitchListTile.adaptive(
+                contentPadding: EdgeInsets.zero,
+                title: const Text(
+                  'Es un postre adicional',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+                ),
+                subtitle: const Text(
+                  'Se clasifica como postre en Carta y Extras',
+                  style: TextStyle(fontSize: 12),
+                ),
+                value: _isDessert,
+                onChanged: (v) => setState(() => _isDessert = v),
+              ),
             SwitchListTile.adaptive(
               contentPadding: EdgeInsets.zero,
               title: const Text(
@@ -1034,8 +1067,14 @@ class _NewPermanentItemSheetState
             ),
             const SizedBox(height: 14),
             ElevatedButton(
-              onPressed: _save,
-              child: Text(title),
+              onPressed: _saving ? null : _save,
+              child: _saving
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2.5),
+                    )
+                  : Text(title),
             ),
           ],
         ),

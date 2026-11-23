@@ -1388,6 +1388,32 @@ class CustomerController extends ChangeNotifier {
     return true;
   }
 
+  /// Cotiza la selección actual contra `POST /v1/mis/pedidos/cotizar` sin crear orden.
+  Future<OrderQuote?> quotePreorder({
+    required Restaurant restaurant,
+    String? soupId,
+    String? mainId,
+    String? breakfastId,
+    bool takeaway = false,
+    List<({String platoId, int quantity})> cartaItems = const [],
+  }) async {
+    if (_state.activeOrder != null && !_state.activeOrder!.isDelivered) {
+      return null;
+    }
+    try {
+      return await _repository.quotePreorder(
+        restaurantId: restaurant.id,
+        soupId: soupId,
+        mainId: mainId,
+        breakfastId: breakfastId,
+        takeaway: takeaway,
+        cartaItems: cartaItems,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Preorden desde la ficha del local (C3) o directa desde la tarjeta (C2).
   Future<bool> preorder({
     required Restaurant restaurant,

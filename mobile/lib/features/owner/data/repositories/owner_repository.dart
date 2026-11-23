@@ -265,6 +265,52 @@ class OwnerRepository implements IOwnerRepository, IOwnerMenuRepository, IOwnerC
   }
 
   @override
+  Future<CatalogDish?> addPermanentDish(
+    String restaurantId, {
+    required String name,
+    required int priceCents,
+    required String categoria,
+    required String seccion,
+    String? description,
+  }) {
+    final kind = categoria == 'A_LA_CARTA'
+        ? DishKind.carta
+        : (seccion == 'POSTRE' ? DishKind.postre : DishKind.bebida);
+    return addDish(
+      restaurantId,
+      name: name,
+      kind: kind,
+      price: priceCents / 100.0,
+      description: description,
+    );
+  }
+
+  @override
+  Future<bool> updateCatalogDishPrice(
+    String restaurantId,
+    String dishId, {
+    required int priceCents,
+  }) async {
+    final i = _dishes.indexWhere((d) => d.id == dishId);
+    if (i >= 0) {
+      final d = _dishes[i];
+      _dishes[i] = CatalogDish(
+        id: d.id,
+        name: d.name,
+        kind: d.kind,
+        price: priceCents / 100.0,
+        description: d.description,
+        archived: d.archived,
+        soldOut: d.soldOut,
+        topPick: d.topPick,
+        veggie: d.veggie,
+        breakfastCategory: d.breakfastCategory,
+      );
+    }
+    return true;
+  }
+
+  @override
   Future<bool> setStoreOpen(String restaurantId, {required bool isOpen}) async {
     await Future<void>.delayed(const Duration(milliseconds: 150));
     if (_todayMenu != null) {

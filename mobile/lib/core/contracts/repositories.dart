@@ -47,6 +47,16 @@ abstract class ICustomerRepository {
   /// Últimos movimientos del comensal
   Future<List<ActivityItem>> getRecentActivity();
 
+  /// Cotiza en solo lectura (`POST /v1/mis/pedidos/cotizar`) sin crear orden.
+  Future<OrderQuote?> quotePreorder({
+    required String restaurantId,
+    String? soupId,
+    String? mainId,
+    String? breakfastId,
+    required bool takeaway,
+    List<({String platoId, int quantity})> cartaItems = const [],
+  });
+
   /// Crea una preorden de almuerzo o desayuno y devuelve el número de orden
   Future<ActiveOrder> preorder({
     required String restaurantId,
