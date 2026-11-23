@@ -1,34 +1,14 @@
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/location/location_service.dart';
 import '../../../core/theme/app_theme.dart';
-import '../../../core/widgets/location_picker_map.dart';
 import '../data/auth_repository.dart';
 import 'google_sign_in_flow.dart';
-
-// D7: zonas exactas de store.tsx (DINER_ZONES)
-const _dimerZones = [
-  'Frente a la PUCE',
-  'La Floresta',
-  'La Mariscal',
-  'Centro Histórico',
-  'Cumbayá',
-  'UDLA Granados',
-  'EPN / Salesiana',
-];
-
-/// Centro de cada zona, para ubicar el pin al elegirla.
-const _zoneCoords = <String, LatLng>{
-  'Frente a la PUCE': LatLng(-0.2105, -78.5020),
-  'La Floresta': LatLng(-0.2061, -78.4820),
-  'La Mariscal': LatLng(-0.2027, -78.4910),
-  'Centro Histórico': LatLng(-0.2200, -78.5120),
-  'Cumbayá': LatLng(-0.1920, -78.4320),
-  'UDLA Granados': LatLng(-0.1890, -78.4680),
-  'EPN / Salesiana': LatLng(-0.2130, -78.4950),
-};
+import 'widgets/diner_location_picker.dart';
 
 enum _PassStrength { none, weak, medium, strong }
 
@@ -46,8 +26,8 @@ class _RegisterDinerScreenState extends ConsumerState<RegisterDinerScreen> {
   final _phoneCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
   final _confirmCtrl = TextEditingController();
-  String _zone = _dimerZones[1]; // La Floresta por defecto (índice 1)
-  LatLng _location = _zoneCoords[_dimerZones[1]]!;
+  String _zone = 'Quito';
+  LatLng _location = LocationService.fallbackPuce;
   bool _obscurePass = true;
   bool _obscureConfirm = true;
   bool _terms = true;
@@ -73,17 +53,65 @@ class _RegisterDinerScreenState extends ConsumerState<RegisterDinerScreen> {
     return _PassStrength.strong;
   }
 
+  static final _nameRegex = RegExp(r'^[a-zA-ZáéíóúüñÁÉÍÓÚÜÑ\s]+$');
+  static final _emailRegex = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
+  static final _phoneRegex = RegExp(r'^\d{9,10}$');
+
+  String? _nameError(String raw) {
+    final v = raw.trim();
+    if (v.isEmpty) return 'Por favor ingresa tu nombre y apellido.';
+    if (!_nameRegex.hasMatch(v) || v.replaceAll(RegExp(r'\s+'), '').length < 2) {
+      return 'Ingresa tu nombre usando solo letras.';
+    }
+    return null;
+  }
+
+  String? _emailError(String raw) {
+    final v = raw.trim();
+    if (v.isEmpty) return 'Ingresa tu correo electrónico.';
+    if (!v.contains('@')) {
+      return 'El correo electrónico debe incluir @ (ej: carlos@email.com).';
+    }
+    if (!_emailRegex.hasMatch(v)) {
+      return 'Por favor ingresa un correo electrónico válido.';
+    }
+    return null;
+  }
+
+  String? _phoneError(String raw) {
+    final v = raw.trim();
+    if (!_phoneRegex.hasMatch(v)) {
+      return 'Ingresa un número móvil válido de 9 a 10 dígitos (ej: 0991234567).';
+    }
+    return null;
+  }
+
+  void _validateSingleField(String key) {
+    final next = switch (key) {
+      'nombre' => _nameError(_nameCtrl.text),
+      'email' => _emailError(_emailCtrl.text),
+      'phone' => _phoneError(_phoneCtrl.text),
+      _ => null,
+    };
+    setState(() => _errors[key] = next);
+  }
+
+  void _onFieldChanged(String key) {
+    if (_errors.containsKey(key) && _errors[key] != null) {
+      _validateSingleField(key);
+    } else {
+      setState(() {});
+    }
+  }
+
   bool _validate() {
     final errs = <String, String?>{};
-    if (_nameCtrl.text.trim().isEmpty) {
-      errs['nombre'] = 'Por favor ingresa tu nombre y apellido.';
-    }
-    if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(_emailCtrl.text.trim())) {
-      errs['email'] = 'Por favor ingresa un correo electrónico válido.';
-    }
-    if (_phoneCtrl.text.trim().length < 9) {
-      errs['phone'] = 'Ingresa un número celular ecuatoriano válido (ej: 0991234567).';
-    }
+    final nameErr = _nameError(_nameCtrl.text);
+    if (nameErr != null) errs['nombre'] = nameErr;
+    final emailErr = _emailError(_emailCtrl.text);
+    if (emailErr != null) errs['email'] = emailErr;
+    final phoneErr = _phoneError(_phoneCtrl.text);
+    if (phoneErr != null) errs['phone'] = phoneErr;
     if (_passCtrl.text.length < 10) {
       errs['pass'] = 'La contraseña debe tener mínimo 10 caracteres.';
     } else if (_passCtrl.text != _confirmCtrl.text) {
@@ -202,12 +230,33 @@ class _RegisterDinerScreenState extends ConsumerState<RegisterDinerScreen> {
 
               _Label('NOMBRE COMPLETO'),
               const SizedBox(height: 8),
-              TextField(
-                controller: _nameCtrl,
-                decoration: InputDecoration(
-                  prefixIcon: Icon(Icons.person_outline_rounded, color: cs.onSurfaceVariant),
-                  hintText: 'Ej. Carlos Mejía',
-                  errorText: _errors['nombre'],
+              Focus(
+                onFocusChange: (hasFocus) {
+                  if (!hasFocus && _nameCtrl.text.isNotEmpty) {
+                    _validateSingleField('nombre');
+                  }
+                },
+                child: TextField(
+                  controller: _nameCtrl,
+                  keyboardType: TextInputType.name,
+                  textCapitalization: TextCapitalization.words,
+                  textInputAction: TextInputAction.next,
+                  autofillHints: const [AutofillHints.name],
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(
+                      RegExp(r'[a-zA-ZáéíóúüñÁÉÍÓÚÜÑ\s]'),
+                    ),
+                  ],
+                  decoration: InputDecoration(
+                    prefixIcon: Icon(Icons.person_outline_rounded, color: cs.onSurfaceVariant),
+                    hintText: 'Ej. Carlos Mejía',
+                    errorText: _errors['nombre'],
+                    suffixIcon: _nameCtrl.text.trim().isNotEmpty &&
+                            _nameError(_nameCtrl.text) == null
+                        ? Icon(Icons.check_circle_rounded, color: bColors.success)
+                        : null,
+                  ),
+                  onChanged: (_) => _onFieldChanged('nombre'),
                 ),
               ),
 
@@ -215,13 +264,32 @@ class _RegisterDinerScreenState extends ConsumerState<RegisterDinerScreen> {
 
               _Label('CORREO ELECTRÓNICO'),
               const SizedBox(height: 8),
-              TextField(
-                controller: _emailCtrl,
-                keyboardType: TextInputType.emailAddress,
-                decoration: InputDecoration(
-                  prefixIcon: Icon(Icons.email_outlined, color: cs.onSurfaceVariant),
-                  hintText: 'carlos@email.com',
-                  errorText: _errors['email'],
+              Focus(
+                onFocusChange: (hasFocus) {
+                  if (!hasFocus && _emailCtrl.text.isNotEmpty) {
+                    _validateSingleField('email');
+                  }
+                },
+                child: TextField(
+                  controller: _emailCtrl,
+                  keyboardType: TextInputType.emailAddress,
+                  textInputAction: TextInputAction.next,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  autofillHints: const [AutofillHints.email],
+                  inputFormatters: [
+                    FilteringTextInputFormatter.deny(RegExp(r'\s')),
+                  ],
+                  decoration: InputDecoration(
+                    prefixIcon: Icon(Icons.email_outlined, color: cs.onSurfaceVariant),
+                    hintText: 'carlos@email.com',
+                    errorText: _errors['email'],
+                    suffixIcon: _emailCtrl.text.trim().isNotEmpty &&
+                            _emailError(_emailCtrl.text) == null
+                        ? Icon(Icons.check_circle_rounded, color: bColors.success)
+                        : null,
+                  ),
+                  onChanged: (_) => _onFieldChanged('email'),
                 ),
               ),
 
@@ -229,62 +297,46 @@ class _RegisterDinerScreenState extends ConsumerState<RegisterDinerScreen> {
 
               _Label('TELÉFONO MÓVIL (ECUADOR)'),
               const SizedBox(height: 8),
-              TextField(
-                controller: _phoneCtrl,
-                keyboardType: TextInputType.phone,
-                decoration: InputDecoration(
-                  prefixIcon: Icon(Icons.phone_outlined, color: cs.onSurfaceVariant),
-                  hintText: '099 123 4567',
-                  errorText: _errors['phone'],
+              Focus(
+                onFocusChange: (hasFocus) {
+                  if (!hasFocus && _phoneCtrl.text.isNotEmpty) {
+                    _validateSingleField('phone');
+                  }
+                },
+                child: TextField(
+                  controller: _phoneCtrl,
+                  keyboardType: TextInputType.phone,
+                  textInputAction: TextInputAction.next,
+                  autofillHints: const [AutofillHints.telephoneNumber],
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(10),
+                  ],
+                  decoration: InputDecoration(
+                    prefixIcon: Icon(Icons.phone_outlined, color: cs.onSurfaceVariant),
+                    hintText: '0991234567',
+                    errorText: _errors['phone'],
+                    suffixIcon: _phoneCtrl.text.trim().isNotEmpty &&
+                            _phoneError(_phoneCtrl.text) == null
+                        ? Icon(Icons.check_circle_rounded, color: bColors.success)
+                        : null,
+                  ),
+                  onChanged: (_) => _onFieldChanged('phone'),
                 ),
               ),
 
               const SizedBox(height: 16),
 
-              _Label('SECTOR PREFERIDO DE ALMUERZO EN QUITO'),
-              const SizedBox(height: 10),
-
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: _dimerZones.map((z) {
-                  final sel = z == _zone;
-                  return GestureDetector(
-                    onTap: () => setState(() => _zone = z),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: sel ? cs.primary : cs.surface,
-                        borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-                        border: Border.all(color: sel ? cs.primary : cs.outlineVariant),
-                      ),
-                      child: Row(mainAxisSize: MainAxisSize.min, children: [
-                        Icon(Icons.location_on_rounded, size: 13,
-                            color: sel ? cs.onPrimary : cs.onSurfaceVariant),
-                        const SizedBox(width: 4),
-                        Text(
-                          z,
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: sel ? cs.onPrimary : cs.onSurface,
-                          ),
-                        ),
-                      ]),
-                    ),
-                  );
-                }).toList(),
-              ),
-
-              const SizedBox(height: 14),
-
-              _Label('TU UBICACIÓN EXACTA'),
+              _Label('TU UBICACIÓN PARA ALMORZAR'),
               const SizedBox(height: 8),
-              LocationPickerMap(
-                zones: _zoneCoords,
-                selectedZone: _zone,
-                onZoneSelected: (z) => setState(() => _zone = z),
-                onLocationChanged: (p) => _location = p,
+              DinerLocationPicker(
+                initialLocation: _location,
+                onLocationResolved: (point, zoneLabel) {
+                  setState(() {
+                    _location = point;
+                    _zone = zoneLabel;
+                  });
+                },
               ),
 
               const SizedBox(height: 16),
