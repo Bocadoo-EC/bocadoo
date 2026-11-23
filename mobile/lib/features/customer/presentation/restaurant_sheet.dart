@@ -404,7 +404,7 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
                     cartaAsync: cartaAsync,
                     cartaItems: cartaItems,
                     publicStatus: publicStatus,
-                    hasPlanHere: hasPlanHere || r.hasPlan,
+                    hasPlanHere: hasPlanHere,
                     hasBreakfasts: hasBreakfasts,
                     breakfastMode: breakfastMode,
                     isClosed: isClosed,
@@ -561,7 +561,7 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
         EditableHybridOrderCard(
           restaurant: r,
           state: draft,
-          hasPlanHere: hasPlanHere,
+          hasPlanHere: tender.planCreditsUsed > 0,
           onEditLunch: () {
             notifier.setTab(RestaurantOrderTab.menuDelDia);
             notifier.setStep(1);
@@ -575,6 +575,7 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
         SplitBillingSummaryCard(
           tender: tender,
           remainingLunches: remainingLunches,
+          hasLunch: draft.isLunchReady(r),
         ),
         const SizedBox(height: 18),
         if (forceTakeaway) ...[

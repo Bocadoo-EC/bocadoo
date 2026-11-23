@@ -795,7 +795,11 @@ class ApiCustomerRepository implements ICustomerRepository {
           fuente: (m['fuente'] ?? 'CAJA').toString().toUpperCase(),
           cubiertoPorPlanCentavos: _asInt(m['cubiertoPorPlanCentavos']) ?? 0,
           porCobrarCentavos: _asInt(m['porCobrarCentavos']) ?? 0,
-          omitida: m['omitida']?.toString(),
+          omitida: (m['omitida'] == null ||
+                  m['omitida'] == false ||
+                  m['omitida'].toString().trim().isEmpty)
+              ? null
+              : m['omitida'].toString(),
         ),
       );
     }

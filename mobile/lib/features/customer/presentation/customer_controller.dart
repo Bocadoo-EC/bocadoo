@@ -1505,13 +1505,18 @@ class CustomerController extends ChangeNotifier {
     }
   }
 
-  Future<bool> reserveOffer(RestaurantOffer offer, {bool takeaway = false}) async {
+  Future<bool> reserveOffer(
+    RestaurantOffer offer, {
+    bool takeaway = false,
+    String? estimatedArrival,
+  }) async {
     final restaurant = _state.restaurantById(offer.restaurantId);
     if (restaurant == null) return false;
     final ok = await preorder(
       restaurant: restaurant,
       offerId: offer.id,
       takeaway: takeaway,
+      estimatedArrival: estimatedArrival,
     );
     // Los cupos cambiaron: el feed se relee para que la oferta baje o salga.
     if (ok) unawaited(refreshRestaurants());

@@ -431,10 +431,12 @@ class SplitBillingSummaryCard extends StatelessWidget {
     super.key,
     required this.tender,
     required this.remainingLunches,
+    this.hasLunch = true,
   });
 
   final HybridTenderSummary tender;
   final int remainingLunches;
+  final bool hasLunch;
 
   @override
   Widget build(BuildContext context) {
@@ -500,14 +502,16 @@ class SplitBillingSummaryCard extends StatelessWidget {
               color: colors.primary.withValues(alpha: 0.15),
             ),
             const SizedBox(height: 10),
-          ] else if (cashCents > 0) ...[
+          ] else if (cashCents > 0 && hasLunch) ...[
             Row(
               children: [
                 Icon(Icons.payments_outlined, size: 16, color: colors.primary),
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    'Sin cupos en tu plan · Cobro requerido en caja',
+                    remainingLunches > 0
+                        ? 'Tu plan ($remainingLunches disp.) no aplicó hoy · Cobro en caja'
+                        : 'Sin cupos en tu plan · Cobro requerido en caja',
                     style: TextStyle(
                       fontSize: 12.5,
                       fontWeight: FontWeight.w700,
