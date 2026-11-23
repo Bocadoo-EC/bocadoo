@@ -670,8 +670,22 @@ class _RegistrarConsumoScreenState
             )
             .toList();
 
-        final dessertsAndExtras = permanentItems
-            .where((p) => p.group == PermanentCatalogGroup.extras)
+        final desserts = permanentItems
+            .where((p) => p.group == PermanentCatalogGroup.extras && p.isDessert)
+            .map(
+              (e) => _PosGridItem(
+                key: 'pos|${e.id}',
+                name: e.name,
+                tag: 'Postre',
+                priceCents: e.priceCents,
+                soldOut: !e.available,
+                admiteParaLlevar: false,
+              ),
+            )
+            .toList();
+
+        final extras = permanentItems
+            .where((p) => p.group == PermanentCatalogGroup.extras && !p.isDessert)
             .map(
               (e) => _PosGridItem(
                 key: 'ext|${e.id}',
@@ -695,8 +709,14 @@ class _RegistrarConsumoScreenState
             const SizedBox(height: 16),
             _buildGridBlock(
               title: 'Postres',
-              items: dessertsAndExtras,
-              emptyLabel: 'Sin postres o extras configurados en Carta y Bebidas.',
+              items: desserts,
+              emptyLabel: 'Sin postres configurados en Carta y Bebidas.',
+            ),
+            const SizedBox(height: 16),
+            _buildGridBlock(
+              title: 'Extras',
+              items: extras,
+              emptyLabel: 'Sin extras configurados en Carta y Bebidas.',
             ),
           ],
         );
@@ -1298,6 +1318,7 @@ class _PosItemCard extends StatelessWidget {
     final (Color tagBg, Color tagFg) = switch (item.tag) {
       'Carta' => (colors.secondaryContainer, colors.onSecondaryContainer),
       'Bebida' => (b.walletAccent.withValues(alpha: 0.32), b.onWalletAccent),
+      'Postre' => (colors.tertiaryContainer, colors.onTertiaryContainer),
       'Extra' => (b.successContainer, b.onSuccessContainer),
       _ => (colors.primaryContainer, colors.onPrimaryContainer),
     };

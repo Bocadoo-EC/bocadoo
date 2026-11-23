@@ -60,6 +60,7 @@ abstract class IOwnerCatalogRepository {
     required int priceCents,
     required String categoria,
     required String seccion,
+    List<String> etiquetas = const [],
     String? description,
   });
 

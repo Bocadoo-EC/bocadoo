@@ -1016,6 +1016,7 @@ class PermanentCatalogItem {
     required this.group,
     this.available = true,
     this.description = '',
+    this.isDessert = false,
   });
 
   final String id;
@@ -1024,6 +1025,7 @@ class PermanentCatalogItem {
   final PermanentCatalogGroup group;
   final bool available;
   final String description;
+  final bool isDessert;
 
   PermanentCatalogItem copyWith({
     String? id,
@@ -1032,6 +1034,7 @@ class PermanentCatalogItem {
     PermanentCatalogGroup? group,
     bool? available,
     String? description,
+    bool? isDessert,
   }) {
     return PermanentCatalogItem(
       id: id ?? this.id,
@@ -1040,6 +1043,7 @@ class PermanentCatalogItem {
       group: group ?? this.group,
       available: available ?? this.available,
       description: description ?? this.description,
+      isDessert: isDessert ?? this.isDessert,
     );
   }
 }
@@ -1104,12 +1108,14 @@ class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
       name: 'Flan de coco',
       priceCents: 100,
       group: PermanentCatalogGroup.extras,
+      isDessert: true,
     ),
     PermanentCatalogItem(
       id: 'perm_ext_tres_leches',
       name: 'Porción tres leches',
       priceCents: 150,
       group: PermanentCatalogGroup.extras,
+      isDessert: true,
     ),
     PermanentCatalogItem(
       id: 'perm_ext_aguacate',
@@ -1190,6 +1196,7 @@ class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
           group: group,
           available: !(soldOutById[item.id] ?? false),
           description: item.description,
+          isDessert: item.isDessert,
         ),
       );
     }
@@ -1236,11 +1243,15 @@ class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
     final rid = ref.read(ownerRestaurantIdProvider);
     if (!AppMode.useMock) {
       final repo = ref.read(ownerCatalogRepositoryProvider);
-      final (String categoria, String seccion) = switch (group) {
-        PermanentCatalogGroup.carta => ('A_LA_CARTA', 'FUERTE'),
-        PermanentCatalogGroup.bebidas => ('BEBIDA', 'BEBIDA'),
-        PermanentCatalogGroup.extras =>
-          ('EXTRA', isDessert ? 'POSTRE' : 'ADICIONAL'),
+      final (String categoria, String seccion, List<String> etiquetas) =
+          switch (group) {
+        PermanentCatalogGroup.carta => ('A_LA_CARTA', 'FUERTE', const <String>[]),
+        PermanentCatalogGroup.bebidas => ('BEBIDA', 'BEBIDA', const <String>[]),
+        PermanentCatalogGroup.extras => (
+            'EXTRA',
+            isDessert ? 'POSTRE' : 'ADICIONAL',
+            [isDessert ? 'POSTRE' : 'EXTRA'],
+          ),
       };
       final created = await repo.addPermanentDish(
         rid,
@@ -1248,6 +1259,7 @@ class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
         priceCents: priceCents,
         categoria: categoria,
         seccion: seccion,
+        etiquetas: etiquetas,
         description: description.trim(),
       );
       if (created == null) {
@@ -1267,7 +1279,9 @@ class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
         group: group,
         available: available,
         description: created.description,
+        isDessert: isDessert,
       );
+      _addedItems.add(newItem);
       state = PermanentCatalogState(
         items: [...state.items, newItem],
         dirty: _dirty,
@@ -1285,6 +1299,7 @@ class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
       group: group,
       available: available,
       description: description.trim(),
+      isDessert: isDessert,
     );
     _addedItems.add(item);
     _dirty = true;

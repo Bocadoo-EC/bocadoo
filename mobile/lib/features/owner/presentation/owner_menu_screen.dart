@@ -50,8 +50,8 @@ const _lunchKinds = [
 String _plural(DishKind k) => switch (k) {
       DishKind.sopa => 'sopas',
       DishKind.segundo => 'segundos',
-      DishKind.bebida => 'bebidas incluidas',
-      DishKind.postre => 'postres incluidos',
+      DishKind.bebida => 'bebidas',
+      DishKind.postre => 'postres',
       DishKind.desayuno => 'desayunos',
       DishKind.carta => 'platos a la carta',
     };
@@ -326,13 +326,19 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
     ctrl.dispose();
   }
 
-  Future<void> _openAddPermanentItem(PermanentCatalogGroup group) {
+  Future<void> _openAddPermanentItem(
+    PermanentCatalogGroup group, {
+    bool initialIsDessert = false,
+  }) {
     return showModalBottomSheet<void>(
       context: context,
       useRootNavigator: true,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (_) => _NewPermanentItemSheet(group: group),
+      builder: (_) => _NewPermanentItemSheet(
+        group: group,
+        initialIsDessert: initialIsDessert,
+      ),
     );
   }
 
@@ -570,14 +576,14 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
       ),
       (
         key: 'bebida',
-        title: 'Bebida incluida (Jugo)',
+        title: 'Bebida',
         icon: Icons.local_drink_outlined,
         kind: DishKind.bebida,
         items: _today[DishKind.bebida] ?? const <String>[],
       ),
       (
         key: 'postre',
-        title: 'Postre incluido',
+        title: 'Postre',
         icon: Icons.icecream_outlined,
         kind: DishKind.postre,
         items: _today[DishKind.postre] ?? const <String>[],
@@ -610,6 +616,79 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
   }
 
   // ── Pestaña 2: Carta y Bebidas ────────────────────────────────────────────
+
+  Widget _buildPermanentSubsection({
+    required ColorScheme colors,
+    required String title,
+    required String addButtonLabel,
+    required String emptyLabel,
+    required List<PermanentCatalogItem> items,
+    required bool canManageCatalog,
+    required VoidCallback onAdd,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w900,
+                  color: colors.onSurface,
+                ),
+              ),
+            ),
+            if (canManageCatalog) ...[
+              const SizedBox(width: 8),
+              FilledButton.tonal(
+                style: FilledButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                onPressed: onAdd,
+                child: Text(
+                  addButtonLabel,
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+        const SizedBox(height: 10),
+        if (items.isEmpty)
+          _EmptyLine(emptyLabel)
+        else
+          for (final item in items)
+            _PermanentItemCard(
+              item: item,
+              canEditPrice: canManageCatalog,
+              onEditPrice: () => _editPermanentPrice(item),
+              onToggleAvailable: (val) async {
+                final err = await ref
+                    .read(permanentCatalogProvider.notifier)
+                    .setAvailable(item.id, val);
+                if (err != null && mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(err)),
+                  );
+                }
+              },
+            ),
+      ],
+    );
+  }
 
   Widget _permanentCatalogBody(PermanentCatalogState permanentState) {
     final colors = context.colorScheme;
@@ -648,63 +727,42 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
           ),
         ),
         const SizedBox(height: 14),
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                filterTitle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w900,
-                  color: colors.onSurface,
-                ),
-              ),
+        if (_catalogFilter == PermanentCatalogGroup.extras) ...[
+          _buildPermanentSubsection(
+            colors: colors,
+            title: 'Postres',
+            addButtonLabel: '+ Agregar postre',
+            emptyLabel: 'No hay postres configurados todavía.',
+            items: filtered.where((item) => item.isDessert).toList(),
+            canManageCatalog: canManageCatalog,
+            onAdd: () => _openAddPermanentItem(
+              PermanentCatalogGroup.extras,
+              initialIsDessert: true,
             ),
-            if (canManageCatalog) ...[
-              const SizedBox(width: 8),
-              FilledButton.tonal(
-                style: FilledButton.styleFrom(
-                  visualDensity: VisualDensity.compact,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                onPressed: () => _openAddPermanentItem(_catalogFilter),
-                child: Text(
-                  addButtonLabel,
-                  style: const TextStyle(
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-              ),
-            ],
-          ],
-        ),
-        const SizedBox(height: 10),
-        if (filtered.isEmpty)
-          _EmptyLine('No hay ítems en $filterTitle todavía.')
-        else
-          for (final item in filtered)
-            _PermanentItemCard(
-              item: item,
-              canEditPrice: canManageCatalog,
-              onEditPrice: () => _editPermanentPrice(item),
-              onToggleAvailable: (val) async {
-                final err = await ref
-                    .read(permanentCatalogProvider.notifier)
-                    .setAvailable(item.id, val);
-                if (err != null && mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text(err)),
-                  );
-                }
-              },
+          ),
+          const SizedBox(height: 18),
+          _buildPermanentSubsection(
+            colors: colors,
+            title: 'Extras',
+            addButtonLabel: '+ Agregar extra',
+            emptyLabel: 'No hay extras configurados todavía.',
+            items: filtered.where((item) => !item.isDessert).toList(),
+            canManageCatalog: canManageCatalog,
+            onAdd: () => _openAddPermanentItem(
+              PermanentCatalogGroup.extras,
+              initialIsDessert: false,
             ),
+          ),
+        ] else
+          _buildPermanentSubsection(
+            colors: colors,
+            title: filterTitle,
+            addButtonLabel: addButtonLabel,
+            emptyLabel: 'No hay ítems en $filterTitle todavía.',
+            items: filtered,
+            canManageCatalog: canManageCatalog,
+            onAdd: () => _openAddPermanentItem(_catalogFilter),
+          ),
       ],
     );
   }
@@ -915,9 +973,13 @@ class _PermanentItemCard extends StatelessWidget {
 }
 
 class _NewPermanentItemSheet extends ConsumerStatefulWidget {
-  const _NewPermanentItemSheet({required this.group});
+  const _NewPermanentItemSheet({
+    required this.group,
+    this.initialIsDessert = false,
+  });
 
   final PermanentCatalogGroup group;
+  final bool initialIsDessert;
 
   @override
   ConsumerState<_NewPermanentItemSheet> createState() =>
@@ -929,7 +991,7 @@ class _NewPermanentItemSheetState
   final _name = TextEditingController();
   final _price = TextEditingController();
   bool _available = true;
-  bool _isDessert = false;
+  late bool _isDessert = widget.initialIsDessert;
   bool _saving = false;
   String? _error;
 
@@ -987,11 +1049,17 @@ class _NewPermanentItemSheetState
           'Agregar bebida',
           'Ej. Jarra de limonada',
         ),
-      PermanentCatalogGroup.extras => (
-          'EXTRAS',
-          'Agregar extra',
-          'Ej. Porción de patacones',
-        ),
+      PermanentCatalogGroup.extras => _isDessert
+          ? (
+              'POSTRES',
+              'Agregar postre',
+              'Ej. Pastel de banano, galletas',
+            )
+          : (
+              'EXTRAS',
+              'Agregar extra',
+              'Ej. Porción de chifles, ensalada',
+            ),
     };
 
     return Padding(

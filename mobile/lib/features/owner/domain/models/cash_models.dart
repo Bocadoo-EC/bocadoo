@@ -140,6 +140,7 @@ class CatalogItem {
     required this.description,
     required this.price,
     required this.category,
+    this.isDessert = false,
   });
 
   final String id;
@@ -147,6 +148,7 @@ class CatalogItem {
   final String description;
   final double price;
   final PosCategory category;
+  final bool isDessert;
 }
 
 @immutable

@@ -950,8 +950,22 @@ class MockOwnerRepository
   @override
   Future<List<CatalogItem>> getCatalog(String restaurantId) async {
     await _simulateLatency();
-    CatalogItem item(String id, String name, String desc, double price, PosCategory c) =>
-        CatalogItem(id: id, name: name, description: desc, price: price, category: c);
+    CatalogItem item(
+      String id,
+      String name,
+      String desc,
+      double price,
+      PosCategory c, {
+      bool isDessert = false,
+    }) =>
+        CatalogItem(
+          id: id,
+          name: name,
+          description: desc,
+          price: price,
+          category: c,
+          isDessert: isDessert,
+        );
     return [
       item('des-1', 'Desayuno criollo', 'Bolón, huevo y café', 2.50, PosCategory.desayunos),
       item('des-2', 'Desayuno continental', 'Pan, huevos, jugo y café', 2.50, PosCategory.desayunos),
@@ -966,11 +980,12 @@ class MockOwnerRepository
       item('ext-4', 'Papas fritas', 'Porción', 1.00, PosCategory.extras),
       item('ext-5', 'Arroz extra', 'Porción', 0.50, PosCategory.extras),
       item('ext-6', 'Ensalada', 'Porción', 0.75, PosCategory.extras),
+      item('pos-1', 'Flan de coco', 'Postre casero', 1.00, PosCategory.extras, isDessert: true),
+      item('pos-2', 'Porción tres leches', 'Postre frío', 1.50, PosCategory.extras, isDessert: true),
       item('beb-1', 'Jugo de naranjilla', 'Natural', 0.75, PosCategory.bebidas),
       item('beb-2', 'Limonada', 'Con hierbabuena', 1.00, PosCategory.bebidas),
       item('beb-3', 'Gaseosa personal', '300 ml', 1.00, PosCategory.bebidas),
       item('beb-4', 'Agua', '500 ml', 0.75, PosCategory.bebidas),
-      item('beb-5', 'Postre del día', 'Flan o tres leches', 1.00, PosCategory.bebidas),
       item('beb-6', 'Café', 'Pasado', 1.00, PosCategory.bebidas),
     ];
   }

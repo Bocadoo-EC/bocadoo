@@ -93,10 +93,7 @@ class ApiOwnerRepository
         IOwnerMetricsRepository,
         IOwnerFeedbackRepository,
         IOwnerSettingsRepository {
-  ApiOwnerRepository({
-    required this._api,
-    required this._session,
-  });
+  ApiOwnerRepository({required this._api, required this._session});
 
   final ApiClient _api;
   final SessionNotifier _session;
@@ -204,7 +201,9 @@ class ApiOwnerRepository
           : (dateFallback?.toString().trim() ?? '');
       if (dateStr.length >= 10) {
         final hhmmss = timeStr.length == 5 ? '$timeStr:00' : timeStr;
-        final combined = DateTime.tryParse('${dateStr.substring(0, 10)}T$hhmmss');
+        final combined = DateTime.tryParse(
+          '${dateStr.substring(0, 10)}T$hhmmss',
+        );
         if (combined != null) return combined.toLocal();
       }
     }
@@ -218,12 +217,12 @@ class ApiOwnerRepository
   }
 
   static String _mapPayMethodApi(OwnerPayMethod m) => switch (m) {
-        OwnerPayMethod.efectivo => 'EFECTIVO',
-        OwnerPayMethod.transferencia => 'TRANSFERENCIA',
-        OwnerPayMethod.deuna => 'DEUNA',
-        // Tarjeta se oculta en UI mediante ApiCapabilities.cardPayment.
-        OwnerPayMethod.tarjeta => 'TRANSFERENCIA',
-      };
+    OwnerPayMethod.efectivo => 'EFECTIVO',
+    OwnerPayMethod.transferencia => 'TRANSFERENCIA',
+    OwnerPayMethod.deuna => 'DEUNA',
+    // Tarjeta se oculta en UI mediante ApiCapabilities.cardPayment.
+    OwnerPayMethod.tarjeta => 'TRANSFERENCIA',
+  };
 
   static String _mapMetodoToUi(dynamic raw) {
     return switch ((raw ?? '').toString().toUpperCase()) {
@@ -242,7 +241,9 @@ class ApiOwnerRepository
   }) {
     final direct = platoNombre?.toString().trim() ?? '';
     if (direct.isNotEmpty) return direct;
-    final platos = almuerzo?['platos'] is List ? almuerzo!['platos'] as List : const [];
+    final platos = almuerzo?['platos'] is List
+        ? almuerzo!['platos'] as List
+        : const [];
     final names = <String>[];
     for (final p in platos.whereType<Map>()) {
       final n = (p['nombre'] ?? '').toString().trim();
@@ -283,12 +284,14 @@ class ApiOwnerRepository
   /// Lee el estado real de disponibilidad desde `GET /v1/restaurante`
   /// (`estado`, `ocupacion`, `llenoManualHasta` y `concurridoManualHasta`).
   Future<
-      ({
-        bool isOpen,
-        ManualOccupancyStatus manual,
-        DateTime? fullUntil,
-        DateTime? concurridoUntil,
-      })> fetchManualOccupancyState() async {
+    ({
+      bool isOpen,
+      ManualOccupancyStatus manual,
+      DateTime? fullUntil,
+      DateTime? concurridoUntil,
+    })
+  >
+  fetchManualOccupancyState() async {
     try {
       final data = await _fetchRestaurantMap();
       final estado = (data['estado'] ?? 'ACTIVO').toString().toUpperCase();
@@ -304,11 +307,11 @@ class ApiOwnerRepository
 
       final fullUntil = _parseFutureLocal(data['llenoManualHasta']);
       final concurridoUntil = _parseFutureLocal(data['concurridoManualHasta']);
-      final ocupacion =
-          data['ocupacion'] is Map ? data['ocupacion'] as Map : const {};
+      final ocupacion = data['ocupacion'] is Map
+          ? data['ocupacion'] as Map
+          : const {};
       final nivel = (ocupacion['nivel'] ?? '').toString().toUpperCase();
-      final isFullByOccupancy =
-          ocupacion['lleno'] == true || nivel == 'LLENO';
+      final isFullByOccupancy = ocupacion['lleno'] == true || nivel == 'LLENO';
 
       // Un aforo >= 90% da LLENO aunque el dueño haya marcado Concurrido.
       if (fullUntil != null || isFullByOccupancy) {
@@ -348,10 +351,7 @@ class ApiOwnerRepository
   Future<OwnerOrder?> resolveOrderById(String id) async {
     try {
       final data = await guard(
-        () => _api.getMap(
-          '${ApiConfig.v1}/caja/pedidos/$id',
-          restaurant: true,
-        ),
+        () => _api.getMap('${ApiConfig.v1}/caja/pedidos/$id', restaurant: true),
       );
       return _mapOrder(data);
     } on ApiException catch (e) {
@@ -371,11 +371,14 @@ class ApiOwnerRepository
     if (raw is! List) return const [];
     return [
       for (final c in raw.whereType<Map>())
-        if ((c['nombre'] ?? (c['plato'] is Map ? (c['plato'] as Map)['nombre'] : null) ?? '')
+        if ((c['nombre'] ??
+                (c['plato'] is Map ? (c['plato'] as Map)['nombre'] : null) ??
+                '')
             .toString()
             .isNotEmpty)
           () {
-            final name = (c['nombre'] ?? (c['plato'] as Map)['nombre']).toString();
+            final name = (c['nombre'] ?? (c['plato'] as Map)['nombre'])
+                .toString();
             final qty = _asInt(c['cantidad'], 1);
             return qty > 1 ? '${qty}x $name' : name;
           }(),
@@ -431,28 +434,33 @@ class ApiOwnerRepository
     final id = (json['id'] ?? '').toString();
     final rest = json['restaurante'] is Map ? json['restaurante'] as Map : null;
     final orderRestId =
-        (rest?['id'] ?? json['restauranteId'] ?? _session.activeRestaurantId ?? '')
+        (rest?['id'] ??
+                json['restauranteId'] ??
+                _session.activeRestaurantId ??
+                '')
             .toString();
 
     final baseCents = _asInt(almuerzo?['precioCentavos']);
     final recargoCents = takeaway
         ? (_asInt(json['recargoLlevarCentavos']) > 0
-            ? _asInt(json['recargoLlevarCentavos'])
-            : 25)
+              ? _asInt(json['recargoLlevarCentavos'])
+              : 25)
         : 0;
     final rawTotalCents = _asInt(json['totalCentavos']);
     final resolvedTotalCents = paidByPlan
         ? 0
         : (takeaway && baseCents > 0 && rawTotalCents <= baseCents
-            ? baseCents + recargoCents
-            : (rawTotalCents > 0
-                ? rawTotalCents
-                : (baseCents > 0 ? baseCents + recargoCents : 0)));
+              ? baseCents + recargoCents
+              : (rawTotalCents > 0
+                    ? rawTotalCents
+                    : (baseCents > 0 ? baseCents + recargoCents : 0)));
     final planCreditsUsed = _asInt(json['planCreditsUsed']);
     final cashToCollectCents = _asInt(json['cashToCollectCents']);
     final cashItems = _cartaItemLabels(json['cartaItems']);
     final amount = Money.fromCents(
-      paidByPlan && cashToCollectCents > 0 ? cashToCollectCents : resolvedTotalCents,
+      paidByPlan && cashToCollectCents > 0
+          ? cashToCollectCents
+          : resolvedTotalCents,
     );
     final validated = estado == 'CANJEADA';
 
@@ -506,7 +514,8 @@ class ApiOwnerRepository
   // ---------------------------------------------------------------------------
 
   final Set<String> _redeemedCodes = <String>{};
-  final List<TransactionItem> _sessionValidatedTransactions = <TransactionItem>[];
+  final List<TransactionItem> _sessionValidatedTransactions =
+      <TransactionItem>[];
   static final _uuidRegex = RegExp(
     r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
   );
@@ -667,7 +676,11 @@ class ApiOwnerRepository
           (sum, l) => sum + (l.via == TableChargeVia.cash ? l.amount : 0),
         );
         final lunchesFromPlan = preview.lines
-            .where((l) => l.via == TableChargeVia.plan || l.via == TableChargeVia.hostPlan)
+            .where(
+              (l) =>
+                  l.via == TableChargeVia.plan ||
+                  l.via == TableChargeVia.hostPlan,
+            )
             .length;
         _redeemedCodes.add(tableKey);
         _redeemedCodes.add(codeKey);
@@ -698,13 +711,15 @@ class ApiOwnerRepository
     final ik = _idempotency.keyFor(intent);
     try {
       final data = await guard(
-        () => _api.send<Map<String, dynamic>>(
+        () => _api
+            .send<Map<String, dynamic>>(
               'POST',
               '${ApiConfig.v1}/caja/validar',
               body: {'codigoQr': rawPayload},
               restaurant: true,
               idempotencyKey: ik,
-            ).then((v) => v ?? <String, dynamic>{}),
+            )
+            .then((v) => v ?? <String, dynamic>{}),
       );
       _idempotency.done(intent);
 
@@ -712,8 +727,9 @@ class ApiOwnerRepository
       final mensaje = (data['mensaje'] ?? '').toString();
       final cliente = data['cliente'] is Map ? data['cliente'] as Map : null;
       final consumo = data['consumo'] is Map ? data['consumo'] as Map : null;
-      final consumoPrevio =
-          data['consumoPrevio'] is Map ? data['consumoPrevio'] as Map : null;
+      final consumoPrevio = data['consumoPrevio'] is Map
+          ? data['consumoPrevio'] as Map
+          : null;
       final plan = data['plan'] is Map ? data['plan'] as Map : null;
 
       final clienteId = cliente?['id']?.toString();
@@ -721,7 +737,10 @@ class ApiOwnerRepository
       final consumoId = consumo?['id']?.toString();
       final planNombre = plan?['nombre']?.toString();
       final creadoEnRaw =
-          consumo?['creadoEn'] ?? consumo?['fecha'] ?? consumo?['fechaHora'] ?? data['canjeadoEn'];
+          consumo?['creadoEn'] ??
+          consumo?['fecha'] ??
+          consumo?['fechaHora'] ??
+          data['canjeadoEn'];
       final redeemedAt = _tryParseDateTime(creadoEnRaw);
       if (consumoId != null && consumoId.isNotEmpty && redeemedAt != null) {
         _orderScanTimestampByKey[consumoId] = redeemedAt;
@@ -729,8 +748,9 @@ class ApiOwnerRepository
       final prevCreadoRaw =
           consumoPrevio?['creadoEn'] ?? consumoPrevio?['fecha'];
       final DateTime? prevRedeemedAt = _tryParseDateTime(prevCreadoRaw);
-      final rawPlatoNombre =
-          (data['platoNombre'] ?? consumo?['platoNombre'])?.toString().trim();
+      final rawPlatoNombre = (data['platoNombre'] ?? consumo?['platoNombre'])
+          ?.toString()
+          .trim();
       final dishDisplay = (rawPlatoNombre != null && rawPlatoNombre.isNotEmpty)
           ? rawPlatoNombre
           : 'Almuerzo del día (Prepagado)';
@@ -755,7 +775,8 @@ class ApiOwnerRepository
         },
       );
 
-      final passId = consumoId ??
+      final passId =
+          consumoId ??
           clienteId ??
           'qr-${DateTime.now().microsecondsSinceEpoch}';
       if (consumoId != null && consumoId.isNotEmpty) {
@@ -840,8 +861,9 @@ class ApiOwnerRepository
             isValid: true,
             outcome: 'ADVERTENCIA',
             title: lowDays ? 'Por vencer' : 'Último almuerzo',
-            supportingLine:
-                mensaje.isNotEmpty ? mensaje : 'Renueva su plan hoy',
+            supportingLine: mensaje.isNotEmpty
+                ? mensaje
+                : 'Renueva su plan hoy',
             studentName: clienteNombre,
             studentCareer: planNombre,
             passId: passId,
@@ -858,8 +880,10 @@ class ApiOwnerRepository
         case 'DUPLICADO':
           final String dupLine;
           if (prevRedeemedAt != null) {
-            final secs =
-                DateTime.now().difference(prevRedeemedAt).inSeconds.clamp(0, 86400);
+            final secs = DateTime.now()
+                .difference(prevRedeemedAt)
+                .inSeconds
+                .clamp(0, 86400);
             dupLine = 'Ya canjeado hace $secs s';
           } else {
             dupLine = 'Este código ya fue procesado anteriormente';
@@ -943,9 +967,7 @@ class ApiOwnerRepository
             isValid: false,
             outcome: 'ROJO',
             title: 'QR no válido',
-            supportingLine: mensaje.isNotEmpty
-                ? mensaje
-                : 'Este código no pertenece a Bocadoo o no corresponde a este local.',
+            supportingLine: mensaje.isNotEmpty ? mensaje : 'Este código no pertenece a Bocadoo o no corresponde a este local.',
             actionRequired: 'SCAN_AGAIN',
           );
         case 'LIMITE_SAAS':
@@ -963,9 +985,7 @@ class ApiOwnerRepository
             isValid: false,
             outcome: 'ROJO',
             title: 'Código no válido',
-            supportingLine: mensaje.isNotEmpty
-                ? mensaje
-                : 'Este código no pertenece a Bocadoo o no corresponde a este local.',
+            supportingLine: mensaje.isNotEmpty ? mensaje : 'Este código no pertenece a Bocadoo o no corresponde a este local.',
             actionRequired: 'SCAN_AGAIN',
           );
       }
@@ -1000,17 +1020,16 @@ class ApiOwnerRepository
     required String paymentMethod,
     required double amount,
   }) {
-    throw UnimplementedError('Usa sellPlanTemplate para vender planes en caja.');
+    throw UnimplementedError(
+      'Usa sellPlanTemplate para vender planes en caja.',
+    );
   }
 
   @override
   Future<TransactionSummary> getDailyClosingSummary(String restaurantId) async {
     final today = EcuadorTime.today();
     final cierreFuture = guard(
-      () => _api.getMap(
-        '${ApiConfig.v1}/caja/cierre/$today',
-        restaurant: true,
-      ),
+      () => _api.getMap('${ApiConfig.v1}/caja/cierre/$today', restaurant: true),
     );
     final Future<Map<String, dynamic>?> resumenFuture = _isCashier
         ? Future.value(null)
@@ -1135,7 +1154,9 @@ class ApiOwnerRepository
       }
 
       final items = v['items'] is List ? v['items'] as List : const [];
-      final hasLunch = items.whereType<Map>().any((i) => i['esAlmuerzo'] == true);
+      final hasLunch = items.whereType<Map>().any(
+        (i) => i['esAlmuerzo'] == true,
+      );
       final pago = v['pago'] is Map ? v['pago'] as Map : const {};
 
       final label = mesaTexto.isNotEmpty
@@ -1235,8 +1256,8 @@ class ApiOwnerRepository
     final rawItems = data['items'] is List
         ? data['items'] as List
         : (data['movimientos'] is List
-            ? data['movimientos'] as List
-            : (data['data'] is List ? data['data'] as List : const []));
+              ? data['movimientos'] as List
+              : (data['data'] is List ? data['data'] as List : const []));
 
     final responseFecha = (data['fecha'] ?? fecha).toString();
     final mapped = <CajaMovement>[
@@ -1249,7 +1270,9 @@ class ApiOwnerRepository
     // sin inventar nunca la hora actual (`DateTime.now()`).
     final missingPedidoIndices = <int>[
       for (var i = 0; i < mapped.length; i++)
-        if (mapped[i].timestamp == null && mapped[i].tipo == CajaMovementType.pedido) i,
+        if (mapped[i].timestamp == null &&
+            mapped[i].tipo == CajaMovementType.pedido)
+          i,
     ];
     if (missingPedidoIndices.isNotEmpty) {
       await _hydrateMissingPedidoTimestamps(
@@ -1276,8 +1299,11 @@ class ApiOwnerRepository
     for (final idx in missingIndices) {
       final raw = rawItems[idx] is Map ? rawItems[idx] as Map : const {};
       final pedId = (raw['pedidoId'] ?? raw['id'] ?? '').toString();
-      final numStr = _asNullableInt(raw['pedidoNumero'] ?? raw['numero'])?.toString() ?? '';
-      final cached = _orderScanTimestampByKey[pedId] ??
+      final numStr =
+          _asNullableInt(raw['pedidoNumero'] ?? raw['numero'])?.toString() ??
+          '';
+      final cached =
+          _orderScanTimestampByKey[pedId] ??
           (numStr.isNotEmpty ? _orderScanTimestampByKey['#$numStr'] : null);
       if (cached != null) {
         final m = mapped[idx];
@@ -1335,8 +1361,11 @@ class ApiOwnerRepository
         if (mapped[idx].timestamp != null) continue;
         final raw = rawItems[idx] is Map ? rawItems[idx] as Map : const {};
         final pedId = (raw['pedidoId'] ?? raw['id'] ?? '').toString();
-        final numStr = _asNullableInt(raw['pedidoNumero'] ?? raw['numero'])?.toString() ?? '';
-        final found = _orderScanTimestampByKey[pedId] ??
+        final numStr =
+            _asNullableInt(raw['pedidoNumero'] ?? raw['numero'])?.toString() ??
+            '';
+        final found =
+            _orderScanTimestampByKey[pedId] ??
             (numStr.isNotEmpty ? _orderScanTimestampByKey['#$numStr'] : null);
         if (found != null) {
           final m = mapped[idx];
@@ -1376,23 +1405,29 @@ class ApiOwnerRepository
     final pedidoMap = raw['pedido'] is Map ? raw['pedido'] as Map : null;
     final planMap = raw['plan'] is Map ? raw['plan'] as Map : null;
 
-    final customerName = (raw['clienteNombre'] ??
-            raw['comensalNombre'] ??
-            clienteMap?['nombre'] ??
-            comensalMap?['nombre'])
+    final customerName =
+        (raw['clienteNombre'] ??
+                raw['comensalNombre'] ??
+                clienteMap?['nombre'] ??
+                comensalMap?['nombre'])
+            ?.toString()
+            .trim();
+    final planNombre = (raw['planNombre'] ?? planMap?['nombre'])
         ?.toString()
         .trim();
-    final planNombre =
-        (raw['planNombre'] ?? planMap?['nombre'])?.toString().trim();
-    final rawPlato =
-        (raw['platoNombre'] ?? consumoMap?['platoNombre'])?.toString().trim();
+    final rawPlato = (raw['platoNombre'] ?? consumoMap?['platoNombre'])
+        ?.toString()
+        .trim();
     final metodoRaw = (raw['metodoPago'] ?? pagoMap?['metodo'])?.toString();
-    final pagoEstado =
-        (raw['pagoEstado'] ?? pagoMap?['estado'])?.toString().toUpperCase();
+    final pagoEstado = (raw['pagoEstado'] ?? pagoMap?['estado'])
+        ?.toString()
+        .toUpperCase();
     final revertido = raw['revertido'] == true || raw['deshecha'] == true;
     final montoCentavos = _asNullableInt(raw['montoCentavos']);
     final valorPedidoCentavos = _asNullableInt(raw['valorPedidoCentavos']);
-    final rawTitulo = (raw['titulo'] ?? raw['descripcion'] ?? '').toString().trim();
+    final rawTitulo = (raw['titulo'] ?? raw['descripcion'] ?? '')
+        .toString()
+        .trim();
     final mesaTexto = (raw['mesaTexto'] ?? '').toString().trim();
     final ticket = _asNullableInt(raw['ticket']);
     final numero = _asNullableInt(raw['pedidoNumero'] ?? raw['numero']);
@@ -1404,7 +1439,9 @@ class ApiOwnerRepository
         if (rawTitulo.isNotEmpty) {
           title = rawTitulo;
         } else if (ticket != null) {
-          title = mesaTexto.isNotEmpty ? 'Ticket #$ticket · $mesaTexto' : 'Ticket #$ticket';
+          title = mesaTexto.isNotEmpty
+              ? 'Ticket #$ticket · $mesaTexto'
+              : 'Ticket #$ticket';
         } else if (customerName != null && customerName.isNotEmpty) {
           title = customerName;
         } else {
@@ -1446,39 +1483,39 @@ class ApiOwnerRepository
 
     final rawTs = tipo == CajaMovementType.pedido
         ? (raw['canjeadoEn'] ??
-            raw['validadoEn'] ??
-            raw['servidoEn'] ??
-            raw['ocurrioEn'] ??
-            raw['fechaHora'] ??
-            raw['registradoEn'] ??
-            raw['momento'] ??
-            raw['en'] ??
-            raw['creadoEn'] ??
-            raw['timestamp'] ??
-            raw['createdAt'] ??
-            raw['actualizadoEn'] ??
-            raw['fecha'] ??
-            pedidoMap?['canjeadoEn'] ??
-            pedidoMap?['servidoEn'] ??
-            pedidoMap?['creadoEn'] ??
-            consumoMap?['creadoEn'] ??
-            consumoMap?['fecha'])
+              raw['validadoEn'] ??
+              raw['servidoEn'] ??
+              raw['ocurrioEn'] ??
+              raw['fechaHora'] ??
+              raw['registradoEn'] ??
+              raw['momento'] ??
+              raw['en'] ??
+              raw['creadoEn'] ??
+              raw['timestamp'] ??
+              raw['createdAt'] ??
+              raw['actualizadoEn'] ??
+              raw['fecha'] ??
+              pedidoMap?['canjeadoEn'] ??
+              pedidoMap?['servidoEn'] ??
+              pedidoMap?['creadoEn'] ??
+              consumoMap?['creadoEn'] ??
+              consumoMap?['fecha'])
         : (raw['creadoEn'] ??
-            raw['fechaHora'] ??
-            raw['ocurrioEn'] ??
-            raw['canjeadoEn'] ??
-            raw['validadoEn'] ??
-            raw['servidoEn'] ??
-            raw['registradoEn'] ??
-            raw['momento'] ??
-            raw['en'] ??
-            raw['timestamp'] ??
-            raw['createdAt'] ??
-            raw['fecha'] ??
-            consumoMap?['creadoEn'] ??
-            consumoMap?['fecha'] ??
-            pagoMap?['pagadoEn'] ??
-            pagoMap?['creadoEn']);
+              raw['fechaHora'] ??
+              raw['ocurrioEn'] ??
+              raw['canjeadoEn'] ??
+              raw['validadoEn'] ??
+              raw['servidoEn'] ??
+              raw['registradoEn'] ??
+              raw['momento'] ??
+              raw['en'] ??
+              raw['timestamp'] ??
+              raw['createdAt'] ??
+              raw['fecha'] ??
+              consumoMap?['creadoEn'] ??
+              consumoMap?['fecha'] ??
+              pagoMap?['pagadoEn'] ??
+              pagoMap?['creadoEn']);
 
     final resolvedTs = _tryParseDateTime(
       rawTs,
@@ -1498,9 +1535,12 @@ class ApiOwnerRepository
       metodoPago: metodoRaw != null ? _mapMetodoToUi(metodoRaw) : null,
       revertido: revertido,
       platoNombre: (rawPlato != null && rawPlato.isNotEmpty) ? rawPlato : null,
-      customerName:
-          (customerName != null && customerName.isNotEmpty) ? customerName : null,
-      planNombre: (planNombre != null && planNombre.isNotEmpty) ? planNombre : null,
+      customerName: (customerName != null && customerName.isNotEmpty)
+          ? customerName
+          : null,
+      planNombre: (planNombre != null && planNombre.isNotEmpty)
+          ? planNombre
+          : null,
     );
   }
 
@@ -1519,10 +1559,7 @@ class ApiOwnerRepository
     final out = <OwnerClient>[];
     String? cursor;
     for (var page = 0; page < 10; page++) {
-      final query = <String, dynamic>{
-        'limit': 50,
-        'cursor': ?cursor,
-      };
+      final query = <String, dynamic>{'limit': 50, 'cursor': ?cursor};
       final data = await guard(
         () => _api.getMap(
           '${ApiConfig.v1}/clientes',
@@ -1573,12 +1610,14 @@ class ApiOwnerRepository
     Map<String, dynamic> res;
     try {
       res = await guard(
-        () => _api.send<Map<String, dynamic>>(
+        () => _api
+            .send<Map<String, dynamic>>(
               'POST',
               '${ApiConfig.v1}/clientes',
               body: body,
               restaurant: true,
-            ).then((v) => v ?? <String, dynamic>{}),
+            )
+            .then((v) => v ?? <String, dynamic>{}),
       );
     } on ApiException catch (e) {
       if (e.status == 409) {
@@ -1600,11 +1639,11 @@ class ApiOwnerRepository
       try {
         await guard(
           () => _api.send<dynamic>(
-                'POST',
-                '${ApiConfig.v1}/clientes/$clientId/vincular',
-                body: {'correo': trimmedEmail},
-                restaurant: true,
-              ),
+            'POST',
+            '${ApiConfig.v1}/clientes/$clientId/vincular',
+            body: {'correo': trimmedEmail},
+            restaurant: true,
+          ),
         );
       } catch (_) {}
     }
@@ -1619,9 +1658,12 @@ class ApiOwnerRepository
 
   static PlanCoverage _inferCoverage(List<String> includes) {
     final lower = includes.map((e) => e.toLowerCase()).toList();
-    final hasBreakfast =
-        lower.any((e) => e.contains('desayuno') || e.contains('principal'));
-    final hasLunch = lower.any((e) => e.contains('sopa') || e.contains('segundo'));
+    final hasBreakfast = lower.any(
+      (e) => e.contains('desayuno') || e.contains('principal'),
+    );
+    final hasLunch = lower.any(
+      (e) => e.contains('sopa') || e.contains('segundo'),
+    );
     if (hasBreakfast && hasLunch) return PlanCoverage.mixto;
     if (hasBreakfast) return PlanCoverage.desayuno;
     return PlanCoverage.almuerzo;
@@ -1640,8 +1682,12 @@ class ApiOwnerRepository
         'LIBRE' => PlanKind.libre,
         _ => PlanKind.mensual,
       };
-      final rawDays = raw['diasValidos'] is List ? raw['diasValidos'] as List : const [1, 2, 3, 4, 5];
-      final rawIncl = raw['incluye'] is List ? raw['incluye'] as List : const ['Sopa', 'Segundo', 'Jugo'];
+      final rawDays = raw['diasValidos'] is List
+          ? raw['diasValidos'] as List
+          : const [1, 2, 3, 4, 5];
+      final rawIncl = raw['incluye'] is List
+          ? raw['incluye'] as List
+          : const ['Sopa', 'Segundo', 'Jugo'];
       final includes = rawIncl.map((e) => e.toString()).toList();
       return OwnerPlanTemplate(
         id: (raw['id'] ?? '').toString(),
@@ -1681,11 +1727,13 @@ class ApiOwnerRepository
         targetClientId = created.id;
       }
 
-      final intent = 'sell_plan:$targetClientId:${template.id}:${_mapPayMethodApi(method)}';
+      final intent =
+          'sell_plan:$targetClientId:${template.id}:${_mapPayMethodApi(method)}';
       final ik = _idempotency.keyFor(intent);
       try {
         final res = await guard(
-          () => _api.send<Map<String, dynamic>>(
+          () => _api
+              .send<Map<String, dynamic>>(
                 'POST',
                 '${ApiConfig.v1}/clientes/$targetClientId/planes',
                 body: {
@@ -1695,7 +1743,8 @@ class ApiOwnerRepository
                 },
                 restaurant: true,
                 idempotencyKey: ik,
-              ).then((v) => v ?? <String, dynamic>{}),
+              )
+              .then((v) => v ?? <String, dynamic>{}),
         );
         final id = (res['id'] ?? '').toString();
         if (id.isNotEmpty) {
@@ -1703,10 +1752,7 @@ class ApiOwnerRepository
           eventsService.track(
             'dueno.plan_vendido',
             restaurantId: restaurantId,
-            props: {
-              'metodo': _mapPayMethodApi(method),
-              'origen': 'caja',
-            },
+            props: {'metodo': _mapPayMethodApi(method), 'origen': 'caja'},
           );
           return id;
         }
@@ -1754,10 +1800,9 @@ class ApiOwnerRepository
       return true;
     } on ApiException catch (e) {
       final detail = e.detail.trim();
-      _lastError =
-          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
-              ? detail
-              : e.userMessage;
+      _lastError = ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+          ? detail
+          : e.userMessage;
       return false;
     } finally {
       _idempotency.done(intent);
@@ -1772,24 +1817,24 @@ class ApiOwnerRepository
   }) async {
     _lastError = null;
     if (extraGuests <= 0) return true;
-    final batch = (batchRedemptionId != null
-            ? _batchesById[batchRedemptionId]
-            : null) ??
+    final batch =
+        (batchRedemptionId != null ? _batchesById[batchRedemptionId] : null) ??
         _batchesById[_lastBatchByPassId[passId]];
     if (batch == null || batch.undone) return false;
 
     // 1. Actualización optimista inmediata del registro consolidado en Caja.
     batch.extraGuests = extraGuests;
     final totalRedeemed = 1 + extraGuests;
-    final idx = _sessionValidatedTransactions
-        .indexWhere((tx) => tx.id == batch.transactionId);
+    final idx = _sessionValidatedTransactions.indexWhere(
+      (tx) => tx.id == batch.transactionId,
+    );
     if (idx >= 0) {
-      _sessionValidatedTransactions[idx] =
-          _sessionValidatedTransactions[idx].copyWith(
-        detail: totalRedeemed == 1
-            ? 'Canje de plan · 1 almuerzo (Prepagado)'
-            : 'Canje de plan · $totalRedeemed almuerzos (Prepagado)',
-      );
+      _sessionValidatedTransactions[idx] = _sessionValidatedTransactions[idx]
+          .copyWith(
+            detail: totalRedeemed == 1
+                ? 'Canje de plan · 1 almuerzo (Prepagado)'
+                : 'Canje de plan · $totalRedeemed almuerzos (Prepagado)',
+          );
     }
 
     // 2. Despacho asíncrono con nuevo UUID como Idempotency-Key y canal MANUAL.
@@ -1815,7 +1860,8 @@ class ApiOwnerRepository
     late final Map<String, dynamic> res;
     try {
       res = await guard(
-        () => _api.send<Map<String, dynamic>>(
+        () => _api
+            .send<Map<String, dynamic>>(
               'POST',
               '${ApiConfig.v1}/caja/validar',
               body: {
@@ -1830,7 +1876,8 @@ class ApiOwnerRepository
               },
               restaurant: true,
               idempotencyKey: freshKey,
-            ).then((v) => v ?? <String, dynamic>{}),
+            )
+            .then((v) => v ?? <String, dynamic>{}),
       );
       _idempotency.done(intent);
     } on ApiException catch (e) {
@@ -1887,18 +1934,22 @@ class ApiOwnerRepository
     String? fallbackPassId,
   }) async {
     _lastError = null;
-    final batch = _batchesById[batchRedemptionId] ??
+    final batch =
+        _batchesById[batchRedemptionId] ??
         (fallbackPassId != null
             ? _batchesById[_lastBatchByPassId[fallbackPassId]]
             : null);
     if (batch == null) {
-      return fallbackPassId != null ? _undoSingleConsumo(fallbackPassId) : false;
+      return fallbackPassId != null
+          ? _undoSingleConsumo(fallbackPassId)
+          : false;
     }
     if (batch.undone) return false;
     batch.undone = true;
 
-    _sessionValidatedTransactions
-        .removeWhere((tx) => tx.id == batch.transactionId);
+    _sessionValidatedTransactions.removeWhere(
+      (tx) => tx.id == batch.transactionId,
+    );
 
     if (batch.pendingDispatch != null) {
       try {
@@ -1919,21 +1970,22 @@ class ApiOwnerRepository
     for (final cid in idsToUndo) {
       try {
         final res = await guard(
-          () => _api.send<Map<String, dynamic>>(
+          () => _api
+              .send<Map<String, dynamic>>(
                 'POST',
                 '${ApiConfig.v1}/caja/consumos/$cid/deshacer',
                 restaurant: true,
-              ).then((v) => v ?? <String, dynamic>{}),
+              )
+              .then((v) => v ?? <String, dynamic>{}),
         );
         if (res['revertido'] != false) {
           anyReverted = true;
         }
       } on ApiException catch (e) {
         final detail = e.detail.trim();
-        _lastError =
-            ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
-                ? detail
-                : e.userMessage;
+        _lastError = ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+            ? detail
+            : e.userMessage;
       }
     }
 
@@ -1958,11 +2010,13 @@ class ApiOwnerRepository
     final consumoId = _consumoIdByPassId[passId] ?? passId;
     try {
       final res = await guard(
-        () => _api.send<Map<String, dynamic>>(
+        () => _api
+            .send<Map<String, dynamic>>(
               'POST',
               '${ApiConfig.v1}/caja/consumos/$consumoId/deshacer',
               restaurant: true,
-            ).then((v) => v ?? <String, dynamic>{}),
+            )
+            .then((v) => v ?? <String, dynamic>{}),
       );
       _consumoIdByPassId.remove(passId);
       _sessionValidatedTransactions.removeWhere((tx) => tx.id == passId);
@@ -1973,10 +2027,9 @@ class ApiOwnerRepository
       return reverted;
     } on ApiException catch (e) {
       final detail = e.detail.trim();
-      _lastError =
-          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
-              ? detail
-              : e.userMessage;
+      _lastError = ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+          ? detail
+          : e.userMessage;
       return false;
     }
   }
@@ -1994,18 +2047,22 @@ class ApiOwnerRepository
     for (final raw in list.whereType<Map>()) {
       final categoria = (raw['categoria'] ?? '').toString().toUpperCase();
       if (categoria == 'ALMUERZO') continue;
+      final seccion = (raw['seccion'] ?? '').toString().toUpperCase();
       final nombre = (raw['nombre'] ?? '').toString();
-      final etiquetas = (raw['etiquetas'] is List ? raw['etiquetas'] as List : const [])
-          .map((e) => e.toString().toLowerCase())
-          .toList();
+      final etiquetas =
+          (raw['etiquetas'] is List ? raw['etiquetas'] as List : const [])
+              .map((e) => e.toString().toLowerCase())
+              .toList();
       final PosCategory cat = switch (categoria) {
         'A_LA_CARTA' => PosCategory.carta,
         'BEBIDA' => PosCategory.bebidas,
-        _ => (etiquetas.contains('desayuno') ||
-                nombre.toLowerCase().contains('desayuno'))
-            ? PosCategory.desayunos
-            : PosCategory.extras,
+        _ =>
+          (etiquetas.contains('desayuno') ||
+                  nombre.toLowerCase().contains('desayuno'))
+              ? PosCategory.desayunos
+              : PosCategory.extras,
       };
+      final isDessert = seccion == 'POSTRE' || etiquetas.contains('postre');
       mapped.add(
         CatalogItem(
           id: (raw['id'] ?? '').toString(),
@@ -2013,6 +2070,7 @@ class ApiOwnerRepository
           description: (raw['descripcion'] ?? '').toString(),
           price: Money.fromCents(_asInt(raw['precioCentavos'])),
           category: cat,
+          isDessert: isDessert,
         ),
       );
     }
@@ -2118,7 +2176,8 @@ class ApiOwnerRepository
       final ik = _idempotency.keyFor(intent);
       try {
         final res = await guard(
-          () => _api.send<Map<String, dynamic>>(
+          () => _api
+              .send<Map<String, dynamic>>(
                 'POST',
                 '${ApiConfig.v1}/caja/ventas',
                 body: {
@@ -2130,7 +2189,8 @@ class ApiOwnerRepository
                 },
                 restaurant: true,
                 idempotencyKey: ik,
-              ).then((v) => v ?? <String, dynamic>{}),
+              )
+              .then((v) => v ?? <String, dynamic>{}),
         );
         final id = (res['id'] ?? '').toString();
         if (id.isNotEmpty) {
@@ -2177,19 +2237,21 @@ class ApiOwnerRepository
           : null;
       final plato = raw['plato'];
       final stockTotal = _asInt(raw['stockTotal']);
-      offers.add(FlashOffer(
-        id: (raw['id'] ?? '').toString(),
-        kind: OfferKind.flash,
-        title: (raw['titulo'] ?? '').toString(),
-        dishId: plato is Map ? plato['id']?.toString() : null,
-        discountPercent: _asInt(raw['descuentoPorcentaje']),
-        slots: _asInt(raw['stockRestante'], stockTotal),
-        slotsTotal: stockTotal,
-        price: Money.fromCents(_asInt(raw['precioCentavos'])),
-        originalPrice: Money.fromCents(_asInt(raw['precioOriginalCentavos'])),
-        validUntil: endsAt != null ? _hhmmEcuador(endsAt) : null,
-        endsAt: endsAt,
-      ));
+      offers.add(
+        FlashOffer(
+          id: (raw['id'] ?? '').toString(),
+          kind: OfferKind.flash,
+          title: (raw['titulo'] ?? '').toString(),
+          dishId: plato is Map ? plato['id']?.toString() : null,
+          discountPercent: _asInt(raw['descuentoPorcentaje']),
+          slots: _asInt(raw['stockRestante'], stockTotal),
+          slotsTotal: stockTotal,
+          price: Money.fromCents(_asInt(raw['precioCentavos'])),
+          originalPrice: Money.fromCents(_asInt(raw['precioOriginalCentavos'])),
+          validUntil: endsAt != null ? _hhmmEcuador(endsAt) : null,
+          endsAt: endsAt,
+        ),
+      );
     }
     return offers;
   }
@@ -2209,7 +2271,9 @@ class ApiOwnerRepository
     _lastError = null;
     final priceCents = Money.toCents(offer.price);
     final ratio = (100 - offer.discountPercent.clamp(1, 95)) / 100.0;
-    final computedOriginal = ratio > 0 ? (priceCents / ratio).round() : priceCents;
+    final computedOriginal = ratio > 0
+        ? (priceCents / ratio).round()
+        : priceCents;
     final originalCents = offer.originalPrice != null
         ? Money.toCents(offer.originalPrice!)
         : (computedOriginal > priceCents ? computedOriginal : priceCents + 50);
@@ -2225,16 +2289,19 @@ class ApiOwnerRepository
       }
     }
 
-    final intent = 'oferta:$restaurantId:${offer.title}:$priceCents:${offer.slots}';
+    final intent =
+        'oferta:$restaurantId:${offer.title}:$priceCents:${offer.slots}';
     final ik = _idempotency.keyFor(intent);
     try {
       final res = await guard(
-        () => _api.send<Map<String, dynamic>>(
+        () => _api
+            .send<Map<String, dynamic>>(
               'POST',
               '${ApiConfig.v1}/ofertas',
               body: {
                 'titulo': offer.title.trim(),
-                if (offer.dishId != null && _uuidRegex.hasMatch(offer.dishId!.trim()))
+                if (offer.dishId != null &&
+                    _uuidRegex.hasMatch(offer.dishId!.trim()))
                   'platoId': offer.dishId!.trim(),
                 'precioCentavos': priceCents,
                 'precioOriginalCentavos': originalCents,
@@ -2243,24 +2310,21 @@ class ApiOwnerRepository
               },
               restaurant: true,
               idempotencyKey: ik,
-            ).then((v) => v ?? <String, dynamic>{}),
+            )
+            .then((v) => v ?? <String, dynamic>{}),
       );
       eventsService.track(
         'dueno.oferta_publicada',
         restaurantId: restaurantId,
-        props: {
-          'stock': offer.slots,
-          'descuento': offer.discountPercent,
-        },
+        props: {'stock': offer.slots, 'descuento': offer.discountPercent},
       );
       final id = res['id']?.toString();
       return (id == null || id.isEmpty) ? 'publicada' : id;
     } on ApiException catch (e) {
       final detail = e.detail.trim();
-      _lastError =
-          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
-              ? detail
-              : e.userMessage;
+      _lastError = ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+          ? detail
+          : e.userMessage;
       return null;
     } finally {
       _idempotency.done(intent);
@@ -2290,10 +2354,9 @@ class ApiOwnerRepository
       return true;
     } on ApiException catch (e) {
       final detail = e.detail.trim();
-      _lastError =
-          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
-              ? detail
-              : e.userMessage;
+      _lastError = ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+          ? detail
+          : e.userMessage;
       return false;
     }
   }
@@ -2348,12 +2411,14 @@ class ApiOwnerRepository
         }
         try {
           await guard(
-            () => _api.send<Map<String, dynamic>>(
+            () => _api
+                .send<Map<String, dynamic>>(
                   'POST',
                   '${ApiConfig.v1}/restaurante/lleno',
                   body: const {'nivel': 'LIBRE'},
                   restaurant: true,
-                ).then((v) => v ?? <String, dynamic>{}),
+                )
+                .then((v) => v ?? <String, dynamic>{}),
           );
         } catch (_) {}
         await clearLegacyPref();
@@ -2370,8 +2435,7 @@ class ApiOwnerRepository
       if (!currentOpen) {
         final activated = await setStoreOpen(restaurantId, isOpen: true);
         if (!activated) {
-          _lastError ??=
-              'No se pudo reactivar el local. Verifica tus horarios y precio suelto.';
+          _lastError ??= 'No se pudo reactivar el local. Verifica tus horarios y precio suelto.';
           return null;
         }
       }
@@ -2383,12 +2447,14 @@ class ApiOwnerRepository
       };
 
       final res = await guard(
-        () => _api.send<Map<String, dynamic>>(
+        () => _api
+            .send<Map<String, dynamic>>(
               'POST',
               '${ApiConfig.v1}/restaurante/lleno',
               body: {'nivel': nivel},
               restaurant: true,
-            ).then((v) => v ?? <String, dynamic>{}),
+            )
+            .then((v) => v ?? <String, dynamic>{}),
       );
 
       await clearLegacyPref();
@@ -2419,10 +2485,9 @@ class ApiOwnerRepository
       return null;
     } on ApiException catch (e) {
       final detail = e.detail.trim();
-      _lastError =
-          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
-              ? detail
-              : e.userMessage;
+      _lastError = ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+          ? detail
+          : e.userMessage;
       return null;
     } catch (_) {
       _lastError = 'Error de red al actualizar la disponibilidad del local.';
@@ -2440,10 +2505,7 @@ class ApiOwnerRepository
   Future<bool> isShiftClosed(String restaurantId) async {
     final today = EcuadorTime.today();
     final data = await guard(
-      () => _api.getMap(
-        '${ApiConfig.v1}/caja/cierre/$today',
-        restaurant: true,
-      ),
+      () => _api.getMap('${ApiConfig.v1}/caja/cierre/$today', restaurant: true),
     );
     return data['cierre'] != null;
   }
@@ -2495,10 +2557,9 @@ class ApiOwnerRepository
       return true;
     } on ApiException catch (e) {
       final detail = e.detail.trim();
-      _lastError =
-          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
-              ? detail
-              : e.userMessage;
+      _lastError = ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+          ? detail
+          : e.userMessage;
       return false;
     }
   }
@@ -2555,7 +2616,8 @@ class ApiOwnerRepository
     if (upper.startsWith('BCD-ORD-')) {
       final rest = trimmed.substring(8).trim();
       if (rest == expected.number ||
-          (expected.id != null && rest.toLowerCase() == expected.id!.toLowerCase())) {
+          (expected.id != null &&
+              rest.toLowerCase() == expected.id!.toLowerCase())) {
         return true;
       }
     }
@@ -2580,7 +2642,7 @@ class ApiOwnerRepository
 
   @override
   Future<({bool isValid, OwnerOrder? order, String? errorMessage})>
-      verifyOrderQrCode(
+  verifyOrderQrCode(
     String rawPayload,
     String activeRestaurantId, {
     OwnerOrder? expectedOrder,
@@ -2614,7 +2676,11 @@ class ApiOwnerRepository
 
     var order = await _findOrderByAnyCode(rawPayload, activeRestaurantId);
     if (order == null && expectedOrder != null) {
-      if (_matchesExpectedOrderRaw(rawPayload, expectedOrder, activeRestaurantId)) {
+      if (_matchesExpectedOrderRaw(
+        rawPayload,
+        expectedOrder,
+        activeRestaurantId,
+      )) {
         order = expectedOrder;
       }
     }
@@ -2650,7 +2716,8 @@ class ApiOwnerRepository
     }
 
     final ordKey = 'ORD:${order.number}';
-    if (_redeemedCodes.contains(ordKey) || _inFlightOrders.contains(order.number)) {
+    if (_redeemedCodes.contains(ordKey) ||
+        _inFlightOrders.contains(order.number)) {
       return (
         isValid: false,
         order: null,
@@ -2670,7 +2737,8 @@ class ApiOwnerRepository
   }) async {
     _lastError = null;
     final cleaned = BocadooQrParser.sanitizeManualInput(orderIdOrCode);
-    final codeKey = rawCodeKey ??
+    final codeKey =
+        rawCodeKey ??
         (cleaned.length == BocadooQrParser.shortCodeLength
             ? cleaned
             : orderIdOrCode.trim().toUpperCase());
@@ -2711,7 +2779,8 @@ class ApiOwnerRepository
             restaurant: true,
           ),
         );
-        final numTarget = BocadooQrParser.resolveOrderNumber(orderIdOrCode) ??
+        final numTarget =
+            BocadooQrParser.resolveOrderNumber(orderIdOrCode) ??
             orderIdOrCode.replaceAll('#', '').trim();
         for (final raw in servidas.whereType<Map>()) {
           final rawNum = _asInt(raw['numero']).toString();
@@ -2790,7 +2859,8 @@ class ApiOwnerRepository
         }
       }
 
-      final entry = _ordersByNumber[order.number] ??
+      final entry =
+          _ordersByNumber[order.number] ??
           _OrderCacheEntry(
             id: order.id ?? order.number,
             number: order.number,
@@ -2828,7 +2898,8 @@ class ApiOwnerRepository
       final dishSummary = (cachedDish != null && cachedDish.isNotEmpty)
           ? cachedDish
           : (dishParts.isNotEmpty ? dishParts.join(' + ') : null);
-      final scanTs = _orderScanTimestampByKey[order.id ?? ''] ??
+      final scanTs =
+          _orderScanTimestampByKey[order.id ?? ''] ??
           _orderScanTimestampByKey['#${order.number}'] ??
           DateTime.now();
       if (order.id != null && order.id!.isNotEmpty) {
@@ -2841,7 +2912,9 @@ class ApiOwnerRepository
           id: 'ord-${order.number}-${DateTime.now().millisecondsSinceEpoch}',
           customerName: 'Pedido #${order.number} · ${order.dinerName}',
           type: order.paidByPlan ? 'Canje de plan' : 'Pedido #${order.number}',
-          amount: order.paidByPlan ? 0 : Money.fromCents(order.effectiveTotalCents),
+          amount: order.paidByPlan
+              ? 0
+              : Money.fromCents(order.effectiveTotalCents),
           paymentMethod: order.paidByPlan ? 'Plan' : paymentMethod.label,
           timestamp: scanTs,
           detail: order.paidByPlan
@@ -2885,18 +2958,21 @@ class ApiOwnerRepository
       final ik = _idempotency.keyFor(intent);
       try {
         final res = await guard(
-          () => _api.send<Map<String, dynamic>>(
+          () => _api
+              .send<Map<String, dynamic>>(
                 'POST',
                 '${ApiConfig.v1}/caja/pedidos/${entry.id}/canjear',
                 restaurant: true,
                 idempotencyKey: ik,
-              ).then((v) => v ?? <String, dynamic>{}),
+              )
+              .then((v) => v ?? <String, dynamic>{}),
         );
         _idempotency.done(intent);
         final almuerzo = res['almuerzo'] is Map ? res['almuerzo'] as Map : null;
         final pedidoMap = res['pedido'] is Map ? res['pedido'] as Map : null;
-        final pedidoAlmuerzo =
-            pedidoMap?['almuerzo'] is Map ? pedidoMap!['almuerzo'] as Map : null;
+        final pedidoAlmuerzo = pedidoMap?['almuerzo'] is Map
+            ? pedidoMap!['almuerzo'] as Map
+            : null;
         final rawPlato = res['platoNombre']?.toString().trim();
         final resolvedDish = (rawPlato != null && rawPlato.isNotEmpty)
             ? rawPlato
@@ -2909,7 +2985,8 @@ class ApiOwnerRepository
         if (consumoId != null && consumoId.isNotEmpty) {
           entry.consumoId = consumoId;
         }
-        final ok = res['yaCanjeado'] == true ||
+        final ok =
+            res['yaCanjeado'] == true ||
             resultado == null ||
             resultado == 'OK' ||
             resultado == 'OK_ADVERTENCIA';
@@ -2930,8 +3007,9 @@ class ApiOwnerRepository
           );
           return true;
         }
-        _lastError = (almuerzo?['mensaje'] ?? 'No se pudo validar el pase del pedido.')
-            .toString();
+        _lastError =
+            (almuerzo?['mensaje'] ?? 'No se pudo validar el pase del pedido.')
+                .toString();
         return false;
       } on ApiException catch (e) {
         if (!e.isNetwork && e.status != 504) {
@@ -2941,10 +3019,9 @@ class ApiOwnerRepository
       }
     } on ApiException catch (e) {
       final detail = e.detail.trim();
-      _lastError =
-          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
-              ? detail
-              : e.userMessage;
+      _lastError = ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+          ? detail
+          : e.userMessage;
       return false;
     }
   }
@@ -2971,10 +3048,9 @@ class ApiOwnerRepository
       return true;
     } on ApiException catch (e) {
       final detail = e.detail.trim();
-      _lastError =
-          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
-              ? detail
-              : e.userMessage;
+      _lastError = ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+          ? detail
+          : e.userMessage;
       return false;
     }
   }
@@ -3024,12 +3100,14 @@ class ApiOwnerRepository
         final ik = _idempotency.keyFor(intent);
         try {
           final canje = await guard(
-            () => _api.send<Map<String, dynamic>>(
+            () => _api
+                .send<Map<String, dynamic>>(
                   'POST',
                   '${ApiConfig.v1}/caja/pedidos/${entry.id}/canjear',
                   restaurant: true,
                   idempotencyKey: ik,
-                ).then((v) => v ?? <String, dynamic>{}),
+                )
+                .then((v) => v ?? <String, dynamic>{}),
           );
           final localCents = entry.paidByPlan ? 0 : Money.toCents(entry.amount);
           final remoteCents = _asInt(canje['porCobrarCentavos'], localCents);
@@ -3069,7 +3147,9 @@ class ApiOwnerRepository
               restaurant: true,
             ),
           );
-          final afterCashCents = _asInt(afterCierre['efectivoEsperadoCentavos']);
+          final afterCashCents = _asInt(
+            afterCierre['efectivoEsperadoCentavos'],
+          );
           if (afterCashCents <= beforeCashCents) {
             final ventaIntent = 'b26_order_cash:${entry.id}';
             final ventaIk = _idempotency.keyFor(ventaIntent);
@@ -3139,12 +3219,14 @@ class ApiOwnerRepository
       final List<dynamic> list = rawList is List
           ? rawList
           : (rawList is Map
-              ? ((rawList['items'] ?? rawList['mesas'] ?? rawList['data'])
-                      is List
-                  ? (rawList['items'] ?? rawList['mesas'] ?? rawList['data'])
-                      as List<dynamic>
-                  : const <dynamic>[])
-              : const <dynamic>[]);
+                ? ((rawList['items'] ?? rawList['mesas'] ?? rawList['data'])
+                          is List
+                      ? (rawList['items'] ??
+                                rawList['mesas'] ??
+                                rawList['data'])
+                            as List<dynamic>
+                      : const <dynamic>[])
+                : const <dynamic>[]);
       final rest = results[1] as Map<String, dynamic>;
       final rawRecargo = _asInt(rest['recargoParaLlevarCentavos']);
       final recargoUnitCents = rawRecargo > 0 ? rawRecargo : 25;
@@ -3188,8 +3270,8 @@ class ApiOwnerRepository
         final rawMembers = vista['miembros'] is List
             ? (vista['miembros'] as List).whereType<Map>().toList()
             : (m['miembros'] is List
-                ? (m['miembros'] as List).whereType<Map>().toList()
-                : const <Map>[]);
+                  ? (m['miembros'] as List).whereType<Map>().toList()
+                  : const <Map>[]);
 
         final modoRaw = (vista['modo'] ?? m['modo'] ?? 'CADA_UNO')
             .toString()
@@ -3202,7 +3284,8 @@ class ApiOwnerRepository
         final totalPersonas = _asInt(vista['personas']) > 0
             ? _asInt(vista['personas'])
             : rawMembers.length;
-        final hasVistaCounts = vista.isNotEmpty && vista.containsKey('cubiertos');
+        final hasVistaCounts =
+            vista.isNotEmpty && vista.containsKey('cubiertos');
         final cubiertos = hasVistaCounts ? _asInt(vista['cubiertos']) : 0;
 
         final memberDishes = <PendingTableMemberDish>[];
@@ -3271,7 +3354,7 @@ class ApiOwnerRepository
 
   /// Extrae sopa, segundo y extras desde `miembros[].seleccion` (Entrega C) o campos planos legacy.
   static ({String? soup, String? main, List<String> extras})
-      _parseTableMemberSelection(Map mm) {
+  _parseTableMemberSelection(Map mm) {
     String? soup;
     String? main;
     final extras = <String>[];
@@ -3284,7 +3367,9 @@ class ApiOwnerRepository
           if (nombre.isEmpty) continue;
           if (sec == 'SOPA') {
             soup ??= nombre;
-          } else if (sec == 'FUERTE' || sec == 'SEGUNDO' || sec == 'PLATO_FUERTE') {
+          } else if (sec == 'FUERTE' ||
+              sec == 'SEGUNDO' ||
+              sec == 'PLATO_FUERTE') {
             main ??= nombre;
           } else {
             if (main != null) {
@@ -3306,7 +3391,9 @@ class ApiOwnerRepository
           addLunchPlatos(almuerzo['platos'] as List);
         }
         final sRaw = almuerzo['sopa']?.toString().trim();
-        final mRaw = (almuerzo['segundo'] ?? almuerzo['fuerte'])?.toString().trim();
+        final mRaw = (almuerzo['segundo'] ?? almuerzo['fuerte'])
+            ?.toString()
+            .trim();
         if (sRaw != null && sRaw.isNotEmpty) soup ??= sRaw;
         if (mRaw != null && mRaw.isNotEmpty) main ??= mRaw;
       } else if (almuerzo is List) {
@@ -3316,7 +3403,9 @@ class ApiOwnerRepository
         for (final ex in seleccion['extras'] as List) {
           if (ex is Map) {
             final platoMap = ex['plato'] is Map ? ex['plato'] as Map : null;
-            final nombre = (ex['nombre'] ?? platoMap?['nombre'] ?? '').toString().trim();
+            final nombre = (ex['nombre'] ?? platoMap?['nombre'] ?? '')
+                .toString()
+                .trim();
             final qty = _asInt(ex['cantidad'], 1);
             if (nombre.isNotEmpty) {
               extras.add(qty > 1 ? '${qty}x $nombre' : nombre);
@@ -3345,15 +3434,10 @@ class ApiOwnerRepository
   }
 
   @override
-  Future<TablePreview> previewTable(
-    String restaurantId,
-    String tableId,
-  ) async {
+  Future<TablePreview> previewTable(String restaurantId, String tableId) async {
     final mesaFuture = guard(
-      () => _api.getMap(
-        '${ApiConfig.v1}/caja/mesas/$tableId',
-        restaurant: true,
-      ),
+      () =>
+          _api.getMap('${ApiConfig.v1}/caja/mesas/$tableId', restaurant: true),
     );
     final restFuture = _fetchRestaurantMap();
 
@@ -3364,11 +3448,15 @@ class ApiOwnerRepository
     final surchargeCents = _asInt(rest['recargoParaLlevarCentavos']);
 
     final modoRaw = (mesa['modo'] ?? '').toString().toUpperCase();
-    final mode = modoRaw == 'INVITO_YO' ? TableMode.hostPays : TableMode.eachOwn;
+    final mode = modoRaw == 'INVITO_YO'
+        ? TableMode.hostPays
+        : TableMode.eachOwn;
     final estado = (mesa['estado'] ?? '').toString().toUpperCase();
     final settled = estado == 'FINALIZADA' || mesa['validadaEn'] != null;
 
-    final rawMembers = mesa['miembros'] is List ? mesa['miembros'] as List : const [];
+    final rawMembers = mesa['miembros'] is List
+        ? mesa['miembros'] as List
+        : const [];
     final hostMember = rawMembers
         .whereType<Map>()
         .where((m) => m['esAnfitrion'] == true)
@@ -3467,15 +3555,19 @@ class ApiOwnerRepository
       } catch (_) {}
 
       final res = await guard(
-        () => _api.send<Map<String, dynamic>>(
+        () => _api
+            .send<Map<String, dynamic>>(
               'POST',
               '${ApiConfig.v1}/caja/mesas/$tableId/validar',
               restaurant: true,
               idempotencyKey: ik,
-            ).then((v) => v ?? <String, dynamic>{}),
+            )
+            .then((v) => v ?? <String, dynamic>{}),
       );
 
-      final resultados = res['resultados'] is List ? res['resultados'] as List : const [];
+      final resultados = res['resultados'] is List
+          ? res['resultados'] as List
+          : const [];
       final consumoIds = <String>[];
       for (final r in resultados.whereType<Map>()) {
         final cid = r['consumoId']?.toString();
@@ -3497,7 +3589,9 @@ class ApiOwnerRepository
               restaurant: true,
             ),
           );
-          final afterCashCents = _asInt(afterCierre['efectivoEsperadoCentavos']);
+          final afterCashCents = _asInt(
+            afterCierre['efectivoEsperadoCentavos'],
+          );
           // TODO(backend): B-26 — si validar mesa no sumó los sueltos al
           // efectivo esperado, registrar la venta en efectivo vía POS.
           if (afterCashCents <= beforeCashCents && _cachedLunchPriceCents > 0) {
@@ -3510,10 +3604,7 @@ class ApiOwnerRepository
                   '${ApiConfig.v1}/caja/ventas',
                   body: {
                     'items': [
-                      {
-                        'tipo': 'ALMUERZO',
-                        'cantidad': porCobrarCount,
-                      },
+                      {'tipo': 'ALMUERZO', 'cantidad': porCobrarCount},
                     ],
                     'metodoPago': 'EFECTIVO',
                     'paraLlevar': false,
@@ -3621,20 +3712,39 @@ class ApiOwnerRepository
     };
   }
 
-  static ({String categoria, String seccion, List<String> etiquetas}) _dishKindToApi(
-    DishKind kind,
-  ) {
+  static ({String categoria, String seccion, List<String> etiquetas})
+  _dishKindToApi(DishKind kind) {
     return switch (kind) {
-      DishKind.sopa => (categoria: 'ALMUERZO', seccion: 'SOPA', etiquetas: const []),
-      DishKind.segundo => (categoria: 'ALMUERZO', seccion: 'FUERTE', etiquetas: const []),
-      DishKind.bebida => (categoria: 'ALMUERZO', seccion: 'JUGO', etiquetas: const []),
-      DishKind.postre => (categoria: 'ALMUERZO', seccion: 'POSTRE', etiquetas: const []),
+      DishKind.sopa => (
+        categoria: 'ALMUERZO',
+        seccion: 'SOPA',
+        etiquetas: const [],
+      ),
+      DishKind.segundo => (
+        categoria: 'ALMUERZO',
+        seccion: 'FUERTE',
+        etiquetas: const [],
+      ),
+      DishKind.bebida => (
+        categoria: 'ALMUERZO',
+        seccion: 'JUGO',
+        etiquetas: const [],
+      ),
+      DishKind.postre => (
+        categoria: 'ALMUERZO',
+        seccion: 'POSTRE',
+        etiquetas: const [],
+      ),
       DishKind.desayuno => (
-          categoria: 'EXTRA',
-          seccion: 'ADICIONAL',
-          etiquetas: const ['desayuno'],
-        ),
-      DishKind.carta => (categoria: 'A_LA_CARTA', seccion: 'FUERTE', etiquetas: const []),
+        categoria: 'EXTRA',
+        seccion: 'ADICIONAL',
+        etiquetas: const ['desayuno'],
+      ),
+      DishKind.carta => (
+        categoria: 'A_LA_CARTA',
+        seccion: 'FUERTE',
+        etiquetas: const [],
+      ),
     };
   }
 
@@ -3662,7 +3772,8 @@ class ApiOwnerRepository
         'POSTRE' => 'Postre',
         _ => 'Desayuno',
       };
-      final priceCents = _asNullableInt(item['precioDelDiaCentavos']) ??
+      final priceCents =
+          _asNullableInt(item['precioDelDiaCentavos']) ??
           _asNullableInt(item['precioCentavos']);
       if (populateSoldOutMap && itemId.isNotEmpty && name.trim().isNotEmpty) {
         _todayMenuItemIdByName[name.trim()] = itemId;
@@ -3711,7 +3822,8 @@ class ApiOwnerRepository
 
     final data = await menuFuture;
     final rest = await restFuture;
-    final isOpen = (rest['estado'] ?? 'ACTIVO').toString().toUpperCase() == 'ACTIVO';
+    final isOpen =
+        (rest['estado'] ?? 'ACTIVO').toString().toUpperCase() == 'ACTIVO';
 
     return _parseDailyMenu(
       restaurantId,
@@ -3767,7 +3879,8 @@ class ApiOwnerRepository
         var platoId = course.dishId ?? '';
         CatalogDish? matched;
         if (platoId.isEmpty) {
-          matched = byKindAndName[(kind, name.toLowerCase())] ??
+          matched =
+              byKindAndName[(kind, name.toLowerCase())] ??
               byName[name.toLowerCase()];
           if (matched != null) {
             platoId = matched.id;
@@ -3815,20 +3928,24 @@ class ApiOwnerRepository
 
       final today = EcuadorTime.today();
       await guard(
-        () => _api.send<Map<String, dynamic>>(
+        () => _api
+            .send<Map<String, dynamic>>(
               'PUT',
               '${ApiConfig.v1}/menu/$today',
               body: {'items': itemsPayload},
               restaurant: true,
-            ).then((v) => v ?? <String, dynamic>{}),
+            )
+            .then((v) => v ?? <String, dynamic>{}),
       );
       final publishedMap = await guard(
-        () => _api.send<Map<String, dynamic>>(
+        () => _api
+            .send<Map<String, dynamic>>(
               'POST',
               '${ApiConfig.v1}/menu/$today/publicar',
               body: const <String, dynamic>{},
               restaurant: true,
-            ).then((v) => v ?? <String, dynamic>{}),
+            )
+            .then((v) => v ?? <String, dynamic>{}),
       );
 
       _parseDailyMenu(
@@ -3848,12 +3965,14 @@ class ApiOwnerRepository
             await setStoreOpen(menu.restaurantId, isOpen: true);
           }
           await guard(
-            () => _api.send<Map<String, dynamic>>(
+            () => _api
+                .send<Map<String, dynamic>>(
                   'POST',
                   '${ApiConfig.v1}/restaurante/lleno',
                   body: const {'nivel': 'LIBRE'},
                   restaurant: true,
-                ).then((v) => v ?? <String, dynamic>{}),
+                )
+                .then((v) => v ?? <String, dynamic>{}),
           );
           final prefs = await SharedPreferences.getInstance();
           await prefs.remove('$_manualOccupancyPrefPrefix${menu.restaurantId}');
@@ -3863,16 +3982,17 @@ class ApiOwnerRepository
       // Si el usuario marcó platos como agotados antes de publicar, sincronízalos.
       for (final course in menu.courses) {
         if (!course.isSoldOut) continue;
-        final itemId = _todayMenuItemIdByName[course.name.trim()] ??
+        final itemId =
+            _todayMenuItemIdByName[course.name.trim()] ??
             _todayMenuItemIdByName[course.name.trim().toLowerCase()];
         if (itemId == null || itemId.isEmpty) continue;
         await guard(
           () => _api.send<dynamic>(
-                'PATCH',
-                '${ApiConfig.v1}/menu/$today/items/$itemId/agotado',
-                body: const {'agotado': true},
-                restaurant: true,
-              ),
+            'PATCH',
+            '${ApiConfig.v1}/menu/$today/items/$itemId/agotado',
+            body: const {'agotado': true},
+            restaurant: true,
+          ),
         );
       }
       eventsService.track(
@@ -3886,9 +4006,9 @@ class ApiOwnerRepository
       final detail = e.detail.trim();
       _lastError =
           ((e.status == 400 || e.status == 422 || e.status == 409) &&
-                  detail.isNotEmpty)
-              ? detail
-              : e.userMessage;
+              detail.isNotEmpty)
+          ? detail
+          : e.userMessage;
       return false;
     } catch (_) {
       _lastError = 'No se pudo publicar el menú de hoy.';
@@ -3896,14 +4016,20 @@ class ApiOwnerRepository
     }
   }
 
-  Future<void> _activateIfDraft(DailyMenu menu, List<CatalogDish> dishes) async {
+  Future<void> _activateIfDraft(
+    DailyMenu menu,
+    List<CatalogDish> dishes,
+  ) async {
     final rest = await guard(
       () => _api.getMap('${ApiConfig.v1}/restaurante', restaurant: true),
     );
     if ((rest['estado'] ?? '').toString() == 'ACTIVO') return;
 
     final horarios = await guard(
-      () => _api.getList('${ApiConfig.v1}/restaurante/horarios', restaurant: true),
+      () => _api.getList(
+        '${ApiConfig.v1}/restaurante/horarios',
+        restaurant: true,
+      ),
     );
     if (horarios.isEmpty) {
       await guard(
@@ -3988,7 +4114,10 @@ class ApiOwnerRepository
       );
       if ((rest['estado'] ?? '').toString() != 'ACTIVO') {
         final horarios = await guard(
-          () => _api.getList('${ApiConfig.v1}/restaurante/horarios', restaurant: true),
+          () => _api.getList(
+            '${ApiConfig.v1}/restaurante/horarios',
+            restaurant: true,
+          ),
         );
         if (horarios.isEmpty) {
           await guard(
@@ -4034,10 +4163,12 @@ class ApiOwnerRepository
     _lastError = null;
     try {
       final knownZoneId = resolveKnownZoneId(zone);
-      final roundedLat =
-          lat != null ? double.parse(lat.toStringAsFixed(6)) : null;
-      final roundedLng =
-          lng != null ? double.parse(lng.toStringAsFixed(6)) : null;
+      final roundedLat = lat != null
+          ? double.parse(lat.toStringAsFixed(6))
+          : null;
+      final roundedLng = lng != null
+          ? double.parse(lng.toStringAsFixed(6))
+          : null;
       await guard(
         () => _api.send<Map<String, dynamic>>(
           'PATCH',
@@ -4074,19 +4205,18 @@ class ApiOwnerRepository
       final today = EcuadorTime.today();
       await guard(
         () => _api.send<dynamic>(
-              'POST',
-              '${ApiConfig.v1}/menu/$today/despublicar',
-              body: const <String, dynamic>{},
-              restaurant: true,
-            ),
+          'POST',
+          '${ApiConfig.v1}/menu/$today/despublicar',
+          body: const <String, dynamic>{},
+          restaurant: true,
+        ),
       );
       return true;
     } on ApiException catch (e) {
       final detail = e.detail.trim();
-      _lastError =
-          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
-              ? detail
-              : e.userMessage;
+      _lastError = ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+          ? detail
+          : e.userMessage;
       return false;
     } catch (_) {
       _lastError = 'No se pudo despublicar el menú de hoy.';
@@ -4103,11 +4233,13 @@ class ApiOwnerRepository
     _lastError = null;
     try {
       final key = courseName.trim();
-      var itemId = _todayMenuItemIdByName[key] ??
+      var itemId =
+          _todayMenuItemIdByName[key] ??
           _todayMenuItemIdByName[key.toLowerCase()];
       if (itemId == null || itemId.isEmpty) {
         await getTodayMenu(restaurantId);
-        itemId = _todayMenuItemIdByName[key] ??
+        itemId =
+            _todayMenuItemIdByName[key] ??
             _todayMenuItemIdByName[key.toLowerCase()];
       }
       if (itemId == null || itemId.isEmpty) {
@@ -4117,11 +4249,11 @@ class ApiOwnerRepository
       final today = EcuadorTime.today();
       await guard(
         () => _api.send<dynamic>(
-              'PATCH',
-              '${ApiConfig.v1}/menu/$today/items/$itemId/agotado',
-              body: {'agotado': soldOut},
-              restaurant: true,
-            ),
+          'PATCH',
+          '${ApiConfig.v1}/menu/$today/items/$itemId/agotado',
+          body: {'agotado': soldOut},
+          restaurant: true,
+        ),
       );
       eventsService.track(
         'dueno.plato_agotado',
@@ -4137,10 +4269,9 @@ class ApiOwnerRepository
       return true;
     } on ApiException catch (e) {
       final detail = e.detail.trim();
-      _lastError =
-          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
-              ? detail
-              : e.userMessage;
+      _lastError = ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+          ? detail
+          : e.userMessage;
       return false;
     } catch (_) {
       _lastError = 'No se pudo actualizar el estado del plato.';
@@ -4170,18 +4301,17 @@ class ApiOwnerRepository
       final action = isOpen ? 'activar' : 'pausar';
       await guard(
         () => _api.send<dynamic>(
-              'POST',
-              '${ApiConfig.v1}/restaurante/$action',
-              restaurant: true,
-            ),
+          'POST',
+          '${ApiConfig.v1}/restaurante/$action',
+          restaurant: true,
+        ),
       );
       return true;
     } on ApiException catch (e) {
       final detail = e.detail.trim();
-      _lastError =
-          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
-              ? detail
-              : e.userMessage;
+      _lastError = ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+          ? detail
+          : e.userMessage;
       return false;
     } catch (_) {
       _lastError = 'No se pudo cambiar el estado del local.';
@@ -4202,7 +4332,9 @@ class ApiOwnerRepository
       final categoria = (raw['categoria'] ?? '').toString().toUpperCase();
       final seccion = (raw['seccion'] ?? '').toString().toUpperCase();
       final tags = raw['etiquetas'] is List
-          ? (raw['etiquetas'] as List).map((e) => e.toString().toLowerCase()).toList()
+          ? (raw['etiquetas'] as List)
+                .map((e) => e.toString().toLowerCase())
+                .toList()
           : const <String>[];
       final DishKind kind;
       if (categoria == 'A_LA_CARTA') {
@@ -4275,12 +4407,14 @@ class ApiOwnerRepository
       if (etiquetas.isNotEmpty) 'etiquetas': etiquetas,
     };
     final res = await guard(
-      () => _api.send<Map<String, dynamic>>(
+      () => _api
+          .send<Map<String, dynamic>>(
             'POST',
             '${ApiConfig.v1}/menu/platos',
             body: body,
             restaurant: true,
-          ).then((v) => v ?? <String, dynamic>{}),
+          )
+          .then((v) => v ?? <String, dynamic>{}),
     );
     final priceCents = _asNullableInt(res['precioCentavos']);
     return CatalogDish(
@@ -4305,11 +4439,11 @@ class ApiOwnerRepository
   }) async {
     await guard(
       () => _api.send<dynamic>(
-            'PATCH',
-            '${ApiConfig.v1}/menu/platos/$dishId',
-            body: {'activo': !archived},
-            restaurant: true,
-          ),
+        'PATCH',
+        '${ApiConfig.v1}/menu/platos/$dishId',
+        body: {'activo': !archived},
+        restaurant: true,
+      ),
     );
   }
 
@@ -4323,11 +4457,11 @@ class ApiOwnerRepository
     try {
       await guard(
         () => _api.send<dynamic>(
-              'PATCH',
-              '${ApiConfig.v1}/menu/platos/$dishId/agotado',
-              body: {'agotado': soldOut},
-              restaurant: true,
-            ),
+          'PATCH',
+          '${ApiConfig.v1}/menu/platos/$dishId/agotado',
+          body: {'agotado': soldOut},
+          restaurant: true,
+        ),
       );
       eventsService.track(
         'dueno.carta_plato_agotado',
@@ -4356,6 +4490,7 @@ class ApiOwnerRepository
     required int priceCents,
     required String categoria,
     required String seccion,
+    List<String> etiquetas = const [],
     String? description,
   }) async {
     _lastError = null;
@@ -4365,6 +4500,7 @@ class ApiOwnerRepository
         'seccion': seccion,
         'nombre': name.trim(),
         'precioCentavos': priceCents,
+        if (etiquetas.isNotEmpty) 'etiquetas': etiquetas,
         if (description != null && description.trim().isNotEmpty)
           'descripcion': description.trim(),
       };
@@ -4426,11 +4562,11 @@ class ApiOwnerRepository
   // ---------------------------------------------------------------------------
 
   static String _planKindToApi(PlanKind k) => switch (k) {
-        PlanKind.semanal => 'SEMANAL',
-        PlanKind.quincenal => 'QUINCENAL',
-        PlanKind.mensual => 'MENSUAL',
-        PlanKind.libre => 'LIBRE',
-      };
+    PlanKind.semanal => 'SEMANAL',
+    PlanKind.quincenal => 'QUINCENAL',
+    PlanKind.mensual => 'MENSUAL',
+    PlanKind.libre => 'LIBRE',
+  };
 
   static List<String> _encodeIncludes(OwnerPlanTemplate template) {
     final clean = [
@@ -4439,19 +4575,26 @@ class ApiOwnerRepository
     ];
     return switch (template.coverage) {
       PlanCoverage.desayuno => [
-          if (!clean.any((e) => e.toLowerCase().contains('desayuno'))) 'Desayuno',
-          ...clean.where((e) => !e.toLowerCase().contains('sopa') && !e.toLowerCase().contains('segundo')),
-        ],
+        if (!clean.any((e) => e.toLowerCase().contains('desayuno'))) 'Desayuno',
+        ...clean.where(
+          (e) =>
+              !e.toLowerCase().contains('sopa') &&
+              !e.toLowerCase().contains('segundo'),
+        ),
+      ],
       PlanCoverage.mixto => [
-          if (!clean.any((e) => e.toLowerCase().contains('desayuno'))) 'Desayuno',
-          if (!clean.any((e) => e.toLowerCase().contains('sopa'))) 'Sopa',
-          if (!clean.any((e) => e.toLowerCase().contains('segundo'))) 'Segundo',
-          ...clean.where((e) {
-            final l = e.toLowerCase();
-            return !l.contains('desayuno') && !l.contains('sopa') && !l.contains('segundo');
-          }),
-        ],
-      PlanCoverage.almuerzo => clean.isEmpty ? const ['Sopa', 'Segundo', 'Jugo'] : clean,
+        if (!clean.any((e) => e.toLowerCase().contains('desayuno'))) 'Desayuno',
+        if (!clean.any((e) => e.toLowerCase().contains('sopa'))) 'Sopa',
+        if (!clean.any((e) => e.toLowerCase().contains('segundo'))) 'Segundo',
+        ...clean.where((e) {
+          final l = e.toLowerCase();
+          return !l.contains('desayuno') &&
+              !l.contains('sopa') &&
+              !l.contains('segundo');
+        }),
+      ],
+      PlanCoverage.almuerzo =>
+        clean.isEmpty ? const ['Sopa', 'Segundo', 'Jugo'] : clean,
     };
   }
 
@@ -4477,12 +4620,14 @@ class ApiOwnerRepository
     Map<String, dynamic> res;
     if (isNew) {
       res = await guard(
-        () => _api.send<Map<String, dynamic>>(
+        () => _api
+            .send<Map<String, dynamic>>(
               'POST',
               '${ApiConfig.v1}/planes',
               body: baseBody,
               restaurant: true,
-            ).then((v) => v ?? <String, dynamic>{}),
+            )
+            .then((v) => v ?? <String, dynamic>{}),
       );
     } else {
       final patchBody = <String, dynamic>{
@@ -4491,32 +4636,40 @@ class ApiOwnerRepository
       };
       try {
         res = await guard(
-          () => _api.send<Map<String, dynamic>>(
+          () => _api
+              .send<Map<String, dynamic>>(
                 'PATCH',
                 '${ApiConfig.v1}/planes/${template.id}',
                 body: patchBody,
                 restaurant: true,
-              ).then((v) => v ?? <String, dynamic>{}),
+              )
+              .then((v) => v ?? <String, dynamic>{}),
         );
       } on ApiException catch (e) {
         // OpenAPI tipa `diasValidos` de PATCH como `array<string>` en algunas versiones;
         // si la validación rechaza enteros con 400, reintenta convirtiendo a strings.
         if (e.status != 400) rethrow;
         res = await guard(
-          () => _api.send<Map<String, dynamic>>(
+          () => _api
+              .send<Map<String, dynamic>>(
                 'PATCH',
                 '${ApiConfig.v1}/planes/${template.id}',
                 body: {
                   ...patchBody,
-                  'diasValidos': template.days.map((d) => d.toString()).toList(),
+                  'diasValidos': template.days
+                      .map((d) => d.toString())
+                      .toList(),
                 },
                 restaurant: true,
-              ).then((v) => v ?? <String, dynamic>{}),
+              )
+              .then((v) => v ?? <String, dynamic>{}),
         );
       }
     }
 
-    final rawDays = res['diasValidos'] is List ? res['diasValidos'] as List : template.days;
+    final rawDays = res['diasValidos'] is List
+        ? res['diasValidos'] as List
+        : template.days;
     final rawIncl = res['incluye'] is List ? res['incluye'] as List : includes;
     final mappedIncl = rawIncl.map((e) => e.toString()).toList();
     return template.copyWith(
@@ -4546,19 +4699,18 @@ class ApiOwnerRepository
     try {
       await guard(
         () => _api.send<dynamic>(
-              'PATCH',
-              '${ApiConfig.v1}/planes/$templateId',
-              body: {'activo': active},
-              restaurant: true,
-            ),
+          'PATCH',
+          '${ApiConfig.v1}/planes/$templateId',
+          body: {'activo': active},
+          restaurant: true,
+        ),
       );
       return true;
     } on ApiException catch (e) {
       final detail = e.detail.trim();
-      _lastError =
-          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
-              ? detail
-              : e.userMessage;
+      _lastError = ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+          ? detail
+          : e.userMessage;
       return false;
     } catch (_) {
       _lastError = 'No se pudo actualizar el estado del plan.';
@@ -4616,7 +4768,8 @@ class ApiOwnerRepository
       final unitCents = (Money.toCents(template.price) / divisor).round();
 
       final res = await guard(
-        () => _api.send<Map<String, dynamic>>(
+        () => _api
+            .send<Map<String, dynamic>>(
               'POST',
               '${ApiConfig.v1}/clientes/$targetClientId/migrar-cartulina',
               body: {
@@ -4625,10 +4778,12 @@ class ApiOwnerRepository
                 'precioUnitarioCentavos': unitCents,
                 'nombrePlan': template.name,
                 'diasValidos': template.days,
-                'anotacion': 'Cartulina de papel ($used/${template.lunches} usados)',
+                'anotacion':
+                    'Cartulina de papel ($used/${template.lunches} usados)',
               },
               restaurant: true,
-            ).then((v) => v ?? <String, dynamic>{}),
+            )
+            .then((v) => v ?? <String, dynamic>{}),
       );
 
       final planes = res['planes'] is List ? res['planes'] as List : const [];
@@ -4677,11 +4832,11 @@ class ApiOwnerRepository
       // permite revertir planes con origen MIGRADA dentro de la ventana de gracia.
       await guard(
         () => _api.send<dynamic>(
-              'POST',
-              '${ApiConfig.v1}/planes-vendidos/$cardId/deshacer',
-              idempotencyKey: key,
-              restaurant: true,
-            ),
+          'POST',
+          '${ApiConfig.v1}/planes-vendidos/$cardId/deshacer',
+          idempotencyKey: key,
+          restaurant: true,
+        ),
       );
       ok = true;
       final createdClientId = _physicalCardCreatedClientId.remove(cardId);
@@ -4689,11 +4844,11 @@ class ApiOwnerRepository
         try {
           await guard(
             () => _api.send<dynamic>(
-                  'PATCH',
-                  '${ApiConfig.v1}/clientes/$createdClientId',
-                  body: const {'activo': false},
-                  restaurant: true,
-                ),
+              'PATCH',
+              '${ApiConfig.v1}/clientes/$createdClientId',
+              body: const {'activo': false},
+              restaurant: true,
+            ),
           );
         } catch (_) {}
       }
@@ -4711,7 +4866,15 @@ class ApiOwnerRepository
   // IOwnerMetricsRepository — "Tus números" (O14)
   // ---------------------------------------------------------------------------
 
-  static const _peakDayNames = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+  static const _peakDayNames = [
+    'Lun',
+    'Mar',
+    'Mié',
+    'Jue',
+    'Vie',
+    'Sáb',
+    'Dom',
+  ];
   static const _peakHourIndices = [11, 12, 13, 14, 15];
   static const _peakHourLabels = ['11h', '12h', '13h', '14h', '15h'];
 
@@ -4721,7 +4884,8 @@ class ApiOwnerRepository
   static String _logoPrefKey(String restaurantId) =>
       'bocadoo_local_logo_$restaurantId';
 
-  static DateTime _localDateOnly(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
+  static DateTime _localDateOnly(DateTime dt) =>
+      DateTime(dt.year, dt.month, dt.day);
 
   @override
   Future<OwnerMetrics> getMetrics(
@@ -4763,7 +4927,9 @@ class ApiOwnerRepository
     final totalDays = period == MetricsPeriod.semana ? 7 : 30;
     final desdeDate = todayDate.subtract(Duration(days: totalDays - 1));
     final desdeStr = _formatYmd(desdeDate);
-    final lastWeekSameDayStr = _formatYmd(todayDate.subtract(const Duration(days: 7)));
+    final lastWeekSameDayStr = _formatYmd(
+      todayDate.subtract(const Duration(days: 7)),
+    );
 
     // 7 días recientes para el mapa de calor semanal y resumen semanal.
     final weekDates = [
@@ -4772,12 +4938,19 @@ class ApiOwnerRepository
 
     final prefsFuture = SharedPreferences.getInstance();
     final pendingFuture = guard(
-      () => _api.getMap('${ApiConfig.v1}/reportes/almuerzos-pendientes', restaurant: true),
+      () => _api.getMap(
+        '${ApiConfig.v1}/reportes/almuerzos-pendientes',
+        restaurant: true,
+      ),
     );
     final rankingFuture = guard(
       () => _api.getMap(
         '${ApiConfig.v1}/reportes/ranking-platos',
-        query: {'desde': _formatYmd(todayDate.subtract(const Duration(days: 29))), 'hasta': todayStr, 'limit': 5},
+        query: {
+          'desde': _formatYmd(todayDate.subtract(const Duration(days: 29))),
+          'hasta': todayStr,
+          'limit': 5,
+        },
         restaurant: true,
       ),
     );
@@ -4840,7 +5013,9 @@ class ApiOwnerRepository
           ),
       ]);
       for (var j = 0; j < chunk.length; j++) {
-        final porHora = results[j]['porHora'] is List ? results[j]['porHora'] as List : const [];
+        final porHora = results[j]['porHora'] is List
+            ? results[j]['porHora'] as List
+            : const [];
         final countsByHour = <int, int>{};
         for (final row in porHora.whereType<Map>()) {
           countsByHour[_asInt(row['hora'])] = _asInt(row['total']);
@@ -4860,9 +5035,14 @@ class ApiOwnerRepository
 
     // Hoy + misma hora semana pasada
     final todaySummary = summariesByDate[todayStr] ?? const {};
-    final todayAlmuerzos = todaySummary['almuerzos'] is Map ? todaySummary['almuerzos'] as Map : const {};
-    final todayPos = todaySummary['ventasPos'] is Map ? todaySummary['ventasPos'] as Map : const {};
-    final servedToday = _asInt(todayAlmuerzos['servidos']) + _asInt(todayPos['almuerzos']);
+    final todayAlmuerzos = todaySummary['almuerzos'] is Map
+        ? todaySummary['almuerzos'] as Map
+        : const {};
+    final todayPos = todaySummary['ventasPos'] is Map
+        ? todaySummary['ventasPos'] as Map
+        : const {};
+    final servedToday =
+        _asInt(todayAlmuerzos['servidos']) + _asInt(todayPos['almuerzos']);
 
     final lastWeekPorHora = lastWeekHourlyMap['porHora'] is List
         ? lastWeekHourlyMap['porHora'] as List
@@ -4875,12 +5055,16 @@ class ApiOwnerRepository
     }
 
     // Almuerzos pendientes
-    final pendTotal = pendingMap['total'] is Map ? pendingMap['total'] as Map : const {};
+    final pendTotal = pendingMap['total'] is Map
+        ? pendingMap['total'] as Map
+        : const {};
     final pendingLunches = _asInt(pendTotal['almuerzos']);
     final clientsWithPlan = _asInt(pendTotal['clientes']);
 
     // Ranking de platos
-    final rankItems = rankingMap['items'] is List ? rankingMap['items'] as List : const [];
+    final rankItems = rankingMap['items'] is List
+        ? rankingMap['items'] as List
+        : const [];
     final dishes = rankItems.whereType<Map>().map((raw) {
       final plato = raw['plato'] is Map ? raw['plato'] as Map : const {};
       return DishRank(
@@ -4890,7 +5074,9 @@ class ApiOwnerRepository
     }).toList();
 
     // Dinero: planes vendidos y desglose Efectivo vs Transferencia/Deuna
-    final vpTotal = ventasPlanesMap['total'] is Map ? ventasPlanesMap['total'] as Map : const {};
+    final vpTotal = ventasPlanesMap['total'] is Map
+        ? ventasPlanesMap['total'] as Map
+        : const {};
     final plansSold = _asInt(vpTotal['vendidos']);
     var cashCents = 0;
     var transferCents = 0;
@@ -4898,7 +5084,9 @@ class ApiOwnerRepository
       final sum = summariesByDate[ymd];
       if (sum == null) continue;
       final ing = sum['ingresos'] is Map ? sum['ingresos'] as Map : const {};
-      final metodos = ing['porMetodo'] is List ? ing['porMetodo'] as List : const [];
+      final metodos = ing['porMetodo'] is List
+          ? ing['porMetodo'] as List
+          : const [];
       for (final m in metodos.whereType<Map>()) {
         final code = (m['metodo'] ?? '').toString().toUpperCase();
         final cents = _asInt(m['centavos']);
@@ -4924,12 +5112,16 @@ class ApiOwnerRepository
     }
 
     // Seguimiento: por renovar vs no han vuelto
-    final followItems = followUpMap['items'] is List ? followUpMap['items'] as List : const [];
+    final followItems = followUpMap['items'] is List
+        ? followUpMap['items'] as List
+        : const [];
     final renewals = <ClientFollowUp>[];
     final absent = <ClientFollowUp>[];
     for (final raw in followItems.whereType<Map>()) {
       final motivos = raw['motivos'] is List
-          ? (raw['motivos'] as List).map((e) => e.toString().toUpperCase()).toList()
+          ? (raw['motivos'] as List)
+                .map((e) => e.toString().toUpperCase())
+                .toList()
           : const <String>[];
       final name = (raw['nombre'] ?? '').toString();
       final phone = Phone.toLocal(raw['telefono']?.toString());
@@ -4944,7 +5136,10 @@ class ApiOwnerRepository
       final item = ClientFollowUp(
         name: name,
         phone: phone,
-        days: motivos.contains('SIN_VENIR') && !motivos.contains('POR_VENCER') && !motivos.contains('PARA_RENOVAR')
+        days:
+            motivos.contains('SIN_VENIR') &&
+                !motivos.contains('POR_VENCER') &&
+                !motivos.contains('PARA_RENOVAR')
             ? diasSin
             : daysToExpire,
         lunchesLeft: left,
@@ -4963,7 +5158,9 @@ class ApiOwnerRepository
 
     final metrics = OwnerMetrics(
       servedToday: servedToday,
-      servedLastWeekSameTime: servedLastWeekSameTime > 0 ? servedLastWeekSameTime : null,
+      servedLastWeekSameTime: servedLastWeekSameTime > 0
+          ? servedLastWeekSameTime
+          : null,
       pendingLunches: pendingLunches,
       clientsWithPlan: clientsWithPlan,
       dishes: dishes,
@@ -4979,11 +5176,15 @@ class ApiOwnerRepository
       peakGrid: peakGrid,
       peakDays: _peakDayNames,
       peakHours: _peakHourLabels,
-      weeklySummaryEnabled: prefs.getBool(_weeklyPrefKey(restaurantId)) ?? false,
+      weeklySummaryEnabled:
+          prefs.getBool(_weeklyPrefKey(restaurantId)) ?? false,
       weekServed: weekServed,
       weekCollected: Money.fromCents(weekCollectedCents),
     );
-    _metricsCache[period] = _MetricsCacheEntry(value: metrics, at: DateTime.now());
+    _metricsCache[period] = _MetricsCacheEntry(
+      value: metrics,
+      at: DateTime.now(),
+    );
     eventsService.track(
       'dueno.metricas_vistas',
       restaurantId: restaurantId,
@@ -4993,7 +5194,10 @@ class ApiOwnerRepository
   }
 
   @override
-  Future<bool> setWeeklySummary(String restaurantId, {required bool enabled}) async {
+  Future<bool> setWeeklySummary(
+    String restaurantId, {
+    required bool enabled,
+  }) async {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool(_weeklyPrefKey(restaurantId), enabled);
@@ -5032,13 +5236,14 @@ class ApiOwnerRepository
     if (zone.isEmpty) zone = await profile.getZone() ?? '';
     lat ??= await profile.getLat();
     lng ??= await profile.getLng();
-    final rawMaskedCedula =
-        (data['cedulaRucEnmascarada'] ?? data['cedulaRuc'])?.toString().trim();
+    final rawMaskedCedula = (data['cedulaRucEnmascarada'] ?? data['cedulaRuc'])
+        ?.toString()
+        .trim();
     final rawPendientes = data['datosPendientes'] is List
         ? (data['datosPendientes'] as List)
-            .map((e) => e.toString().trim())
-            .where((e) => e.isNotEmpty)
-            .toList()
+              .map((e) => e.toString().trim())
+              .where((e) => e.isNotEmpty)
+              .toList()
         : const <String>[];
     final perfilCompleto = data['perfilCompleto'] is bool
         ? data['perfilCompleto'] as bool
@@ -5049,10 +5254,9 @@ class ApiOwnerRepository
       seats: _asInt(data['puestos']),
       tablesCount: _asNullableInt(data['mesas']),
       phone: (data['telefono'] ?? '').toString(),
-      maskedCedulaRuc:
-          (rawMaskedCedula != null && rawMaskedCedula.isNotEmpty)
-              ? rawMaskedCedula
-              : null,
+      maskedCedulaRuc: (rawMaskedCedula != null && rawMaskedCedula.isNotEmpty)
+          ? rawMaskedCedula
+          : null,
       takeawaySurchargeCents: _asNullableInt(data['recargoParaLlevarCentavos']),
       perfilCompleto: perfilCompleto,
       datosPendientes: rawPendientes,
@@ -5083,10 +5287,12 @@ class ApiOwnerRepository
     _lastFieldErrors = const {};
     try {
       final knownZoneId = zone != null ? resolveKnownZoneId(zone) : null;
-      final roundedLat =
-          lat != null ? double.parse(lat.toStringAsFixed(6)) : null;
-      final roundedLng =
-          lng != null ? double.parse(lng.toStringAsFixed(6)) : null;
+      final roundedLat = lat != null
+          ? double.parse(lat.toStringAsFixed(6))
+          : null;
+      final roundedLng = lng != null
+          ? double.parse(lng.toStringAsFixed(6))
+          : null;
 
       String? phoneToSend;
       if (phone != null && phone.trim().isNotEmpty) {
@@ -5197,23 +5403,20 @@ class ApiOwnerRepository
     try {
       await guard(
         () => _api.send<dynamic>(
-              'POST',
-              '${ApiConfig.v1}/solicitudes-plan/$requestId/cobrar',
-              body: {
-                'metodoPago': _mapPayMethodApi(method),
-                'pagoConfirmado': true,
-              },
-              idempotencyKey: key,
-              restaurant: true,
-            ),
+          'POST',
+          '${ApiConfig.v1}/solicitudes-plan/$requestId/cobrar',
+          body: {
+            'metodoPago': _mapPayMethodApi(method),
+            'pagoConfirmado': true,
+          },
+          idempotencyKey: key,
+          restaurant: true,
+        ),
       );
       ok = true;
       eventsService.track(
         'dueno.plan_vendido',
-        props: {
-          'metodo': _mapPayMethodApi(method),
-          'origen': 'solicitud',
-        },
+        props: {'metodo': _mapPayMethodApi(method), 'origen': 'solicitud'},
       );
     } on ApiException catch (e) {
       _lastError = e.userMessage;
@@ -5230,18 +5433,17 @@ class ApiOwnerRepository
     try {
       await guard(
         () => _api.send<dynamic>(
-              'POST',
-              '${ApiConfig.v1}/solicitudes-plan/$requestId/rechazar',
-              restaurant: true,
-            ),
+          'POST',
+          '${ApiConfig.v1}/solicitudes-plan/$requestId/rechazar',
+          restaurant: true,
+        ),
       );
       return true;
     } on ApiException catch (e) {
       final detail = e.detail.trim();
-      _lastError =
-          ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
-              ? detail
-              : e.userMessage;
+      _lastError = ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+          ? detail
+          : e.userMessage;
       return false;
     } catch (_) {
       _lastError = 'No se pudo rechazar la solicitud de plan.';
@@ -5317,8 +5519,9 @@ class ApiOwnerRepository
           : const <String, dynamic>{};
       final dinerName = (cliente['nombre'] ?? '').toString();
       final matches = clientsByLowerName[dinerName.trim().toLowerCase()];
-      final matchedClient =
-          matches != null && matches.length == 1 ? matches.first : null;
+      final matchedClient = matches != null && matches.length == 1
+          ? matches.first
+          : null;
       if (matchedClient != null) {
         _clientIdByOpinionId[id] = matchedClient.id;
       }
@@ -5337,22 +5540,25 @@ class ApiOwnerRepository
           : null;
       final serverReply = respMap?['texto']?.toString().trim();
       final pendingReply = _optimisticOpinionReplies[id];
-      final effectiveReply = pendingReply ??
+      final effectiveReply =
+          pendingReply ??
           (serverReply != null && serverReply.isNotEmpty ? serverReply : null);
 
-      out.add(OwnerOpinion(
-        id: id,
-        dinerName: dinerName,
-        tag: tag,
-        createdAt: _parseDateTime(raw['creadoEn'] ?? raw['almuerzoEn']),
-        note: note,
-        reply: effectiveReply,
-        phone: matchedClient != null && matchedClient.phone.isNotEmpty
-            ? matchedClient.phone
-            : null,
-        canReplaceLunch:
-            matchedClient != null && matchedClient.habitualPlan != null,
-      ));
+      out.add(
+        OwnerOpinion(
+          id: id,
+          dinerName: dinerName,
+          tag: tag,
+          createdAt: _parseDateTime(raw['creadoEn'] ?? raw['almuerzoEn']),
+          note: note,
+          reply: effectiveReply,
+          phone: matchedClient != null && matchedClient.phone.isNotEmpty
+              ? matchedClient.phone
+              : null,
+          canReplaceLunch:
+              matchedClient != null && matchedClient.habitualPlan != null,
+        ),
+      );
     }
 
     out.sort((a, b) => b.createdAt.compareTo(a.createdAt));
@@ -5369,8 +5575,7 @@ class ApiOwnerRepository
     final clientId = _clientIdByOpinionId[opinionId];
     if (reply == OpinionReply.replaceLunch &&
         (clientId == null || clientId.isEmpty)) {
-      _lastError =
-          'No pudimos vincular esta opinión con un cliente del local para reponer su almuerzo.';
+      _lastError = 'No pudimos vincular esta opinión con un cliente del local para reponer su almuerzo.';
       return false;
     }
 

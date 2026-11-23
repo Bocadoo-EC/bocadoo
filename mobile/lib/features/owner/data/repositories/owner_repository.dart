@@ -271,6 +271,7 @@ class OwnerRepository implements IOwnerRepository, IOwnerMenuRepository, IOwnerC
     required int priceCents,
     required String categoria,
     required String seccion,
+    List<String> etiquetas = const [],
     String? description,
   }) {
     final kind = categoria == 'A_LA_CARTA'
