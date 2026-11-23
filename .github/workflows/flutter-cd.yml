@@ -1,0 +1,227 @@
+name: Flutter CD (Release Android)
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Entorno de compilación'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+          - mock
+      api_url:
+        description: 'Override opcional de BOCADOO_API_URL (vacío = valor por entorno/variable)'
+        required: false
+        default: ''
+        type: string
+      build_aab:
+        description: 'Generar también Android App Bundle (.aab) para Google Play'
+        required: false
+        default: true
+        type: boolean
+      publish_release:
+        description: 'Publicar GitHub Release con los binarios adjuntos'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: flutter-cd-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verificar calidad y pruebas antes de release
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - name: Checkout repositorio
+        uses: actions/checkout@v4
+
+      - name: Instalar Flutter (stable)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Descargar dependencias
+        run: flutter pub get
+
+      - name: Analizar código (flutter analyze)
+        run: flutter analyze --no-fatal-infos
+
+      - name: Ejecutar pruebas (flutter test)
+        run: flutter test --reporter expanded
+
+  build-android-release:
+    name: Compilar Release Android (APK / AAB)
+    needs: verify
+    runs-on: ubuntu-latest
+    env:
+      GRADLE_OPTS: '-Dorg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -Dorg.gradle.daemon=false'
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - name: Checkout repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Instalar Flutter (stable)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Cache de Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Descargar dependencias
+        run: flutter pub get
+
+      - name: Restaurar Gradle Wrapper si fue ignorado por .gitignore
+        shell: bash
+        run: |
+          if [ ! -f android/gradlew ] || [ ! -f android/gradle/wrapper/gradle-wrapper.jar ]; then
+            GRADLE_VER=$(grep -E 'gradle-[0-9]+\.[0-9]+(\.[0-9]+)?' android/gradle/wrapper/gradle-wrapper.properties | sed -E 's/.*gradle-([0-9]+\.[0-9]+(\.[0-9]+)?).*/\1/' | head -n 1)
+            GRADLE_VER=${GRADLE_VER:-9.5.0}
+            curl -fsSL "https://services.gradle.org/distributions/gradle-${GRADLE_VER}-bin.zip" -o /tmp/gradle.zip
+            unzip -q /tmp/gradle.zip -d /tmp/gradle-dist
+            mkdir -p /tmp/gw-init
+            touch /tmp/gw-init/settings.gradle
+            "/tmp/gradle-dist/gradle-${GRADLE_VER}/bin/gradle" -p /tmp/gw-init --no-daemon wrapper --gradle-version "${GRADLE_VER}"
+            cp /tmp/gw-init/gradlew android/gradlew
+            cp /tmp/gw-init/gradlew.bat android/gradlew.bat
+            mkdir -p android/gradle/wrapper
+            cp /tmp/gw-init/gradle/wrapper/gradle-wrapper.jar android/gradle/wrapper/gradle-wrapper.jar
+            chmod +x android/gradlew
+          fi
+
+      - name: Configurar firma Release (si existen Secrets)
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$KEYSTORE_PASS" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASS" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > android/release-keystore.jks
+            cat > android/key.properties <<EOF
+          storePassword=${KEYSTORE_PASS}
+          keyPassword=${KEY_PASS}
+          keyAlias=${KEY_ALIAS}
+          storeFile=release-keystore.jks
+          EOF
+            echo "SIGNED_RELEASE=true" >> "$GITHUB_ENV"
+            echo "Firma de release configurada correctamente."
+          else
+            echo "SIGNED_RELEASE=false" >> "$GITHUB_ENV"
+            echo "::warning::Secrets de firma Android no configurados. Se compilará con firma debug de respaldo (no apta para Play Store)."
+          fi
+
+      - name: Resolver variables de compilación (--dart-define)
+        shell: bash
+        run: |
+          ENV_MODE="${{ inputs.environment || 'production' }}"
+          USE_MOCK="false"
+          if [ "$ENV_MODE" = "mock" ]; then
+            USE_MOCK="true"
+          fi
+          API_URL="${{ inputs.api_url }}"
+          if [ -z "$API_URL" ]; then
+            if [ "$ENV_MODE" = "staging" ]; then
+              API_URL="${{ vars.BOCADOO_STAGING_API_URL || 'https://bck-bocadoo.onrender.com' }}"
+            else
+              API_URL="${{ vars.BOCADOO_API_URL || 'https://bck-bocadoo.onrender.com' }}"
+            fi
+          fi
+          echo "RESOLVED_USE_MOCK=${USE_MOCK}" >> "$GITHUB_ENV"
+          echo "RESOLVED_API_URL=${API_URL}" >> "$GITHUB_ENV"
+          echo "RESOLVED_ENV=${ENV_MODE}" >> "$GITHUB_ENV"
+
+      - name: Compilar APKs Release (universal + split por ABI)
+        env:
+          SUPPORT_WA: ${{ vars.BOCADOO_SUPPORT_WHATSAPP || '' }}
+          SUPPORT_URL: ${{ vars.BOCADOO_SUPPORT_URL || '' }}
+        run: |
+          mkdir -p dist-release
+          flutter build apk --release \
+            --dart-define=BOCADOO_USE_MOCK="${RESOLVED_USE_MOCK}" \
+            --dart-define=BOCADOO_API_URL="${RESOLVED_API_URL}" \
+            --dart-define=BOCADOO_SUPPORT_WHATSAPP="${SUPPORT_WA}" \
+            --dart-define=BOCADOO_SUPPORT_URL="${SUPPORT_URL}"
+          cp build/app/outputs/flutter-apk/app-release.apk "dist-release/bocadoo-${RESOLVED_ENV}-universal.apk"
+          flutter build apk --release --split-per-abi \
+            --dart-define=BOCADOO_USE_MOCK="${RESOLVED_USE_MOCK}" \
+            --dart-define=BOCADOO_API_URL="${RESOLVED_API_URL}" \
+            --dart-define=BOCADOO_SUPPORT_WHATSAPP="${SUPPORT_WA}" \
+            --dart-define=BOCADOO_SUPPORT_URL="${SUPPORT_URL}"
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "dist-release/bocadoo-${RESOLVED_ENV}-arm64-v8a.apk"
+          cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk "dist-release/bocadoo-${RESOLVED_ENV}-armeabi-v7a.apk"
+
+      - name: Compilar App Bundle (.aab) para Google Play
+        if: inputs.build_aab == true || startsWith(github.ref, 'refs/tags/v')
+        env:
+          SUPPORT_WA: ${{ vars.BOCADOO_SUPPORT_WHATSAPP || '' }}
+          SUPPORT_URL: ${{ vars.BOCADOO_SUPPORT_URL || '' }}
+        run: |
+          flutter build appbundle --release \
+            --dart-define=BOCADOO_USE_MOCK="${RESOLVED_USE_MOCK}" \
+            --dart-define=BOCADOO_API_URL="${RESOLVED_API_URL}" \
+            --dart-define=BOCADOO_SUPPORT_WHATSAPP="${SUPPORT_WA}" \
+            --dart-define=BOCADOO_SUPPORT_URL="${SUPPORT_URL}"
+          cp build/app/outputs/bundle/release/app-release.aab "dist-release/bocadoo-${RESOLVED_ENV}.aab"
+
+      - name: Generar checksums SHA-256
+        run: |
+          cd dist-release
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Limpiar keystore y key.properties del runner
+        if: always()
+        run: rm -f android/release-keystore.jks android/key.properties
+
+      - name: Subir artifacts de Release
+        uses: actions/upload-artifact@v4
+        with:
+          name: bocadoo-release-${{ env.RESOLVED_ENV }}
+          path: mobile/dist-release/*
+          retention-days: 30
+
+      - name: Publicar GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_release == true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('release-{0}-{1}', env.RESOLVED_ENV, github.run_number) }}
+          name: "Bocadoo ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('{0} #{1}', env.RESOLVED_ENV, github.run_number) }}"
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') || env.RESOLVED_ENV != 'production' }}
+          files: mobile/dist-release/*
+
+      - name: Resumen del despliegue
+        if: always()
+        run: |
+          {
+            echo "### Bocadoo Android CD"
+            echo "- **Entorno:** \`${RESOLVED_ENV}\`"
+            echo "- **API URL:** \`${RESOLVED_API_URL}\`"
+            echo "- **Mock:** \`${RESOLVED_USE_MOCK}\`"
+            echo "- **Firmado Release:** \`${SIGNED_RELEASE}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
