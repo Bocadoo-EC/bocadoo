@@ -1140,6 +1140,7 @@ class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
   final Map<String, int> _priceOverrides = {};
   final Map<String, bool> _availableOverrides = {};
   final List<PermanentCatalogItem> _addedItems = [];
+  final Set<String> _removedIds = {};
   bool _dirty = false;
   int _seq = 1;
 
@@ -1159,6 +1160,7 @@ class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
     final seenNames = <String>{};
 
     void addCandidate(PermanentCatalogItem raw) {
+      if (_removedIds.contains(raw.id)) return;
       final norm = '${raw.group.name}|${raw.name.trim().toLowerCase()}';
       if (!seenNames.add(norm)) return;
       merged.add(
@@ -1169,11 +1171,16 @@ class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
       );
     }
 
+    final archivedIds = <String>{
+      for (final d in dishes)
+        if (d.archived) d.id,
+    };
     final soldOutById = <String, bool>{
       for (final d in dishes) d.id: d.soldOut || d.archived,
     };
 
     for (final item in posCatalog) {
+      if (archivedIds.contains(item.id)) continue;
       final group = switch (item.category) {
         PosCategory.carta => PermanentCatalogGroup.carta,
         PosCategory.bebidas => PermanentCatalogGroup.bebidas,
@@ -1202,7 +1209,7 @@ class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
     }
 
     for (final d in dishes) {
-      if (d.kind != DishKind.carta) continue;
+      if (d.kind != DishKind.carta || d.archived) continue;
       addCandidate(
         PermanentCatalogItem(
           id: d.id,
@@ -1407,6 +1414,48 @@ class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
           'No se pudo actualizar la disponibilidad del plato.';
     }
     return 'No se pudo actualizar la disponibilidad del plato.';
+  }
+
+  /// Da de baja definitiva un ítem de `Carta y Bebidas` (`activo: false`)
+  /// y sincroniza el POS sin afectar pedidos históricos.
+  Future<String?> removeItem(String id) async {
+    final prevState = state;
+    final isLocalOnly = id.startsWith('perm_') || id.startsWith('local_');
+    final rid = ref.read(ownerRestaurantIdProvider);
+
+    _removedIds.add(id);
+    _addedItems.removeWhere((item) => item.id == id);
+    state = PermanentCatalogState(
+      items: [
+        for (final item in state.items)
+          if (item.id != id) item,
+      ],
+      dirty: _dirty,
+    );
+
+    if (AppMode.useMock || isLocalOnly) {
+      MenuAndCartaLiveSync.instance.notifyUpdated(rid);
+      return null;
+    }
+
+    try {
+      await ref
+          .read(ownerCatalogRepositoryProvider)
+          .setDishArchived(rid, id, archived: true);
+      ref.invalidate(catalogProvider);
+      ref.invalidate(catalogDishesProvider);
+      MenuAndCartaLiveSync.instance.notifyUpdated(rid);
+      return null;
+    } on ApiException catch (e) {
+      _removedIds.remove(id);
+      state = prevState;
+      final detail = e.detail.trim();
+      return detail.isNotEmpty ? detail : e.userMessage;
+    } catch (_) {
+      _removedIds.remove(id);
+      state = prevState;
+      return 'No se pudo eliminar el ítem.';
+    }
   }
 
   void saveChanges() {

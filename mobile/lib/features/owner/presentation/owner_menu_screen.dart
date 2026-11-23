@@ -617,6 +617,27 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
 
   // ── Pestaña 2: Carta y Bebidas ────────────────────────────────────────────
 
+  Future<void> _confirmAndDeletePermanentItem(PermanentCatalogItem item) async {
+    final confirmed = await _showConfirmDeleteDialog(
+      context,
+      title: '¿Eliminar este ítem de Carta y Bebidas?',
+      message:
+          'Se quitará "${item.name}" de la carta y del POS sin afectar pedidos anteriores.',
+    );
+    if (!confirmed || !mounted) return;
+    final err =
+        await ref.read(permanentCatalogProvider.notifier).removeItem(item.id);
+    if (!mounted) return;
+    if (err != null) {
+      showInfoSnackBar(ScaffoldMessenger.of(context), err);
+    } else {
+      showInfoSnackBar(
+        ScaffoldMessenger.of(context),
+        'Se eliminó "${item.name}".',
+      );
+    }
+  }
+
   Widget _buildPermanentSubsection({
     required ColorScheme colors,
     required String title,
@@ -675,6 +696,9 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
               item: item,
               canEditPrice: canManageCatalog,
               onEditPrice: () => _editPermanentPrice(item),
+              onDelete: canManageCatalog
+                  ? () => _confirmAndDeletePermanentItem(item)
+                  : null,
               onToggleAvailable: (val) async {
                 final err = await ref
                     .read(permanentCatalogProvider.notifier)
@@ -870,12 +894,14 @@ class _PermanentItemCard extends StatelessWidget {
     required this.item,
     required this.onEditPrice,
     required this.onToggleAvailable,
+    this.onDelete,
     this.canEditPrice = true,
   });
 
   final PermanentCatalogItem item;
   final VoidCallback onEditPrice;
   final ValueChanged<bool> onToggleAvailable;
+  final VoidCallback? onDelete;
   final bool canEditPrice;
 
   @override
@@ -937,6 +963,24 @@ class _PermanentItemCard extends StatelessWidget {
                               Icons.edit_outlined,
                               size: 16,
                               color: colors.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                      ],
+                      if (onDelete != null) ...[
+                        const SizedBox(width: 2),
+                        Tooltip(
+                          message: 'Eliminar ítem',
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(8),
+                            onTap: onDelete,
+                            child: Padding(
+                              padding: const EdgeInsets.all(4),
+                              child: Icon(
+                                Icons.delete_outline_rounded,
+                                size: 17,
+                                color: colors.onSurfaceVariant,
+                              ),
                             ),
                           ),
                         ),
@@ -1062,13 +1106,10 @@ class _NewPermanentItemSheetState
             ),
     };
 
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
+    return _BottomSheetBody(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
             OwnerSectionLabel(eyebrow, color: colors.primary),
             Text(
               title,
@@ -1146,7 +1187,6 @@ class _NewPermanentItemSheetState
             ),
           ],
         ),
-      ),
     );
   }
 }
@@ -1467,6 +1507,35 @@ class _OptionsSheetState extends ConsumerState<_OptionsSheet> {
     }
   }
 
+  Future<void> _confirmAndDeleteDish(CatalogDish dish) async {
+    final confirmed = await _showConfirmDeleteDialog(
+      context,
+      title: '¿Eliminar este plato de tu lista?',
+      message:
+          'Se quitará "${dish.name}" de tus platos guardados sin afectar pedidos anteriores.',
+    );
+    if (!confirmed || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref.read(ownerCatalogRepositoryProvider).setDishArchived(
+            ref.read(ownerRestaurantIdProvider),
+            dish.id,
+            archived: true,
+          );
+      if (!mounted) return;
+      if (_selected.remove(dish.name)) {
+        setState(() {});
+        widget.onChanged(List.of(_selected));
+      }
+      ref.invalidate(catalogDishesProvider);
+      ref.invalidate(catalogProvider);
+    } on ApiException catch (e) {
+      if (mounted) showInfoSnackBar(messenger, e.userMessage);
+    } catch (_) {
+      if (mounted) showInfoSnackBar(messenger, 'No se pudo eliminar el plato.');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
@@ -1483,60 +1552,57 @@ class _OptionsSheetState extends ConsumerState<_OptionsSheet> {
       _ => 'Ej. Chivo al hueco',
     };
 
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            OwnerSectionLabel('Almuerzo de hoy', color: colors.primary),
-            Text(
-              heading,
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.w900,
-                color: colors.onSurface,
+    return _BottomSheetBody(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          OwnerSectionLabel('Almuerzo de hoy', color: colors.primary),
+          Text(
+            heading,
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w900,
+              color: colors.onSurface,
+            ),
+          ),
+          const SizedBox(height: 10),
+          if (dishes.isEmpty)
+            const _EmptyLine('Aún no tienes platos guardados en esta sección.')
+          else
+            for (final d in dishes) ...[
+              _OptionTile(
+                name: d.name,
+                included: _selected.contains(d.name),
+                onTap: () => _toggle(d.name),
+                onDelete: () => _confirmAndDeleteDish(d),
               ),
-            ),
-            const SizedBox(height: 10),
-            if (dishes.isEmpty)
-              const _EmptyLine('Aún no tienes platos guardados en esta sección.')
-            else
-              for (final d in dishes) ...[
-                _OptionTile(
-                  name: d.name,
-                  included: _selected.contains(d.name),
-                  onTap: () => _toggle(d.name),
-                ),
-                const SizedBox(height: 8),
-              ],
-            Divider(height: 20, color: colors.outlineVariant),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _quick,
-                    textCapitalization: TextCapitalization.sentences,
-                    decoration: InputDecoration(
-                      labelText: 'Nuevo plato',
-                      hintText: hint,
-                      isDense: true,
-                    ),
-                    onSubmitted: (_) => _addQuick(),
+              const SizedBox(height: 8),
+            ],
+          Divider(height: 20, color: colors.outlineVariant),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _quick,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: InputDecoration(
+                    labelText: 'Nuevo plato',
+                    hintText: hint,
+                    isDense: true,
                   ),
+                  onSubmitted: (_) => _addQuick(),
                 ),
-                const SizedBox(width: 8),
-                OwnerSmallButton(label: 'Agregar', onPressed: _addQuick),
-              ],
-            ),
-            const SizedBox(height: 18),
-            ElevatedButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Listo para hoy'),
-            ),
-          ],
-        ),
+              ),
+              const SizedBox(width: 8),
+              OwnerSmallButton(label: 'Agregar', onPressed: _addQuick),
+            ],
+          ),
+          const SizedBox(height: 18),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Listo para hoy'),
+          ),
+        ],
       ),
     );
   }
@@ -1547,11 +1613,13 @@ class _OptionTile extends StatelessWidget {
     required this.name,
     required this.included,
     required this.onTap,
+    this.onDelete,
   });
 
   final String name;
   final bool included;
   final VoidCallback onTap;
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -1571,7 +1639,7 @@ class _OptionTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(14),
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          padding: const EdgeInsets.fromLTRB(12, 8, 6, 8),
           child: Row(
             children: [
               Icon(
@@ -1592,10 +1660,82 @@ class _OptionTile extends StatelessWidget {
                   ),
                 ),
               ),
+              if (onDelete != null)
+                IconButton(
+                  tooltip: 'Eliminar plato',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: onDelete,
+                  icon: Icon(
+                    Icons.delete_outline_rounded,
+                    size: 20,
+                    color: colors.onSurfaceVariant,
+                  ),
+                ),
             ],
           ),
         ),
       ),
     );
   }
+}
+
+class _BottomSheetBody extends StatelessWidget {
+  const _BottomSheetBody({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final keyboard = MediaQuery.viewInsetsOf(context).bottom;
+    final sysNav = MediaQuery.viewPaddingOf(context).bottom;
+    final safeBottom = MediaQuery.paddingOf(context).bottom;
+    final navClearance =
+        keyboard > 0 ? 0.0 : (sysNav - safeBottom).clamp(0.0, double.infinity);
+
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.88,
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: EdgeInsets.only(bottom: keyboard),
+          child: SingleChildScrollView(
+            padding: EdgeInsets.fromLTRB(20, 0, 20, navClearance + 16),
+            child: child,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+Future<bool> _showConfirmDeleteDialog(
+  BuildContext context, {
+  required String title,
+  required String message,
+}) async {
+  final colors = context.colorScheme;
+  final result = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(title),
+      content: Text(message),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(false),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: colors.error,
+            foregroundColor: colors.onError,
+          ),
+          onPressed: () => Navigator.of(ctx).pop(true),
+          child: const Text('Eliminar'),
+        ),
+      ],
+    ),
+  );
+  return result == true;
 }
