@@ -15,9 +15,16 @@ import 'owner_controller.dart';
 /// Cuando recibe [expectedOrder] desde Pedidos en camino, valida el QR de esa
 /// orden y retorna el [OwnerOrder] verificado para abrir Confirmar cobro.
 class ScannerScreen extends ConsumerStatefulWidget {
-  const ScannerScreen({super.key, this.expectedOrder});
+  const ScannerScreen({
+    super.key,
+    this.expectedOrder,
+    this.pickCodeOnly = false,
+    this.pickTitle = 'Escanear QR del comensal',
+  });
 
   final OwnerOrder? expectedOrder;
+  final bool pickCodeOnly;
+  final String pickTitle;
 
   @override
   ConsumerState<ScannerScreen> createState() => _ScannerScreenState();
@@ -48,7 +55,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
     WidgetsBinding.instance.addObserver(this);
     // Deja el controlador en Scanning al abrir la pantalla.
     Future.microtask(() {
-      if (mounted && widget.expectedOrder == null) {
+      if (mounted && widget.expectedOrder == null && !widget.pickCodeOnly) {
         ref.read(ownerControllerProvider.notifier).startScanning();
       }
     });
@@ -98,6 +105,11 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
     try {
       await _camera.stop();
     } catch (_) {}
+
+    if (widget.pickCodeOnly) {
+      if (mounted) Navigator.of(context).pop(rawToken);
+      return;
+    }
 
     final expected = widget.expectedOrder;
     if (expected != null) {
@@ -235,7 +247,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
                   onClose: _close,
                   title: expected != null
                       ? 'Cobrar pedido #${expected.number}'
-                      : 'Escanear QR',
+                      : (widget.pickCodeOnly ? widget.pickTitle : 'Escanear QR'),
                 ),
                 if (expected != null)
                   Padding(

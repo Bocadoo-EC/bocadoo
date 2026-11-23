@@ -626,6 +626,7 @@ class MockOwnerRepository
             phone: s.phone,
             email: s.email,
             notes: s.notes,
+            activeLunches: s.plans.fold<int>(0, (sum, p) => sum + p.remaining),
             habitualPlan: _templateName(s.plans.lastOrNull?.templateId),
           ),
     ];
@@ -778,6 +779,7 @@ class MockOwnerRepository
     String? newClientName,
     required OwnerPlanTemplate template,
     required OwnerPayMethod method,
+    bool deductToday = false,
   }) async {
     await _simulateLatency();
     final now = _clock();
@@ -799,6 +801,19 @@ class MockOwnerRepository
       templateId: template.id,
     );
     student.plans.add(plan);
+    _adjustDemoDinerBalance(student, template.lunches);
+    if (deductToday && plan.remaining > 0) {
+      plan.remaining -= 1;
+      _adjustDemoDinerBalance(student, -1);
+      _transactions.add(TransactionItem(
+        id: _nextId('redeem'),
+        customerName: student.name,
+        type: 'Canje Plan',
+        amount: 0,
+        paymentMethod: 'Plan',
+        timestamp: now,
+      ));
+    }
     final saleId = _nextId('sale');
     _transactions.add(TransactionItem(
       id: saleId,
@@ -810,6 +825,37 @@ class MockOwnerRepository
     ));
     _planSales[saleId] = (student.userId, plan.id);
     return saleId;
+  }
+
+  @override
+  Future<OwnerClient?> identifyClientByQr(
+    String restaurantId,
+    String rawQr,
+  ) async {
+    await _simulateLatency();
+    final trimmed = rawQr.trim();
+    if (trimmed.isEmpty) return null;
+    final parsed = BocadooQrParser.parseAndValidate(trimmed);
+    final candidateId = parsed.userId ??
+        BocadooQrParser.extractPlanBackendToken(trimmed);
+    final student = _studentsByUserId[candidateId] ??
+        _studentsByUserId[trimmed] ??
+        _studentsByUserId.values
+            .where((s) =>
+                s.name.toLowerCase() == trimmed.toLowerCase() ||
+                s.phone == trimmed)
+            .firstOrNull;
+    if (student == null) return null;
+    final avail = student.plans.fold<int>(0, (sum, p) => sum + p.remaining);
+    return OwnerClient(
+      id: student.userId,
+      name: student.name,
+      phone: student.phone,
+      email: student.email,
+      notes: student.notes,
+      activeLunches: avail,
+      habitualPlan: _templateName(student.plans.lastOrNull?.templateId),
+    );
   }
 
   @override

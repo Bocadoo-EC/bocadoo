@@ -20,6 +20,7 @@ class OwnerClient {
     required this.name,
     this.phone = '',
     this.habitualPlan,
+    this.activeLunches = 0,
     this.email = '',
     this.notes = '',
   });
@@ -32,6 +33,9 @@ class OwnerClient {
 
   /// Nombre del último plan que compró, si tiene alguno.
   final String? habitualPlan;
+
+  /// Almuerzos vigentes disponibles del comensal en este local.
+  final int activeLunches;
 }
 
 enum PlanKind { semanal, quincenal, mensual, libre }

@@ -107,6 +107,7 @@ abstract class IOwnerCashRepository {
   Future<Map<String, int>> getPlanClientCounts(String restaurantId);
 
   /// Vende un plan a un cliente existente ([clientId]) o nuevo ([newClientName]).
+  /// Si [deductToday] es `true`, descuenta 1 almuerzo del día tras activarlo.
   /// Devuelve el id de la venta, o `null` si falló.
   Future<String?> sellPlanTemplate({
     required String restaurantId,
@@ -114,7 +115,11 @@ abstract class IOwnerCashRepository {
     String? newClientName,
     required OwnerPlanTemplate template,
     required OwnerPayMethod method,
+    bool deductToday = false,
   });
+
+  /// Identifica un comensal a partir de un QR de pase o código sin consumir su saldo.
+  Future<OwnerClient?> identifyClientByQr(String restaurantId, String rawQr);
 
   /// Revierte una venta (plan o consumo) dentro del búfer de deshacer.
   Future<bool> undoTransaction(String transactionId);
