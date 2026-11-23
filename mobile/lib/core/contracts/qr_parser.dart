@@ -77,6 +77,7 @@ class BocadooQrParser {
   static const String version = 'BCD1';
   static const String planPrefix = 'PLN-';
   static const String orderPrefix = 'ORD-';
+  static const String flashPrefix = 'FLH-';
   static const int stepDurationSeconds = 30;
   static const int shortCodeLength = 6;
   static const String shortAlphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -95,6 +96,7 @@ class BocadooQrParser {
   static final Map<String, ({String userId, int timeStep})> _passCodeMeta = {};
   static final Map<String, String> _shortToRaw = {};
   static final Map<String, String> _orderByShortCode = {};
+  static final Map<String, String> _flashOfferByCode = {};
   static final Map<String, String> _tableByShortCode = {};
   static final Map<String, String> _restaurantByCode = {};
 
@@ -236,6 +238,35 @@ class BocadooQrParser {
     }
     return '$orderPrefix$byNumCode';
   }
+
+  /// Genera y registra un código QR exclusivo de Oferta Flash (`FLH-XXXXXX`)
+  /// vinculado al identificador de la oferta y al cupo emitido.
+  static String generateFlashOfferCode({
+    required String offerId,
+    required String orderNumber,
+    int? slotNumber,
+    String? restaurantId,
+  }) {
+    final cleanOffer = offerId.trim();
+    final numClean = orderNumber.trim();
+    final seed = 'FLASH:$cleanOffer:${slotNumber ?? numClean}:$numClean';
+    final code = _hashToSixChars(seed);
+    final token = '$flashPrefix$code';
+    _orderByShortCode[code] = numClean;
+    _orderByShortCode[token] = numClean;
+    _flashOfferByCode[code] = cleanOffer;
+    _flashOfferByCode[token] = cleanOffer;
+    if (restaurantId != null && restaurantId.isNotEmpty) {
+      _restaurantByCode[code] = restaurantId;
+      _restaurantByCode[token] = restaurantId;
+    }
+    return token;
+  }
+
+  /// Devuelve el `offerId` asociado a un QR exclusivo de Oferta Flash (`FLH-XXXXXX`).
+  static String? flashOfferIdForCode(String code) =>
+      _flashOfferByCode[code.trim().toUpperCase()] ??
+      _flashOfferByCode[sanitizeManualInput(code)];
 
   /// Genera y registra el código corto de 6 caracteres para una mesa compartida.
   static String generateTableCode(String tableId, {String? restaurantId}) {

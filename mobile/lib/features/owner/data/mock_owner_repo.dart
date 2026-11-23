@@ -1109,7 +1109,7 @@ class MockOwnerRepository
       return _scheduledOfferId;
     }
     final until = offer.validUntil;
-    if (until == null || until.isEmpty) return null;
+    if (offer.endsAt == null && (until == null || until.isEmpty)) return null;
     final id = _store.nextOfferId();
     _store.flashOffers.add(DemoFlashOffer(
       id: id,
@@ -1119,7 +1119,7 @@ class MockOwnerRepository
       price: offer.price,
       originalPrice: offer.originalPrice ?? offer.price,
       slotsTotal: offer.slots,
-      endsAt: EcuadorTime.todayAtUtc(until),
+      endsAt: offer.endsAt ?? EcuadorTime.todayAtUtc(until!),
     ));
     _store.changed();
     return id;

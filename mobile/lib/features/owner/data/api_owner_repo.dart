@@ -1806,7 +1806,8 @@ class ApiOwnerRepository
     if (direct != null) return direct;
 
     // Para tokens opacos rotativos del backend: consulta /caja/validar y revierte si descontó.
-    final intent = 'identify_qr:$restaurantId:${DateTime.now().microsecondsSinceEpoch}';
+    final intent =
+        'identify_qr:$restaurantId:${DateTime.now().microsecondsSinceEpoch}';
     final ik = _idempotency.keyFor(intent);
     try {
       final data = await guard(
@@ -2369,14 +2370,17 @@ class ApiOwnerRepository
         ? Money.toCents(offer.originalPrice!)
         : (computedOriginal > priceCents ? computedOriginal : priceCents + 50);
 
-    int duracionMinutos = 120;
-    if (offer.validUntil != null && offer.validUntil!.contains(':')) {
+    int duracionMinutos = 30;
+    if (offer.endsAt != null) {
+      final diff = offer.endsAt!.difference(DateTime.now()).inMinutes;
+      duracionMinutos = diff.clamp(15, 1440);
+    } else if (offer.validUntil != null && offer.validUntil!.contains(':')) {
       try {
         final targetUtc = EcuadorTime.todayAtUtc(offer.validUntil!);
         final diff = targetUtc.difference(DateTime.now().toUtc()).inMinutes;
-        duracionMinutos = diff.clamp(5, 1440);
+        duracionMinutos = diff.clamp(15, 1440);
       } catch (_) {
-        duracionMinutos = 120;
+        duracionMinutos = 30;
       }
     }
 

@@ -7,7 +7,6 @@ import '../../../core/config/api_capabilities.dart';
 import '../../../core/config/app_mode.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/theme/app_theme.dart';
-import '../../../core/utils/formatters.dart';
 import '../../customer/presentation/widgets/flash_offers_sync.dart';
 import '../domain/models/cash_models.dart';
 import '../../group_orders/presentation/group_order_models.dart' as go;
@@ -18,19 +17,14 @@ import 'owner_format.dart';
 import 'owner_widgets.dart';
 
 const _weekDays = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
-const _fixedLimitChips = [
-  TimeOfDay(hour: 13, minute: 30),
-  TimeOfDay(hour: 14, minute: 0),
-  TimeOfDay(hour: 14, minute: 30),
+const _durationPresets = <(int, String)>[
+  (15, '15 min'),
+  (30, '30 min'),
+  (45, '45 min'),
+  (60, '1 hora'),
 ];
-const _minLeadMinutes = 10;
+const _minLeadMinutes = 15;
 const _stepTitles = ['¿Qué vas a liquidar?', 'Descuento y cupos', 'Vigencia'];
-
-// TODO: Reemplazar por los precios "solo segundo" y "solo sopa" configurados en
-// el menú del día cuando el backend los exponga (hoy solo existe el almuerzo).
-const _soloMainDiscount = 0.50;
-const _soloSoupDiscount = 1.00;
-const _minComboPrice = 0.50;
 
 bool _isSentinel(String? v) => v == null || v.startsWith('Sin ');
 
@@ -55,8 +49,10 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
   int? _flashSlots = 10;
   final _slotsOther = TextEditingController();
 
-  // Flash · paso 3
-  TimeOfDay? _until;
+  // Flash · paso 3: duración por defecto 30 min (`null` = Otra hora)
+  int? _durationMinutes = 30;
+  DateTime? _customUntil;
+  bool _customInvalid = false;
 
   // Promo programada
   final _title = TextEditingController();
@@ -105,7 +101,7 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
     return _flashSlots ?? (int.tryParse(_slotsOther.text) ?? 0);
   }
 
-  // ── Menú de hoy ──────────────────────────────────────────────────────────
+  // ── Menú de hoy y precios reales desde Ajustes ───────────────────────────
 
   List<DailyMenuCourse> _coursesOf(DailyMenu? menu, String category) {
     if (menu == null || !menu.isPublished) return const [];
@@ -136,6 +132,8 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
 
   bool get _hasSoup => !_isSentinel(_sel.soup);
   bool get _hasMain => !_isSentinel(_sel.main);
+  bool get _hasDrink => !_isSentinel(_sel.drink);
+  bool get _hasDessert => !_isSentinel(_sel.dessert);
 
   /// Ítems elegidos, sin "Sin sopa" / "Sin segundo" / "Sin bebida" / "Sin postre".
   List<String> get _chosenItems => [
@@ -148,18 +146,50 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
     return t.length <= 80 ? t : '${t.substring(0, 79)}…';
   }
 
-  /// Sopa + segundo = almuerzo completo; solo segundo o solo sopa descuentan
-  /// del precio del almuerzo (bebida y postre no tienen precio propio).
-  double _basePrice(double lunch) {
-    final double base;
+  double? _coursePrice(DailyMenu? menu, String category, String? name) {
+    if (name == null || _isSentinel(name)) return null;
+    final p = _coursesOf(menu, category)
+        .where((c) => c.name == name)
+        .firstOrNull
+        ?.price;
+    return (p != null && p > 0) ? p : null;
+  }
+
+  double _soupPrice(DailyMenu? menu, ExecutivePrices prices) =>
+      _coursePrice(menu, 'sopa', _sel.soup) ?? prices.soloSoup;
+
+  double _mainPrice(DailyMenu? menu, ExecutivePrices prices) =>
+      _coursePrice(menu, 'fuerte', _sel.main) ?? prices.soloSecond;
+
+  double _drinkExtraPrice(DailyMenu? menu) {
+    if (!_hasDrink) return 0;
+    return _coursePrice(menu, 'jugo', _sel.drink) ??
+        _coursePrice(menu, 'bebida', _sel.drink) ??
+        0;
+  }
+
+  double _dessertExtraPrice(DailyMenu? menu) {
+    if (!_hasDessert) return 0;
+    return _coursePrice(menu, 'postre', _sel.dessert) ?? 0;
+  }
+
+  /// Calcula el precio base real usando Ajustes (`executivePricesProvider`):
+  /// - Sopa + Segundo = `precioAlmuerzoCentavos` (`prices.lunch`)
+  /// - Solo Segundo = `precioSegundoCentavos` (`prices.soloSecond` o precio del plato)
+  /// - Solo Sopa = `precioSopaCentavos` (`prices.soloSoup` o precio del plato)
+  /// - Bebida / Postre del día = `$0,00` adicional salvo que tenga precio propio.
+  double _basePrice(ExecutivePrices prices, DailyMenu? menu) {
+    final extras = _drinkExtraPrice(menu) + _dessertExtraPrice(menu);
+    final double core;
     if (_hasSoup && _hasMain) {
-      base = lunch;
+      core = prices.lunch;
     } else if (_hasMain) {
-      base = lunch - _soloMainDiscount;
+      core = _mainPrice(menu, prices);
     } else {
-      base = lunch - _soloSoupDiscount;
+      core = _soupPrice(menu, prices);
     }
-    return base < _minComboPrice ? _minComboPrice : base;
+    final total = core + extras;
+    return total > 0 ? total : 0.01;
   }
 
   String? _dishIdFor(DailyMenu? menu) {
@@ -168,51 +198,54 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
     return _coursesOf(menu, category).where((c) => c.name == name).firstOrNull?.dishId;
   }
 
-  // ── Vigencia ─────────────────────────────────────────────────────────────
+  // ── Vigencia basada en `DateTime.now()` ─────────────────────────────────
 
-  /// Hora local de Ecuador (marcada como UTC para comparar solo hora de pared).
-  static DateTime get _ecNow => EcuadorTime.now();
-
-  static DateTime _atToday(TimeOfDay t) {
-    final n = _ecNow;
-    return DateTime.utc(n.year, n.month, n.day, t.hour, t.minute);
+  DateTime? _effectiveValidUntil(DateTime now) {
+    if (_durationMinutes != null) {
+      return now.add(Duration(minutes: _durationMinutes!));
+    }
+    final custom = _customUntil;
+    if (custom == null || _customInvalid) return null;
+    return custom;
   }
 
-  static bool _isValidLimit(TimeOfDay t) =>
-      _atToday(t).isAfter(_ecNow.add(const Duration(minutes: _minLeadMinutes)));
-
-  /// 13:30 / 14:00 / 14:30 mientras sigan vigentes; si ya pasaron, tres
-  /// intervalos de 30 min a partir de la próxima media hora disponible.
-  static List<TimeOfDay> _limitChips() {
-    final fixed = [for (final t in _fixedLimitChips) if (_isValidLimit(t)) t];
-    if (fixed.isNotEmpty) return fixed;
-    final threshold = _ecNow.add(const Duration(minutes: _minLeadMinutes));
-    final first = DateTime.utc(
-      threshold.year,
-      threshold.month,
-      threshold.day,
-      threshold.hour,
-      threshold.minute < 30 ? 30 : 60,
-    );
-    return [
-      for (var i = 0; i < 3; i++)
-        if (first.add(Duration(minutes: 30 * i)).day == threshold.day)
-          TimeOfDay.fromDateTime(first.add(Duration(minutes: 30 * i))),
-    ];
+  static bool _meetsMinLead(TimeOfDay picked, DateTime now) {
+    final pickedMins = picked.hour * 60 + picked.minute;
+    final nowMins = now.hour * 60 + now.minute;
+    return pickedMins - nowMins >= _minLeadMinutes;
   }
 
-  Future<void> _pickLimit() async {
+  Future<void> _pickCustomLimit() async {
+    final now = DateTime.now();
+    final initialDt = _customUntil != null && !_customInvalid
+        ? _customUntil!
+        : now.add(const Duration(minutes: 30));
     final picked = await showTimePicker(
       context: context,
-      initialTime: _until ?? TimeOfDay.fromDateTime(_ecNow.add(const Duration(minutes: 30))),
+      initialTime: TimeOfDay.fromDateTime(initialDt),
     );
     if (picked == null || !mounted) return;
-    if (!_isValidLimit(picked)) {
-      setState(() => _error = 'Elige una hora al menos $_minLeadMinutes minutos después de ahora');
+    final checkNow = DateTime.now();
+    if (!_meetsMinLead(picked, checkNow)) {
+      setState(() {
+        _durationMinutes = null;
+        _customUntil = null;
+        _customInvalid = true;
+        _error =
+            'La hora límite debe ser al menos $_minLeadMinutes minutos mayor a la hora actual.';
+      });
       return;
     }
     setState(() {
-      _until = picked;
+      _durationMinutes = null;
+      _customUntil = DateTime(
+        checkNow.year,
+        checkNow.month,
+        checkNow.day,
+        picked.hour,
+        picked.minute,
+      );
+      _customInvalid = false;
       _error = null;
     });
   }
@@ -286,19 +319,32 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
       setState(() => _error = 'La hora de inicio debe ser antes del final');
       return;
     }
-    final until = _until;
-    if (_isFlash && until == null) {
-      setState(() => _error = 'Elige hasta qué hora vale la oferta');
+
+    final now = DateTime.now();
+    final DateTime? validUntilDt = _isFlash ? _effectiveValidUntil(now) : null;
+    if (_isFlash && validUntilDt == null) {
+      setState(() {
+        _error =
+            'Elige una duración o una hora al menos $_minLeadMinutes minutos mayor a la actual.';
+      });
       return;
     }
-    if (_isFlash && !_isValidLimit(until!)) {
-      setState(() => _error = 'La hora límite debe ser al menos $_minLeadMinutes minutos después de ahora');
+    if (_isFlash &&
+        _durationMinutes == null &&
+        !_meetsMinLead(TimeOfDay.fromDateTime(validUntilDt!), now)) {
+      setState(() {
+        _customInvalid = true;
+        _error =
+            'La hora límite debe ser al menos $_minLeadMinutes minutos mayor a la hora actual.';
+      });
       return;
     }
 
     final price = (base * (100 - discount) / 100 * 100).roundToDouble() / 100;
     final slots = _slots;
     final dishName = _comboTitle;
+    final validTime =
+        validUntilDt != null ? TimeOfDay.fromDateTime(validUntilDt) : null;
 
     if (_isFlash) {
       final active = ref.read(activeOffersProvider).value ?? const <FlashOffer>[];
@@ -323,7 +369,8 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
             slotsTotal: slots,
             price: price,
             originalPrice: base,
-            validUntil: _hhmm(until!),
+            validUntil: _hhmm(validTime!),
+            endsAt: validUntilDt,
           )
         : FlashOffer(
             kind: OfferKind.programada,
@@ -358,15 +405,7 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
       return;
     }
     container.invalidate(activeOffersProvider);
-    if (_isFlash && until != null) {
-      final now = DateTime.now();
-      final endsAt = DateTime(
-        now.year,
-        now.month,
-        now.day,
-        until.hour,
-        until.minute,
-      );
+    if (_isFlash && validUntilDt != null) {
       FlashOffersLiveSync.instance.notifyPublished(
         restaurantId: rid,
         offer: RestaurantOffer(
@@ -380,7 +419,7 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
           availableNow: true,
           appliesToday: true,
           reservable: false,
-          endsAt: endsAt,
+          endsAt: validUntilDt,
         ),
       );
     }
@@ -402,7 +441,7 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
-    final lunchPrice = ref.watch(lunchPriceProvider).value ?? 3.0;
+    final prices = ref.watch(executivePricesProvider);
     final menuAsync = ref.watch(posMenuProvider);
     final menu = menuAsync.value;
     final menuLoaded = menuAsync.hasValue || menuAsync.hasError;
@@ -410,164 +449,253 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
         (_coursesOf(menu, 'sopa').isNotEmpty || _coursesOf(menu, 'fuerte').isNotEmpty);
     final blocked = _isFlash && menuLoaded && !menuOk;
 
-    final double base = _isFlash ? _basePrice(lunchPrice) : lunchPrice;
+    final double base = _isFlash ? _basePrice(prices, menu) : prices.lunch;
     final discount = _discount;
     final newPrice = base * (100 - discount) / 100;
     final lastStep = _step == _stepTitles.length - 1;
+    final now = DateTime.now();
+    final validUntilDt = _effectiveValidUntil(now);
+    final validUntilValid = validUntilDt != null && !_customInvalid;
+    final publishDisabled =
+        _sending || (lastStep && _isFlash && !validUntilValid);
 
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Row(children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(color: colors.primaryContainer, borderRadius: BorderRadius.circular(12)),
-              child: Icon(_isFlash ? Icons.bolt_rounded : Icons.event_repeat_rounded, size: 20, color: colors.primary),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text('Oferta flash',
-                  style: TextStyle(fontSize: 21, fontWeight: FontWeight.w900, color: colors.onSurface)),
-            ),
-            IconButton.filledTonal(
-              tooltip: 'Cerrar',
-              onPressed: () => Navigator.of(context).pop(),
-              icon: const Icon(Icons.close_rounded),
-            ),
-          ]),
-          if (ApiCapabilities.flashScheduledOffer) ...[
-            const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.all(4),
-              decoration: BoxDecoration(
-                color: colors.primaryContainer.withValues(alpha: 0.35),
-                borderRadius: BorderRadius.circular(22),
-                border: Border.all(color: colors.outlineVariant),
-              ),
-              child: Row(children: [
-                Expanded(
-                  child: _KindTab(
-                    icon: Icons.bolt_rounded,
-                    title: 'Flash de hoy',
-                    subtitle: 'Liquidación de excedentes',
-                    selected: _isFlash,
-                    onTap: () => setState(() {
-                      _kind = OfferKind.flash;
-                      _error = null;
-                    }),
-                  ),
+    final keyboard = MediaQuery.viewInsetsOf(context).bottom;
+    final sysNav = MediaQuery.viewPaddingOf(context).bottom;
+    final safeBottom = MediaQuery.paddingOf(context).bottom;
+    final navClearance =
+        keyboard > 0 ? 0.0 : (sysNav - safeBottom).clamp(0.0, double.infinity);
+
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.9,
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: EdgeInsets.only(bottom: keyboard),
+          child: SingleChildScrollView(
+            padding: EdgeInsets.fromLTRB(20, 0, 20, navClearance + 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: colors.primaryContainer,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Icon(
+                        _isFlash ? Icons.bolt_rounded : Icons.event_repeat_rounded,
+                        size: 20,
+                        color: colors.primary,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Oferta flash',
+                        style: TextStyle(
+                          fontSize: 21,
+                          fontWeight: FontWeight.w900,
+                          color: colors.onSurface,
+                        ),
+                      ),
+                    ),
+                    IconButton.filledTonal(
+                      tooltip: 'Cerrar',
+                      onPressed: () => Navigator.of(context).pop(),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ],
                 ),
-                Expanded(
-                  child: _KindTab(
-                    icon: Icons.calendar_month_rounded,
-                    title: 'Horas muertas',
-                    subtitle: 'Promo programada',
-                    selected: !_isFlash,
-                    onTap: () => setState(() {
-                      _kind = OfferKind.programada;
-                      _error = null;
-                    }),
+                if (ApiCapabilities.flashScheduledOffer) ...[
+                  const SizedBox(height: 14),
+                  Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: colors.primaryContainer.withValues(alpha: 0.35),
+                      borderRadius: BorderRadius.circular(22),
+                      border: Border.all(color: colors.outlineVariant),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: _KindTab(
+                            icon: Icons.bolt_rounded,
+                            title: 'Flash de hoy',
+                            subtitle: 'Liquidación de excedentes',
+                            selected: _isFlash,
+                            onTap: () => setState(() {
+                              _kind = OfferKind.flash;
+                              _error = null;
+                            }),
+                          ),
+                        ),
+                        Expanded(
+                          child: _KindTab(
+                            icon: Icons.calendar_month_rounded,
+                            title: 'Horas muertas',
+                            subtitle: 'Promo programada',
+                            selected: !_isFlash,
+                            onTap: () => setState(() {
+                              _kind = OfferKind.programada;
+                              _error = null;
+                            }),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              ]),
-            ),
-          ],
-          const SizedBox(height: 10),
-          if (blocked)
-            _BlockedMenuNotice(onGoToMenu: () {
-              final router = GoRouter.of(context);
-              Navigator.of(context).pop();
-              router.go('/owner/menu');
-            })
-          else if (_isFlash && !menuLoaded)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 32),
-              child: Center(child: CircularProgressIndicator()),
-            )
-          else if (_isFlash) ...[
-            _StepHeader(step: _step, titles: _stepTitles),
-            const SizedBox(height: 14),
-            if (_step == 0) ..._stepOne(menu!, base),
-            if (_step == 1) ..._stepTwo(base: base, newPrice: newPrice),
-            if (_step == 2) ..._stepThree(dishName: _comboTitle, base: base, newPrice: newPrice),
-          ] else ...[
-            Text(
-              'Atrae clientes en los días y horas de poco movimiento. Se repite cada semana durante 30 días.',
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, height: 1.35, color: colors.onSurfaceVariant),
-            ),
-            const SizedBox(height: 14),
-            ..._scheduledFields(),
-            const SizedBox(height: 14),
-            _discountSection(base: base, newPrice: newPrice, presets: const [10, 20, 30]),
-            const SizedBox(height: 14),
-            const _Label('Cupos disponibles'),
-            _OptionRow(
-              options: [for (final s in const [10, 20, 30]) ('$s cupos', s)],
-              selected: _progSlots,
-              onSelect: (v) => setState(() => _progSlots = v!),
-            ),
-            const SizedBox(height: 14),
-            const _InfoBox('La promo queda vigente 30 días. Puedes cancelarla cuando quieras.'),
-          ],
-          if (_error != null) ...[
-            const SizedBox(height: 10),
-            Text(_error!,
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: context.bocadooColors.danger)),
-          ],
-          const SizedBox(height: 16),
-          if (blocked || (_isFlash && !menuLoaded))
-            const SizedBox.shrink()
-          else if (!_isFlash)
-            ElevatedButton(
-              onPressed: _sending ? null : () => _publish(base: lunchPrice),
-              child: const Text('Publicar promo programada'),
-            )
-          else
-            Row(children: [
-              if (_step > 0) ...[
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: _sending ? null : _back,
-                    child: const Text('Atrás'),
+                ],
+                const SizedBox(height: 10),
+                if (blocked)
+                  _BlockedMenuNotice(
+                    onGoToMenu: () {
+                      final router = GoRouter.of(context);
+                      Navigator.of(context).pop();
+                      router.go('/owner/menu');
+                    },
+                  )
+                else if (_isFlash && !menuLoaded)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 32),
+                    child: Center(child: CircularProgressIndicator()),
+                  )
+                else if (_isFlash) ...[
+                  _StepHeader(step: _step, titles: _stepTitles),
+                  const SizedBox(height: 14),
+                  if (_step == 0) ..._stepOne(menu!, prices, base),
+                  if (_step == 1) ..._stepTwo(base: base, newPrice: newPrice),
+                  if (_step == 2)
+                    ..._stepThree(
+                      dishName: _comboTitle,
+                      base: base,
+                      newPrice: newPrice,
+                      validUntilDt: validUntilDt,
+                    ),
+                ] else ...[
+                  Text(
+                    'Atrae clientes en los días y horas de poco movimiento. Se repite cada semana durante 30 días.',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      height: 1.35,
+                      color: colors.onSurfaceVariant,
+                    ),
                   ),
-                ),
-                const SizedBox(width: 10),
+                  const SizedBox(height: 14),
+                  ..._scheduledFields(),
+                  const SizedBox(height: 14),
+                  _discountSection(
+                    base: base,
+                    newPrice: newPrice,
+                    presets: const [10, 20, 30],
+                  ),
+                  const SizedBox(height: 14),
+                  const _Label('Cupos disponibles'),
+                  _OptionRow(
+                    options: [for (final s in const [10, 20, 30]) ('$s cupos', s)],
+                    selected: _progSlots,
+                    onSelect: (v) => setState(() => _progSlots = v!),
+                  ),
+                  const SizedBox(height: 14),
+                  const _InfoBox(
+                    'La promo queda vigente 30 días. Puedes cancelarla cuando quieras.',
+                  ),
+                ],
+                if (_error != null) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    _error!,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: context.bocadooColors.danger,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 16),
+                if (blocked || (_isFlash && !menuLoaded))
+                  const SizedBox.shrink()
+                else if (!_isFlash)
+                  ElevatedButton(
+                    onPressed:
+                        _sending ? null : () => _publish(base: prices.lunch),
+                    child: const Text('Publicar promo programada'),
+                  )
+                else
+                  Row(
+                    children: [
+                      if (_step > 0) ...[
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: _sending ? null : _back,
+                            child: const Text('Atrás'),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                      ],
+                      Expanded(
+                        flex: 2,
+                        child: ElevatedButton(
+                          onPressed: publishDisabled ||
+                                  (_step == 0 && !(_hasSoup || _hasMain))
+                              ? null
+                              : lastStep
+                                  ? () => _publish(
+                                        base: base,
+                                        dishId: _dishIdFor(menu),
+                                      )
+                                  : () => _next(base),
+                          child: Text(
+                            lastStep ? 'Publicar oferta flash' : 'Siguiente',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
               ],
-              Expanded(
-                flex: 2,
-                child: ElevatedButton(
-                  onPressed: _sending || (_step == 0 && !(_hasSoup || _hasMain))
-                      ? null
-                      : lastStep
-                          ? () => _publish(base: base, dishId: _dishIdFor(menu))
-                          : () => _next(base),
-                  child: Text(lastStep ? 'Publicar oferta flash' : 'Siguiente'),
-                ),
-              ),
-            ]),
-        ]),
+            ),
+          ),
+        ),
       ),
     );
   }
 
   // ── Paso 1 · ¿Qué del menú de hoy vas a liquidar? ──────────────────────
 
-  List<Widget> _stepOne(DailyMenu menu, double base) {
+  List<Widget> _stepOne(DailyMenu menu, ExecutivePrices prices, double base) {
     final colors = context.colorScheme;
     final canPrice = _hasSoup || _hasMain;
+    final soupPrice = _soupPrice(menu, prices);
+    final mainPrice = _mainPrice(menu, prices);
+    final drinkExtra = _drinkExtraPrice(menu);
+    final dessertExtra = _dessertExtraPrice(menu);
+
     return [
       Text(
         'Arma 1 oferta con los platos de tu menú de hoy. Elige al menos una sopa o un segundo.',
-        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, height: 1.35, color: colors.onSurfaceVariant),
+        style: TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.w500,
+          height: 1.35,
+          color: colors.onSurfaceVariant,
+        ),
       ),
       const SizedBox(height: 12),
       DailyMenuAccordionSelector(
         flashMode: true,
         dailyMenu: _toSelectorMenu(menu),
         selection: _sel,
+        soupPriceLabel: OwnerFormat.money(soupPrice),
+        mainPriceLabel: OwnerFormat.money(mainPrice),
+        drinkPriceLabel:
+            drinkExtra > 0 ? OwnerFormat.money(drinkExtra) : 'Incluido',
+        dessertPriceLabel:
+            dessertExtra > 0 ? OwnerFormat.money(dessertExtra) : 'Incluido',
         onChanged: (next) => setState(() {
           _sel = next;
           _error = null;
@@ -613,11 +741,26 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
         TextField(
           controller: _slotsOther,
           keyboardType: TextInputType.number,
-          inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(4)],
+          inputFormatters: [
+            FilteringTextInputFormatter.digitsOnly,
+            LengthLimitingTextInputFormatter(4),
+          ],
           onChanged: (_) => setState(() {}),
-          decoration: const InputDecoration(labelText: 'Cantidad de cupos', suffixText: 'cupos'),
+          decoration: const InputDecoration(
+            labelText: 'Cantidad de cupos',
+            suffixText: 'cupos',
+          ),
         ),
       ],
+      const SizedBox(height: 8),
+      Text(
+        'Cada cupo emite 1 pase QR exclusivo de Oferta Flash y se bloquea al agotarse.',
+        style: TextStyle(
+          fontSize: 12.5,
+          fontWeight: FontWeight.w600,
+          color: context.colorScheme.onSurfaceVariant,
+        ),
+      ),
     ];
   }
 
@@ -637,11 +780,17 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
                 TextSpan(children: [
                   TextSpan(
                     text: OwnerFormat.money(base),
-                    style: TextStyle(color: colors.onSurfaceVariant, decoration: TextDecoration.lineThrough),
+                    style: TextStyle(
+                      color: colors.onSurfaceVariant,
+                      decoration: TextDecoration.lineThrough,
+                    ),
                   ),
                   TextSpan(
                     text: '  ${OwnerFormat.money(newPrice)} · -$_discount%',
-                    style: TextStyle(color: colors.primary, fontWeight: FontWeight.w800),
+                    style: TextStyle(
+                      color: colors.primary,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                 ]),
                 style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
@@ -664,14 +813,23 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
         TextField(
           controller: _manual,
           keyboardType: TextInputType.number,
-          inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(2)],
+          inputFormatters: [
+            FilteringTextInputFormatter.digitsOnly,
+            LengthLimitingTextInputFormatter(2),
+          ],
           onChanged: (_) => setState(() {}),
-          decoration: const InputDecoration(labelText: 'Descuento en %', suffixText: '%'),
+          decoration: const InputDecoration(
+            labelText: 'Descuento en %',
+            suffixText: '%',
+          ),
         ),
       ],
       if (newPrice != null) ...[
         const SizedBox(height: 8),
-        _InfoBox('Precio de oferta: ${OwnerFormat.money(newPrice)} por plato', centered: true),
+        _InfoBox(
+          'Precio de oferta: ${OwnerFormat.money(newPrice)} por plato',
+          centered: true,
+        ),
       ],
     ]);
   }
@@ -682,36 +840,51 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
     required String dishName,
     required double? base,
     required double? newPrice,
+    required DateTime? validUntilDt,
   }) {
-    final chips = _limitChips();
-    final until = _until;
-    final customSelected = until != null && !chips.contains(until);
+    final colors = context.colorScheme;
+    final validTime =
+        validUntilDt != null ? TimeOfDay.fromDateTime(validUntilDt) : null;
+    final isCustomSelected = _durationMinutes == null;
+
     return [
-      const _Label('Válida hasta'),
-      Wrap(spacing: 8, runSpacing: 8, children: [
-        for (final t in chips)
+      const _Label('Duración desde ahora'),
+      Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (final (mins, label) in _durationPresets)
+            _ChipChoice(
+              label: label,
+              selected: _durationMinutes == mins,
+              onTap: () => setState(() {
+                _durationMinutes = mins;
+                _customUntil = null;
+                _customInvalid = false;
+                _error = null;
+              }),
+            ),
           _ChipChoice(
-            label: _hhmm(t),
-            selected: until == t,
-            onTap: () => setState(() {
-              _until = t;
-              _error = null;
-            }),
+            label: isCustomSelected && validTime != null
+                ? 'Hasta ${_hhmm(validTime)}'
+                : 'Otra hora',
+            icon: Icons.schedule_rounded,
+            selected: isCustomSelected,
+            onTap: _pickCustomLimit,
           ),
-        _ChipChoice(
-          label: customSelected ? _hhmm(until) : 'Elegir hora',
-          icon: Icons.schedule_rounded,
-          selected: customSelected,
-          onTap: _pickLimit,
-        ),
-      ]),
-      const SizedBox(height: 6),
+        ],
+      ),
+      const SizedBox(height: 8),
       Text(
-        'Debe ser al menos $_minLeadMinutes minutos desde ahora.',
+        validTime != null
+            ? 'Válida desde ahora hasta las ${_hhmm(validTime)}'
+            : 'Elige una hora al menos $_minLeadMinutes minutos mayor a la hora actual.',
         style: TextStyle(
-          fontSize: 13,
-          fontWeight: FontWeight.w600,
-          color: context.colorScheme.onSurfaceVariant,
+          fontSize: 13.5,
+          fontWeight: FontWeight.w700,
+          color: validTime != null
+              ? colors.primary
+              : context.bocadooColors.danger,
         ),
       ),
       const SizedBox(height: 14),
@@ -721,7 +894,7 @@ class _FlashOfferSheetState extends ConsumerState<FlashOfferSheet> {
         originalPrice: base,
         price: newPrice,
         slots: _slots,
-        until: until,
+        until: validTime,
       ),
     ];
   }

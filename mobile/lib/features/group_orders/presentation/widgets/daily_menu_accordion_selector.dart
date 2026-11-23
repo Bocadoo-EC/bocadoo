@@ -21,6 +21,10 @@ class DailyMenuAccordionSelector extends StatefulWidget {
     required this.onChanged,
     this.enabled = true,
     this.flashMode = false,
+    this.soupPriceLabel,
+    this.mainPriceLabel,
+    this.drinkPriceLabel,
+    this.dessertPriceLabel,
   });
 
   final DailyMenu dailyMenu;
@@ -31,6 +35,10 @@ class DailyMenuAccordionSelector extends StatefulWidget {
   /// Oferta flash del Dueño: sopa y segundo son los principales (hay que elegir
   /// al menos uno), con "Sin segundo" / "Sin postre"; bebida y postre opcionales.
   final bool flashMode;
+  final String? soupPriceLabel;
+  final String? mainPriceLabel;
+  final String? drinkPriceLabel;
+  final String? dessertPriceLabel;
 
   @override
   State<DailyMenuAccordionSelector> createState() =>
@@ -184,6 +192,13 @@ class _DailyMenuAccordionSelectorState
   Widget _divider(ColorScheme colors) =>
       Divider(height: 1, thickness: 1, color: colors.outlineVariant);
 
+  String? _priceLabelOf(_Section s) => switch (s) {
+        _Section.soup => widget.soupPriceLabel,
+        _Section.main => widget.mainPriceLabel,
+        _Section.drink => widget.drinkPriceLabel,
+        _Section.dessert => widget.dessertPriceLabel,
+      };
+
   Widget _buildSection(BuildContext context, _Section s) {
     final colors = context.colorScheme;
     final expanded = _expanded.contains(s);
@@ -195,6 +210,7 @@ class _DailyMenuAccordionSelectorState
       children: [
         _SectionHeader(
           title: _titleOf(s),
+          priceLabel: _priceLabelOf(s),
           hint: _hintOf(s),
           selectedLabel: selected,
           badge: _badgeOf(s),
@@ -230,6 +246,7 @@ class _DailyMenuAccordionSelectorState
 class _SectionHeader extends StatelessWidget {
   const _SectionHeader({
     required this.title,
+    this.priceLabel,
     required this.hint,
     required this.selectedLabel,
     required this.badge,
@@ -238,6 +255,7 @@ class _SectionHeader extends StatelessWidget {
   });
 
   final String title;
+  final String? priceLabel;
   final String hint;
   final String? selectedLabel;
   final String badge;
@@ -249,11 +267,14 @@ class _SectionHeader extends StatelessWidget {
     final colors = context.colorScheme;
     // Colapsada con elección → muestra el plato elegido en color de marca.
     final showSelection = !expanded && selectedLabel != null;
+    final displayTitle = (priceLabel != null && priceLabel!.isNotEmpty)
+        ? '$title · $priceLabel'
+        : title;
 
     return Semantics(
       button: true,
       expanded: expanded,
-      label: '$title, $badge',
+      label: '$displayTitle, $badge',
       child: InkWell(
         onTap: onTap,
         child: Padding(
@@ -266,7 +287,7 @@ class _SectionHeader extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      title,
+                      displayTitle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(

@@ -21,7 +21,9 @@ class MockCustomerRepository implements ICustomerRepository {
   /// dueño las vea (O5, O12, O15).
   DemoStore get _store => DemoStore.instance;
   Map<String, SharedTable> get _tables => _store.tables;
-  final DateTime _lastValidation = DateTime.now().subtract(const Duration(minutes: 30));
+  final DateTime _lastValidation = DateTime.now().subtract(
+    const Duration(minutes: 30),
+  );
   bool _feedbackClosed = false;
 
   static const _hostName = 'Carlos Mejía';
@@ -80,7 +82,11 @@ class MockCustomerRepository implements ICustomerRepository {
         totalLunches: 20,
         remainingLunches: _store.remainingLunchesByRest['r2'] ?? 6,
         expiresAt: now.add(const Duration(days: 12)),
-        qrToken: BocadooQrParser.generateQrPayload('${targetUserId}_r2', now, 'r2'),
+        qrToken: BocadooQrParser.generateQrPayload(
+          '${targetUserId}_r2',
+          now,
+          'r2',
+        ),
         restaurantId: 'r2',
         restaurantName: 'Verde Limón',
       ),
@@ -112,9 +118,10 @@ class MockCustomerRepository implements ICustomerRepository {
     final hasOverrideUntil = _store.fullUntilByRest.containsKey(r.id);
     final overrideUntil = _store.fullUntilByRest[r.id];
     final effectiveOcc = overrideOcc ?? r.occupancy;
-    final clearFullUntil = effectiveOcc != 'LLENO' ||
-        (hasOverrideUntil && overrideUntil == null);
-    final avail = _store.menuAvailabilityByRest[r.id] ??
+    final clearFullUntil =
+        effectiveOcc != 'LLENO' || (hasOverrideUntil && overrideUntil == null);
+    final avail =
+        _store.menuAvailabilityByRest[r.id] ??
         (_store.menuPublishedByRest[r.id] == false
             ? MenuAvailabilityState.sinPublicar
             : r.menuAvailabilityState);
@@ -122,13 +129,15 @@ class MockCustomerRepository implements ICustomerRepository {
     final List<MenuItem> visibleMenu;
     if (avail == MenuAvailabilityState.sinPublicar) {
       visibleMenu = const <MenuItem>[];
-    } else if (soldOutDishes == null && avail == MenuAvailabilityState.disponible) {
+    } else if (soldOutDishes == null &&
+        avail == MenuAvailabilityState.disponible) {
       visibleMenu = r.todayMenu;
     } else {
       visibleMenu = [
         for (final m in r.todayMenu)
           m.copyWith(
-            isSoldOut: avail == MenuAvailabilityState.agotadoTotal ||
+            isSoldOut:
+                avail == MenuAvailabilityState.agotadoTotal ||
                 (soldOutDishes?.contains(m.name) ?? m.isSoldOut),
           ),
       ];
@@ -173,7 +182,10 @@ class MockCustomerRepository implements ICustomerRepository {
         offers: filteredOffers,
       );
     }
-    final meters = LocationService.meters(userPos, LatLng(r.latitude!, r.longitude!));
+    final meters = LocationService.meters(
+      userPos,
+      LatLng(r.latitude!, r.longitude!),
+    );
     final km = (meters / 100.0).round() / 10.0;
     return r.copyWith(
       distanceMeters: meters,
@@ -282,10 +294,10 @@ class MockCustomerRepository implements ICustomerRepository {
   }
 
   static String _occupancyLabel(String occupancy) => switch (occupancy) {
-        'LLENO' => 'Lleno · Mejor llega un poco más tarde',
-        'MOVIDO' => 'Movido · Puede haber una espera corta',
-        _ => 'Fluido · Llegas y te sientas',
-      };
+    'LLENO' => 'Lleno · Mejor llega un poco más tarde',
+    'MOVIDO' => 'Movido · Puede haber una espera corta',
+    _ => 'Fluido · Llegas y te sientas',
+  };
 
   @override
   Future<SharedTable> openSharedTable({
@@ -311,11 +323,19 @@ class MockCustomerRepository implements ICustomerRepository {
         return updated;
       }
     }
-    final r = _allRestaurants.where((x) => x.id == restaurantId).firstOrNull ?? _allRestaurants.first;
+    final r =
+        _allRestaurants.where((x) => x.id == restaurantId).firstOrNull ??
+        _allRestaurants.first;
     final soups = [for (final m in r.soups) m.name];
     final mains = [
       for (final m in r.mains)
-        TableDish(id: m.id, name: m.name, price: m.price ?? r.singleLunchPrice, imageUrl: m.imageUrl, isVeggie: m.isVeggie),
+        TableDish(
+          id: m.id,
+          name: m.name,
+          price: m.price ?? r.singleLunchPrice,
+          imageUrl: m.imageUrl,
+          isVeggie: m.isVeggie,
+        ),
     ];
     final id = _store.nextTableId();
     final table = SharedTable(
@@ -362,12 +382,17 @@ class MockCustomerRepository implements ICustomerRepository {
   @override
   Future<SharedTable?> getSharedTable(String tableId) async {
     // TODO: Conectar con provider de backend
-    if (_tables.isEmpty) await openSharedTable(restaurantId: 'r1', time: '13:00');
+    if (_tables.isEmpty) {
+      await openSharedTable(restaurantId: 'r1', time: '13:00');
+    }
     await _simulateNetwork();
     return _tables[tableId.toUpperCase()];
   }
 
-  SharedTable _update(String tableId, SharedTable Function(SharedTable t) change) {
+  SharedTable _update(
+    String tableId,
+    SharedTable Function(SharedTable t) change,
+  ) {
     final current = _tables[tableId.toUpperCase()];
     if (current == null) throw Exception('La mesa ya no existe.');
     final next = change(current);
@@ -402,16 +427,18 @@ class MockCustomerRepository implements ICustomerRepository {
     await _simulateNetwork();
     return _update(
       tableId,
-      (t) => t.copyWith(members: [
-        ...t.members,
-        TableMember(
-          id: 'mem-${t.members.length + 1}',
-          name: name,
-          soup: soup,
-          main: main,
-          takeaway: takeaway,
-        ),
-      ]),
+      (t) => t.copyWith(
+        members: [
+          ...t.members,
+          TableMember(
+            id: 'mem-${t.members.length + 1}',
+            name: name,
+            soup: soup,
+            main: main,
+            takeaway: takeaway,
+          ),
+        ],
+      ),
     );
   }
 
@@ -466,46 +493,41 @@ class MockCustomerRepository implements ICustomerRepository {
     List<({String dishId, int quantity})> extras = const [],
   }) async {
     await _simulateNetwork();
-    return _update(
-      tableId,
-      (t) {
-        final menuById = <String, String>{};
-        for (final d in t.mains) {
-          menuById[d.id] = d.name;
-        }
-        final resolvedNames = [
-          for (final id in lunchDishIds) menuById[id] ?? id,
-        ];
-        final sel = TableMemberSelection(
-          lunchDishes: resolvedNames,
-          soup: resolvedNames.length > 1 ? resolvedNames.first : null,
-          main: resolvedNames.isNotEmpty ? resolvedNames.last : null,
-          extras: [
-            for (final e in extras)
-              TableSelectionExtra(
-                dishId: e.dishId,
-                name: e.dishId,
-                quantity: e.quantity,
-              ),
-          ],
-        );
-        if (t.members.isEmpty) return t;
-        final updatedMembers = [...t.members];
-        final idx = updatedMembers.lastIndexWhere((m) => m.id == 'self');
-        final targetIdx = idx >= 0 ? idx : updatedMembers.length - 1;
-        final m = updatedMembers[targetIdx];
-        updatedMembers[targetIdx] = TableMember(
-          id: m.id,
-          name: m.name,
-          isHost: m.isHost,
-          soup: sel.soup ?? m.soup,
-          main: sel.main ?? m.main,
-          takeaway: m.takeaway,
-          selection: sel,
-        );
-        return t.copyWith(members: updatedMembers);
-      },
-    );
+    return _update(tableId, (t) {
+      final menuById = <String, String>{};
+      for (final d in t.mains) {
+        menuById[d.id] = d.name;
+      }
+      final resolvedNames = [for (final id in lunchDishIds) menuById[id] ?? id];
+      final sel = TableMemberSelection(
+        lunchDishes: resolvedNames,
+        soup: resolvedNames.length > 1 ? resolvedNames.first : null,
+        main: resolvedNames.isNotEmpty ? resolvedNames.last : null,
+        extras: [
+          for (final e in extras)
+            TableSelectionExtra(
+              dishId: e.dishId,
+              name: e.dishId,
+              quantity: e.quantity,
+            ),
+        ],
+      );
+      if (t.members.isEmpty) return t;
+      final updatedMembers = [...t.members];
+      final idx = updatedMembers.lastIndexWhere((m) => m.id == 'self');
+      final targetIdx = idx >= 0 ? idx : updatedMembers.length - 1;
+      final m = updatedMembers[targetIdx];
+      updatedMembers[targetIdx] = TableMember(
+        id: m.id,
+        name: m.name,
+        isHost: m.isHost,
+        soup: sel.soup ?? m.soup,
+        main: sel.main ?? m.main,
+        takeaway: m.takeaway,
+        selection: sel,
+      );
+      return t.copyWith(members: updatedMembers);
+    });
   }
 
   @override
@@ -536,7 +558,11 @@ class MockCustomerRepository implements ICustomerRepository {
   }
 
   @override
-  Future<bool> submitFeedback(String redemptionId, {required String tag, String? note}) async {
+  Future<bool> submitFeedback(
+    String redemptionId, {
+    required String tag,
+    String? note,
+  }) async {
     // TODO: Conectar con provider de backend
     await _simulateNetwork();
     _feedbackClosed = true;
@@ -567,40 +593,45 @@ class MockCustomerRepository implements ICustomerRepository {
   Future<ActiveOrder?> getActiveOrder() async {
     // TODO: Conectar con provider de backend
     await _simulateNetwork();
-    final mine = _store.preorders.where((o) =>
-        o.dinerUserId == DemoStore.dinerUserId &&
-        (o.status == PreorderStatus.pending || o.status == PreorderStatus.delivered));
+    final mine = _store.preorders.where(
+      (o) =>
+          o.dinerUserId == DemoStore.dinerUserId &&
+          (o.status == PreorderStatus.pending ||
+              o.status == PreorderStatus.delivered),
+    );
     return mine.isEmpty ? null : _toActiveOrder(mine.last);
   }
 
   static ActiveOrder _toActiveOrder(DemoPreorder o) => ActiveOrder(
-        orderNumber: o.number,
-        restaurantId: o.restaurantId,
-        restaurantName: o.restaurantName,
-        qrPayload: BocadooQrParser.generateOrderCode(
-          o.number,
-          orderId: o.number,
-          restaurantId: o.restaurantId,
-        ),
-        status: o.status == PreorderStatus.delivered ? 'ENTREGADO' : 'PREPARANDO',
-        detail: o.detail,
-        soup: o.soup,
-        main: o.main,
-        takeaway: o.takeaway,
-        takeawaySurcharge: o.takeawaySurcharge,
-        singleLunchPrice: o.singleLunchPrice,
-        basePriceCents: o.effectiveBaseCents,
-        takeawaySurchargeCents: o.effectiveSurchargeCents,
-        totalCents: o.effectiveTotalCents,
-        estimatedArrivalLabel: o.estimatedArrivalLabel,
-        hasPlan: o.hasPlan,
-        planCreditsUsed: o.planCreditsUsed,
-        cashToCollectCents: o.cashToCollectCents,
-        expiresAt: o.expiresAt,
-        paidAmount: o.status == PreorderStatus.delivered
-            ? Money.fromCents(o.effectiveTotalCents)
-            : null,
-      );
+    orderNumber: o.number,
+    restaurantId: o.restaurantId,
+    restaurantName: o.restaurantName,
+    qrPayload: (o.flashQrCode != null && o.flashQrCode!.isNotEmpty)
+        ? o.flashQrCode!
+        : BocadooQrParser.generateOrderCode(
+            o.number,
+            orderId: o.number,
+            restaurantId: o.restaurantId,
+          ),
+    status: o.status == PreorderStatus.delivered ? 'ENTREGADO' : 'PREPARANDO',
+    detail: o.detail,
+    soup: o.soup,
+    main: o.main,
+    takeaway: o.takeaway,
+    takeawaySurcharge: o.takeawaySurcharge,
+    singleLunchPrice: o.singleLunchPrice,
+    basePriceCents: o.effectiveBaseCents,
+    takeawaySurchargeCents: o.effectiveSurchargeCents,
+    totalCents: o.effectiveTotalCents,
+    estimatedArrivalLabel: o.estimatedArrivalLabel,
+    hasPlan: o.hasPlan,
+    planCreditsUsed: o.planCreditsUsed,
+    cashToCollectCents: o.cashToCollectCents,
+    expiresAt: o.expiresAt,
+    paidAmount: o.status == PreorderStatus.delivered
+        ? Money.fromCents(o.effectiveTotalCents)
+        : null,
+  );
 
   @override
   Future<bool> acknowledgeOrder(String orderNumber) async {
@@ -644,84 +675,86 @@ class MockCustomerRepository implements ICustomerRepository {
     List<({String platoId, int quantity})> cartaItems = const [],
   }) async {
     await _simulateNetwork();
+    final hasLunch =
+        (soupId ?? '').isNotEmpty ||
+        (mainId ?? '').isNotEmpty ||
+        (breakfastId ?? '').isNotEmpty;
+    if (!hasLunch && cartaItems.isEmpty) return null;
+
     final restaurant = await getRestaurantById(restaurantId);
     final carta = cartaItems.isEmpty
         ? const <PublicCartaItem>[]
         : await getRestaurantCarta(restaurantId);
-    final cartaById = {for (final item in carta) item.id: item};
-    final hasLunch = (soupId ?? '').isNotEmpty ||
-        (mainId ?? '').isNotEmpty ||
-        (breakfastId ?? '').isNotEmpty;
-    final hasPlan = hasLunch &&
+    final hasPlan =
         (restaurantId == 'r1' || restaurantId == 'r2') &&
         (_store.remainingLunchesByRest[restaurantId] ?? 0) > 0;
-    final baseCents = Money.toCents(restaurant?.singleLunchPrice ?? 3.00);
-    final surchargeCents =
-        takeaway ? Money.toCents(restaurant?.takeawaySurcharge ?? 0.25) : 0;
 
-    final lines = <OrderQuoteLine>[];
-    var subtotal = 0;
-    var recargo = 0;
-    var cubierto = 0;
+    final lineas = <OrderQuoteLine>[];
+    var subtotalCents = 0;
+    var surchargeTotalCents = 0;
+    var planCoveredCents = 0;
 
     if (hasLunch) {
-      subtotal += baseCents;
-      recargo += surchargeCents;
-      final planCov = hasPlan ? baseCents : 0;
-      cubierto += planCov;
-      lines.add(
+      final baseCents = Money.toCents(restaurant?.singleLunchPrice ?? 3.00);
+      final surchargeCents = takeaway
+          ? Money.toCents(restaurant?.takeawaySurcharge ?? 0.25)
+          : 0;
+      final lineTotal = baseCents + surchargeCents;
+      final covered = hasPlan ? lineTotal : 0;
+      subtotalCents += baseCents;
+      surchargeTotalCents += surchargeCents;
+      planCoveredCents += covered;
+      lineas.add(
         OrderQuoteLine(
-          ref: hasPlan ? 'almuerzo#1' : 'almuerzo',
+          ref: 'almuerzo',
           tipo: 'ALMUERZO',
-          nombre: 'Almuerzo',
+          nombre: (breakfastId ?? '').isNotEmpty
+              ? 'Desayuno del día'
+              : 'Almuerzo del día',
           cantidad: 1,
           precioUnitarioCentavos: baseCents,
           subtotalCentavos: baseCents,
           recargoCentavos: surchargeCents,
           fuente: hasPlan ? 'PLAN' : 'CAJA',
-          cubiertoPorPlanCentavos: planCov,
-          porCobrarCentavos: (baseCents - planCov) + surchargeCents,
+          cubiertoPorPlanCentavos: covered,
+          porCobrarCentavos: lineTotal - covered,
         ),
       );
     }
 
     for (var i = 0; i < cartaItems.length; i++) {
-      final entry = cartaItems[i];
-      final item = cartaById[entry.platoId];
-      if (item == null || entry.quantity <= 0) continue;
-      final sub = item.priceCents * entry.quantity;
-      final itemRec =
-          (takeaway && item.category.toUpperCase() == 'A_LA_CARTA')
-              ? surchargeCents * entry.quantity
-              : 0;
-      subtotal += sub;
-      recargo += itemRec;
-      lines.add(
+      final line = cartaItems[i];
+      if (line.quantity <= 0) continue;
+      final item = carta.where((c) => c.id == line.platoId).firstOrNull;
+      if (item == null) continue;
+      final sub = item.priceCents * line.quantity;
+      subtotalCents += sub;
+      lineas.add(
         OrderQuoteLine(
-          ref: 'extra:$i',
+          ref: 'carta:$i',
           tipo: item.category,
           nombre: item.name,
           platoId: item.id,
-          cantidad: entry.quantity,
+          cantidad: line.quantity,
           precioUnitarioCentavos: item.priceCents,
           subtotalCentavos: sub,
-          recargoCentavos: itemRec,
+          recargoCentavos: 0,
           fuente: 'CAJA',
           cubiertoPorPlanCentavos: 0,
-          porCobrarCentavos: sub + itemRec,
+          porCobrarCentavos: sub,
         ),
       );
     }
 
-    final total = subtotal + recargo;
+    final totalCents = subtotalCents + surchargeTotalCents;
     return OrderQuote(
       estimada: true,
-      subtotalCentavos: subtotal,
-      recargoCentavos: recargo,
-      totalCentavos: total,
-      cubiertoPorPlanCentavos: cubierto,
-      saldoPorCobrarCentavos: total - cubierto,
-      lineas: lines,
+      subtotalCentavos: subtotalCents,
+      recargoCentavos: surchargeTotalCents,
+      totalCentavos: totalCents,
+      cubiertoPorPlanCentavos: planCoveredCents,
+      saldoPorCobrarCentavos: totalCents - planCoveredCents,
+      lineas: lineas,
     );
   }
 
@@ -751,7 +784,9 @@ class MockCustomerRepository implements ICustomerRepository {
         throw ApiException(status: 409, code: 'PLATO_AGOTADO');
       }
       cartaCents += item.priceCents * line.quantity;
-      cartaLabels.add(line.quantity > 1 ? '${line.quantity}x ${item.name}' : item.name);
+      cartaLabels.add(
+        line.quantity > 1 ? '${line.quantity}x ${item.name}' : item.name,
+      );
     }
     final menu = restaurant?.todayMenu ?? const <MenuItem>[];
     String nameOf(String? id) {
@@ -766,13 +801,16 @@ class MockCustomerRepository implements ICustomerRepository {
       nameOf(soupId),
       nameOf(mainId),
       if (offerId != null)
-        restaurant?.offers.where((o) => o.id == offerId).firstOrNull?.title ?? '',
+        restaurant?.offers.where((o) => o.id == offerId).firstOrNull?.title ??
+            '',
       if (takeaway) 'Para llevar',
     ].where((p) => p.isNotEmpty);
 
     final number = _store.nextOrderNumber();
     final breakfast = nameOf(breakfastId);
-    final offerItem = offerId == null ? null : restaurant?.offers.where((o) => o.id == offerId).firstOrNull;
+    final offerItem = offerId == null
+        ? null
+        : restaurant?.offers.where((o) => o.id == offerId).firstOrNull;
     final offer = offerItem?.title ?? '';
     final soup = nameOf(soupId);
     final main = nameOf(mainId);
@@ -780,17 +818,50 @@ class MockCustomerRepository implements ICustomerRepository {
     final surcharge = restaurant?.takeawaySurcharge ?? 0.25;
     final baseCents = Money.toCents(price);
     final surchargeCents = Money.toCents(surcharge);
-    final hasPlan = (restaurantId == 'r1' || restaurantId == 'r2') &&
+    final hasPlan =
+        (restaurantId == 'r1' || restaurantId == 'r2') &&
         (_store.remainingLunchesByRest[restaurantId] ?? 0) > 0;
-    final hasLunch = (soupId ?? '').isNotEmpty ||
+    final hasLunch =
+        (soupId ?? '').isNotEmpty ||
         (mainId ?? '').isNotEmpty ||
         (breakfastId ?? '').isNotEmpty ||
         offerId != null;
-    final lunchCents = hasLunch ? baseCents + (takeaway ? surchargeCents : 0) : 0;
+    final lunchCents = hasLunch
+        ? baseCents + (takeaway ? surchargeCents : 0)
+        : 0;
     // Con plan, el almuerzo sale del cupo y solo la carta se paga en el local.
     final totalCents = (hasPlan && hasLunch ? 0 : lunchCents) + cartaCents;
     final now = DateTime.now();
-    final resolvedEta = (estimatedArrival != null &&
+    String? claimedFlashQr;
+    if (offerId != null) {
+      final stored = _store.flashOffers
+          .where((o) => o.id == offerId)
+          .firstOrNull;
+      if (stored != null) {
+        if (stored.slotsLeft <= 0 || !stored.isLiveAt(now)) {
+          throw ApiException(status: 409, code: 'OFERTA_AGOTADA');
+        }
+        claimedFlashQr = stored.claimExclusiveQr(number);
+        if (claimedFlashQr == null) {
+          throw ApiException(status: 409, code: 'OFERTA_AGOTADA');
+        }
+      } else if (offerItem == null ||
+          !offerItem.isActiveFlashAt(now) ||
+          _withTaken(offerItem).slotsLeft <= 0) {
+        throw ApiException(status: 409, code: 'OFERTA_AGOTADA');
+      } else {
+        final nextTaken = (_offerTaken[offerId] ?? 0) + 1;
+        _offerTaken[offerId] = nextTaken;
+        claimedFlashQr = BocadooQrParser.generateFlashOfferCode(
+          offerId: offerId,
+          orderNumber: number,
+          slotNumber: nextTaken,
+          restaurantId: restaurantId,
+        );
+      }
+    }
+    final resolvedEta =
+        (estimatedArrival != null &&
             estimatedArrival.isNotEmpty &&
             estimatedArrival != 'En 15 min')
         ? estimatedArrival
@@ -809,7 +880,9 @@ class MockCustomerRepository implements ICustomerRepository {
       cashToCollectCents: hasPlan ? cartaCents : 0,
       cashItems: cartaLabels,
       soup: soup.isEmpty ? null : soup,
-      main: main.isNotEmpty ? main : (breakfast.isNotEmpty ? breakfast : (offer.isEmpty ? null : offer)),
+      main: main.isNotEmpty
+          ? main
+          : (breakfast.isNotEmpty ? breakfast : (offer.isEmpty ? null : offer)),
       takeaway: takeaway,
       takeawaySurcharge: surcharge,
       singleLunchPrice: price,
@@ -822,20 +895,9 @@ class MockCustomerRepository implements ICustomerRepository {
       amount: Money.fromCents(totalCents),
       createdAt: now,
       expiresAt: now.add(const Duration(minutes: 30)),
+      offerId: offerId,
+      flashQrCode: claimedFlashQr,
     );
-    if (offerId != null) {
-      final stored = _store.flashOffers.where((o) => o.id == offerId).firstOrNull;
-      if (stored != null) {
-        if (!stored.isLiveAt(now)) {
-          throw ApiException(status: 409, code: 'OFERTA_AGOTADA');
-        }
-        stored.slotsLeft -= 1;
-      } else if (offerItem == null || !offerItem.isActiveFlashAt(now)) {
-        throw ApiException(status: 409, code: 'OFERTA_AGOTADA');
-      } else {
-        _offerTaken[offerId] = (_offerTaken[offerId] ?? 0) + 1;
-      }
-    }
     _store.preorders.add(record);
     _store.changed();
     return _toActiveOrder(record);
@@ -884,14 +946,78 @@ class MockCustomerRepository implements ICustomerRepository {
   // --- Datos semilla del prototipo (store.tsx) ---
 
   static const List<PlanTemplate> _planTemplates = [
-    PlanTemplate(id: 'p-semanal', restaurantId: 'r1', type: 'Semanal', name: 'Plan semanal', lunches: 5, priceCents: 1500, validityDays: 7),
-    PlanTemplate(id: 'p-quincenal', restaurantId: 'r1', type: 'Quincenal', name: 'Plan quincenal', lunches: 15, priceCents: 4200, validityDays: 18),
-    PlanTemplate(id: 'p-mensual', restaurantId: 'r1', type: 'Mensual', name: 'Plan mensual ejecutivo', lunches: 20, priceCents: 5500, validityDays: 35),
-    PlanTemplate(id: 'p-r2-semanal', restaurantId: 'r2', type: 'Semanal', name: 'Semanal Verde', lunches: 5, priceCents: 1600, validityDays: 7),
-    PlanTemplate(id: 'p-r2-mensual', restaurantId: 'r2', type: 'Mensual', name: 'Mensual Saludable', lunches: 20, priceCents: 6000, validityDays: 35),
-    PlanTemplate(id: 'p-r3-quincenal', restaurantId: 'r3', type: 'Quincenal', name: 'Quincenal Manaba', lunches: 15, priceCents: 4800, validityDays: 18),
-    PlanTemplate(id: 'p-r3-mensual', restaurantId: 'r3', type: 'Mensual', name: 'Mensual Costeño', lunches: 20, priceCents: 6500, validityDays: 35),
-    PlanTemplate(id: 'p-r4-mensual', restaurantId: 'r4', type: 'Mensual', name: 'Mensual USFQ', lunches: 20, priceCents: 6800, validityDays: 35),
+    PlanTemplate(
+      id: 'p-semanal',
+      restaurantId: 'r1',
+      type: 'Semanal',
+      name: 'Plan semanal',
+      lunches: 5,
+      priceCents: 1500,
+      validityDays: 7,
+    ),
+    PlanTemplate(
+      id: 'p-quincenal',
+      restaurantId: 'r1',
+      type: 'Quincenal',
+      name: 'Plan quincenal',
+      lunches: 15,
+      priceCents: 4200,
+      validityDays: 18,
+    ),
+    PlanTemplate(
+      id: 'p-mensual',
+      restaurantId: 'r1',
+      type: 'Mensual',
+      name: 'Plan mensual ejecutivo',
+      lunches: 20,
+      priceCents: 5500,
+      validityDays: 35,
+    ),
+    PlanTemplate(
+      id: 'p-r2-semanal',
+      restaurantId: 'r2',
+      type: 'Semanal',
+      name: 'Semanal Verde',
+      lunches: 5,
+      priceCents: 1600,
+      validityDays: 7,
+    ),
+    PlanTemplate(
+      id: 'p-r2-mensual',
+      restaurantId: 'r2',
+      type: 'Mensual',
+      name: 'Mensual Saludable',
+      lunches: 20,
+      priceCents: 6000,
+      validityDays: 35,
+    ),
+    PlanTemplate(
+      id: 'p-r3-quincenal',
+      restaurantId: 'r3',
+      type: 'Quincenal',
+      name: 'Quincenal Manaba',
+      lunches: 15,
+      priceCents: 4800,
+      validityDays: 18,
+    ),
+    PlanTemplate(
+      id: 'p-r3-mensual',
+      restaurantId: 'r3',
+      type: 'Mensual',
+      name: 'Mensual Costeño',
+      lunches: 20,
+      priceCents: 6500,
+      validityDays: 35,
+    ),
+    PlanTemplate(
+      id: 'p-r4-mensual',
+      restaurantId: 'r4',
+      type: 'Mensual',
+      name: 'Mensual USFQ',
+      lunches: 20,
+      priceCents: 6800,
+      validityDays: 35,
+    ),
   ];
 
   /// Fin simulado de cada oferta flash mock (estable durante la sesión).
@@ -932,26 +1058,33 @@ class MockCustomerRepository implements ICustomerRepository {
       tags: ['Comida casera', 'Sazón quiteña', 'Opción vegetariana'],
       juice: 'Jugo natural de temporada',
       dessert: 'Dulce de la casa',
-      imageUrl:
-          'https://images.unsplash.com/photo-1547592166-23ac45744acd?auto=format&fit=crop&w=800&q=80',
+      imageUrl: 'https://images.unsplash.com/photo-1547592166-23ac45744acd?auto=format&fit=crop&w=800&q=80',
       todayMenu: [
-        MenuItem(id: 'r1-s1', name: 'Locro de papa con queso y aguacate', category: 'Sopa', isVeggie: true),
-        MenuItem(id: 'r1-s2', name: 'Sopa criolla de verduras', category: 'Sopa', isVeggie: true),
+        MenuItem(
+          id: 'r1-s1',
+          name: 'Locro de papa con queso y aguacate',
+          category: 'Sopa',
+          isVeggie: true,
+        ),
+        MenuItem(
+          id: 'r1-s2',
+          name: 'Sopa criolla de verduras',
+          category: 'Sopa',
+          isVeggie: true,
+        ),
         MenuItem(
           id: 'r1-m1',
           name: 'Seco de pollo tierno con maduro frito',
           category: 'Plato Fuerte',
           price: 3.00,
-          imageUrl:
-              'https://images.unsplash.com/photo-1598515214211-89d3c73ae83b?auto=format&fit=crop&w=300&q=80',
+          imageUrl: 'https://images.unsplash.com/photo-1598515214211-89d3c73ae83b?auto=format&fit=crop&w=300&q=80',
         ),
         MenuItem(
           id: 'r1-m2',
           name: 'Chuleta ahumada al grill con menestra',
           category: 'Plato Fuerte',
           price: 3.25,
-          imageUrl:
-              'https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=300&q=80',
+          imageUrl: 'https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=300&q=80',
         ),
       ],
     ),
@@ -974,15 +1107,47 @@ class MockCustomerRepository implements ICustomerRepository {
       juice: 'Limonada de hierbabuena',
       dessert: 'Fruta picada con miel',
       takeawaySurcharge: 0.30,
-      imageUrl:
-          'https://images.unsplash.com/photo-1512621776951-a57141f2eefd?auto=format&fit=crop&w=800&q=80',
+      imageUrl: 'https://images.unsplash.com/photo-1512621776951-a57141f2eefd?auto=format&fit=crop&w=800&q=80',
       todayMenu: [
-        MenuItem(id: 'r2-d1', name: 'Bolón de verde con café pasado', category: 'Desayuno', price: 2.50),
-        MenuItem(id: 'r2-d2', name: 'Tostadas con huevo y jugo', category: 'Desayuno', price: 2.00, isSoldOut: true),
-        MenuItem(id: 'r2-s1', name: 'Crema de espinaca con croutons', category: 'Sopa', isVeggie: true),
-        MenuItem(id: 'r2-s2', name: 'Sopa de quinoa', category: 'Sopa', isVeggie: true, isSoldOut: true),
-        MenuItem(id: 'r2-m1', name: 'Pechuga a las finas hierbas con ensalada', category: 'Plato Fuerte', price: 3.25),
-        MenuItem(id: 'r2-m2', name: 'Lasagna de berenjena y champiñones', category: 'Plato Fuerte', price: 3.50, isVeggie: true),
+        MenuItem(
+          id: 'r2-d1',
+          name: 'Bolón de verde con café pasado',
+          category: 'Desayuno',
+          price: 2.50,
+        ),
+        MenuItem(
+          id: 'r2-d2',
+          name: 'Tostadas con huevo y jugo',
+          category: 'Desayuno',
+          price: 2.00,
+          isSoldOut: true,
+        ),
+        MenuItem(
+          id: 'r2-s1',
+          name: 'Crema de espinaca con croutons',
+          category: 'Sopa',
+          isVeggie: true,
+        ),
+        MenuItem(
+          id: 'r2-s2',
+          name: 'Sopa de quinoa',
+          category: 'Sopa',
+          isVeggie: true,
+          isSoldOut: true,
+        ),
+        MenuItem(
+          id: 'r2-m1',
+          name: 'Pechuga a las finas hierbas con ensalada',
+          category: 'Plato Fuerte',
+          price: 3.25,
+        ),
+        MenuItem(
+          id: 'r2-m2',
+          name: 'Lasagna de berenjena y champiñones',
+          category: 'Plato Fuerte',
+          price: 3.50,
+          isVeggie: true,
+        ),
       ],
     ),
     Restaurant(
@@ -1002,8 +1167,7 @@ class MockCustomerRepository implements ICustomerRepository {
       tags: ['Mariscos frescos', 'Plátano verde', 'Porción generosa'],
       juice: 'Jugo de maracuyá',
       dessert: 'Cocada manaba',
-      imageUrl:
-          'https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=800&q=80',
+      imageUrl: 'https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=800&q=80',
       offers: [
         RestaurantOffer(
           id: 'of-r3-1',
@@ -1017,8 +1181,17 @@ class MockCustomerRepository implements ICustomerRepository {
         ),
       ],
       todayMenu: [
-        MenuItem(id: 'r3-s1', name: 'Caldo de bolas de verde con maní', category: 'Sopa'),
-        MenuItem(id: 'r3-m1', name: 'Pescado frito con arroz y patacones', category: 'Plato Fuerte', price: 3.50),
+        MenuItem(
+          id: 'r3-s1',
+          name: 'Caldo de bolas de verde con maní',
+          category: 'Sopa',
+        ),
+        MenuItem(
+          id: 'r3-m1',
+          name: 'Pescado frito con arroz y patacones',
+          category: 'Plato Fuerte',
+          price: 3.50,
+        ),
       ],
     ),
     Restaurant(
@@ -1039,8 +1212,7 @@ class MockCustomerRepository implements ICustomerRepository {
       juice: 'Jugo de guanábana',
       dessert: 'Tres leches',
       takeawaySurcharge: 0.35,
-      imageUrl:
-          'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80',
+      imageUrl: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80',
       offers: [
         RestaurantOffer(
           id: 'of-r4-1',
@@ -1053,8 +1225,18 @@ class MockCustomerRepository implements ICustomerRepository {
         ),
       ],
       todayMenu: [
-        MenuItem(id: 'r4-s1', name: 'Sopa campesina de lenteja con queso', category: 'Sopa', isVeggie: true),
-        MenuItem(id: 'r4-m1', name: 'Lomo saltado criollo con papas rústicas', category: 'Plato Fuerte', price: 3.75),
+        MenuItem(
+          id: 'r4-s1',
+          name: 'Sopa campesina de lenteja con queso',
+          category: 'Sopa',
+          isVeggie: true,
+        ),
+        MenuItem(
+          id: 'r4-m1',
+          name: 'Lomo saltado criollo con papas rústicas',
+          category: 'Plato Fuerte',
+          price: 3.75,
+        ),
       ],
     ),
     Restaurant(
@@ -1074,8 +1256,7 @@ class MockCustomerRepository implements ICustomerRepository {
       schedule: '11:00 - 14:30',
       tags: ['Económico', 'Sopa criolla'],
       takeawaySurcharge: 0.20,
-      imageUrl:
-          'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?auto=format&fit=crop&w=800&q=80',
+      imageUrl: 'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?auto=format&fit=crop&w=800&q=80',
     ),
   ];
 }
