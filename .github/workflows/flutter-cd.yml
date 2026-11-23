@@ -199,7 +199,7 @@ jobs:
         run: rm -f android/release-keystore.jks android/key.properties
 
       - name: Subir artifacts de Release
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bocadoo-release-${{ env.RESOLVED_ENV }}
           path: mobile/dist-release/*
