@@ -245,7 +245,9 @@ class _OfferRow extends StatelessWidget {
     final endsAt = offer.endsAt;
 
     final cupos = isFlash
-        ? 'Quedan ${offer.slots} de ${offer.totalSlots} cupos'
+        ? (offer.slots <= 0
+            ? 'Agotada (0 de ${offer.totalSlots} cupos)'
+            : 'Quedan ${offer.slots} de ${offer.totalSlots} cupos')
         : '${offer.slots} cupos';
     final subtitle = '$cupos · ${OwnerFormat.money(offer.price)}';
 

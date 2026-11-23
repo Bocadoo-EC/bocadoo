@@ -32,12 +32,16 @@ class DemoPreorder {
     this.planCreditsUsed = 0,
     this.cashToCollectCents = 0,
     this.cashItems = const [],
+    this.offerId,
+    this.flashQrCode,
   });
 
   /// Orden híbrida: cupos de plan usados y saldo de carta / extras a cobrar en caja.
   final int planCreditsUsed;
   final int cashToCollectCents;
   final List<String> cashItems;
+  final String? offerId;
+  final String? flashQrCode;
 
   final String number;
   final String restaurantId;
@@ -132,12 +136,29 @@ class DemoFlashOffer {
 
   int slotsLeft;
   bool paused = false;
+  final List<String> issuedQrCodes = [];
 
   int get discountPercent => originalPrice <= 0
       ? 0
       : (((originalPrice - price) / originalPrice) * 100).round();
 
   bool isLiveAt(DateTime now) => !paused && slotsLeft > 0 && endsAt.isAfter(now);
+
+  /// Emite 1 QR exclusivo de Oferta Flash vinculado a esta oferta mientras
+  /// queden cupos (`slotsLeft > 0`). Devuelve `null` si `slotsLeft == 0`.
+  String? claimExclusiveQr(String orderNumber) {
+    if (slotsLeft <= 0) return null;
+    slotsLeft -= 1;
+    final slotNumber = slotsTotal - slotsLeft;
+    final qr = BocadooQrParser.generateFlashOfferCode(
+      offerId: id,
+      orderNumber: orderNumber,
+      slotNumber: slotNumber,
+      restaurantId: restaurantId,
+    );
+    issuedQrCodes.add(qr);
+    return qr;
+  }
 }
 
 /// Datos en memoria que comparten los mocks de comensal y dueño mientras no
