@@ -75,7 +75,7 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
     DishKind.postre: ['Higos con queso'],
   };
   final Set<String> _soldOut = {};
-  final Set<String> _expandedSections = {'sopa', 'segundo'};
+  final Set<String> _expandedSections = {};
   bool _published = false;
   bool _menuLoaded = false;
   bool _publishing = false;
@@ -1182,7 +1182,7 @@ class _AccordionSectionCard extends StatelessWidget {
                   OutlinedButton.icon(
                     onPressed: onChooseDishes,
                     icon: const Icon(Icons.add_rounded, size: 18),
-                    label: const Text('+ Agregar plato del día'),
+                    label: const Text('Agregar plato del día'),
                   ),
                 ],
               ),
