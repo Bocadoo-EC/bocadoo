@@ -138,7 +138,7 @@ class ErrorMessages {
     'UNAUTHORIZED': 'Tu sesión venció. Entra de nuevo.',
     'FORBIDDEN': 'No tienes permiso para hacer esto.',
     'CONFLICT': 'Ya existe un registro con esos datos.',
-    'REGISTRO_CERRADO': 'El registro de dueños está cerrado por ahora.',
+    'REGISTRO_CERRADO': 'El registro de restaurantes está cerrado temporalmente.',
     'TOO_MANY_REQUESTS': 'Demasiados intentos. Espera un momento.',
     'ERROR_INTERNO': 'Algo salió mal de nuestro lado. Inténtalo en un momento.',
     'SERVICE_UNAVAILABLE':

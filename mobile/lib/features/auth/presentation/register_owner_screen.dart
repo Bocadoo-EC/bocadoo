@@ -684,13 +684,28 @@ class _RegisterOwnerScreenState extends ConsumerState<RegisterOwnerScreen> {
         });
         return;
       }
+      final rawMsg =
+          result.errorMessage ??
+          'No pudimos completar el registro por un problema técnico. Por favor, inténtalo de nuevo.';
+      final lower = rawMsg.toLowerCase();
+      final looksTechnical = lower.contains('should not exist') ||
+          lower.contains('must be') ||
+          lower.contains('must not be') ||
+          lower.contains('property ') ||
+          lower.contains('internal server error') ||
+          lower.contains('exception') ||
+          lower.contains('stack');
+      if (looksTechnical) {
+        debugPrint('[RegisterOwner] error técnico ocultado: $rawMsg');
+      }
+      final friendlyMsg =
+          (result.errorCode ?? '').toUpperCase() == 'REGISTRO_CERRADO'
+              ? 'El registro de restaurantes está cerrado temporalmente.'
+              : (looksTechnical
+                  ? 'No pudimos completar el registro por un problema técnico. Por favor, inténtalo de nuevo.'
+                  : rawMsg);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            result.errorMessage ??
-                'No pudimos registrar tu restaurante. Inténtalo de nuevo.',
-          ),
-        ),
+        SnackBar(content: Text(friendlyMsg)),
       );
       return;
     }

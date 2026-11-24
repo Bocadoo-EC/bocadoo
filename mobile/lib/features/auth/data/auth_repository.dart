@@ -386,21 +386,10 @@ class ApiAuthRepository implements IAuthRepository {
       final roundedLng =
           lng != null ? double.parse(lng.toStringAsFixed(6)) : null;
 
+      // POST /v1/auth/register-owner solo acepta nombre y ciudadId en `restaurante`.
       final restauranteBody = <String, dynamic>{
         'nombre': restaurantName.trim(),
         'ciudadId': 1,
-        if (cleanCedulaRuc.isNotEmpty) 'cedulaRuc': cleanCedulaRuc,
-        if (phoneToSend.isNotEmpty) 'telefono': phoneToSend,
-        if (address != null && address.trim().isNotEmpty)
-          'direccion': address.trim(),
-        'latitud': ?roundedLat,
-        'longitud': ?roundedLng,
-        'zonaId': ?knownZoneId,
-        if (tablesCount != null && tablesCount > 0) 'mesas': tablesCount,
-        if (seats != null && seats > 0) 'puestos': seats,
-        'precioSueltoCentavos': Money.toCents(looseLunchPrice),
-        if (takeawaySurchargeCents != null && takeawaySurchargeCents >= 0)
-          'recargoParaLlevarCentavos': takeawaySurchargeCents,
       };
 
       await guard(
@@ -429,19 +418,22 @@ class ApiAuthRepository implements IAuthRepository {
       await _session.profile.saveOwnerRuc(null);
       await _session.profile.saveDinerProfile(zone: zone, lat: lat, lng: lng);
 
-      final patchBody = <String, dynamic>{
+      final corePatchBody = <String, dynamic>{
         if (phoneToSend.isNotEmpty) 'telefono': phoneToSend,
         if (address != null && address.trim().isNotEmpty)
           'direccion': address.trim(),
         'latitud': ?roundedLat,
         'longitud': ?roundedLng,
         'zonaId': ?knownZoneId,
-        if (cleanCedulaRuc.isNotEmpty) 'cedulaRuc': cleanCedulaRuc,
-        if (tablesCount != null && tablesCount > 0) 'mesas': tablesCount,
         if (seats != null && seats > 0) 'puestos': seats,
         'precioSueltoCentavos': Money.toCents(looseLunchPrice),
         if (takeawaySurchargeCents != null && takeawaySurchargeCents >= 0)
           'recargoParaLlevarCentavos': takeawaySurchargeCents,
+      };
+      final fullPatchBody = <String, dynamic>{
+        ...corePatchBody,
+        if (cleanCedulaRuc.isNotEmpty) 'cedulaRuc': cleanCedulaRuc,
+        if (tablesCount != null && tablesCount > 0) 'mesas': tablesCount,
       };
 
       try {
@@ -449,14 +441,34 @@ class ApiAuthRepository implements IAuthRepository {
           () => _api.send<Map<String, dynamic>>(
             'PATCH',
             '${ApiConfig.v1}/restaurante',
-            body: patchBody,
+            body: fullPatchBody,
             restaurant: true,
           ),
         );
-      } catch (e) {
-        if (kDebugMode) {
-          debugPrint('[AuthRepo] PATCH /v1/restaurante post-registro falló: $e');
+      } on ApiException catch (patchErr) {
+        debugPrint(
+          '[AuthRepo] PATCH /v1/restaurante post-registro falló (${patchErr.status}): ${patchErr.detail}',
+        );
+        if (patchErr.status == 400 &&
+            (fullPatchBody.containsKey('cedulaRuc') ||
+                fullPatchBody.containsKey('mesas'))) {
+          try {
+            await guard(
+              () => _api.send<Map<String, dynamic>>(
+                'PATCH',
+                '${ApiConfig.v1}/restaurante',
+                body: corePatchBody,
+                restaurant: true,
+              ),
+            );
+          } catch (fallbackErr) {
+            debugPrint(
+              '[AuthRepo] PATCH /v1/restaurante fallback falló: $fallbackErr',
+            );
+          }
         }
+      } catch (e) {
+        debugPrint('[AuthRepo] PATCH /v1/restaurante post-registro falló: $e');
       }
 
       eventsService.track(
@@ -496,14 +508,61 @@ class ApiAuthRepository implements IAuthRepository {
           },
         );
       }
+
+      if (codeUpper == 'REGISTRO_CERRADO' || e.status == 403) {
+        return AuthResult.failure(
+          'El registro de restaurantes está cerrado temporalmente.',
+          errorCode: e.code,
+        );
+      }
+
       final detail = e.detail.trim();
+      final title = e.title.trim();
+      final looksTechnical = _isTechnicalError(detail, status: e.status) ||
+          _isTechnicalError(title, status: e.status);
+      if (looksTechnical) {
+        debugPrint(
+          '[AuthRepo] registerOwner error técnico '
+          '(status=${e.status}, code=${e.code}, requestId=${e.requestId}): '
+          'title=$title detail=$detail',
+        );
+        return AuthResult.failure(
+          'No pudimos completar el registro por un problema técnico. Por favor, inténtalo de nuevo.',
+          errorCode: e.code,
+        );
+      }
+
+      final sanitizedFieldErrors = <String, String>{
+        for (final entry in e.fieldErrors.entries)
+          if (!_isTechnicalError(entry.value)) entry.key: entry.value,
+      };
       final msg = detail.isNotEmpty ? detail : e.userMessage;
       return AuthResult.failure(
         msg,
         errorCode: e.code,
-        fieldErrors: e.fieldErrors,
+        fieldErrors: sanitizedFieldErrors,
       );
     }
+  }
+
+  static bool _isTechnicalError(String raw, {int? status}) {
+    if (status != null && status >= 500) return true;
+    final lower = raw.toLowerCase();
+    if (lower.isEmpty) return false;
+    return lower.contains('should not exist') ||
+        lower.contains('must be') ||
+        lower.contains('must not be') ||
+        lower.contains('property ') ||
+        lower.contains('internal server error') ||
+        lower.contains('validation failed') ||
+        lower.contains('stack') ||
+        lower.contains('exception') ||
+        lower.contains('queryfailederror') ||
+        lower.contains('typeorm') ||
+        lower.contains('prisma') ||
+        lower.contains('postgres') ||
+        lower.contains('unexpected token') ||
+        RegExp(r'\bat\s+[a-z0-9_.$]+\s*\(', caseSensitive: false).hasMatch(raw);
   }
 
   @override
