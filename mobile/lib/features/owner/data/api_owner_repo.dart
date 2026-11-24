@@ -5910,10 +5910,12 @@ class ApiOwnerRepository
   Future<bool> chargePlanRequest(
     String requestId, {
     required OwnerPayMethod method,
+    String? referenciaExterna,
   }) async {
     _lastError = null;
     final intent = 'cobrar_solicitud_$requestId';
     final key = _idempotency.keyFor(intent);
+    final trimmedRef = referenciaExterna?.trim();
     var ok = false;
     try {
       await guard(
@@ -5923,6 +5925,8 @@ class ApiOwnerRepository
           body: {
             'metodoPago': _mapPayMethodApi(method),
             'pagoConfirmado': true,
+            if (trimmedRef != null && trimmedRef.isNotEmpty)
+              'referenciaExterna': trimmedRef,
           },
           idempotencyKey: key,
           restaurant: true,

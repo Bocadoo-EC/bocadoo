@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -12,16 +11,9 @@ import '../domain/models/cash_models.dart';
 import '../domain/models/daily_menu.dart';
 import 'owner_controller.dart';
 import 'owner_widgets.dart';
+import 'pos_payment_sheet.dart';
 
-String _fmt(int cents) =>
-    '\$${(cents / 100).toStringAsFixed(2).replaceAll('.', ',')}';
-
-int? _parseCents(String text) {
-  final clean = text.trim().replaceAll(',', '.');
-  if (clean.isEmpty) return null;
-  final n = double.tryParse(clean);
-  return n == null || n < 0 ? null : (n * 100).round();
-}
+String _fmt(int cents) => formatPosCents(cents);
 
 enum _FilterTab { almuerzo, platoFuerte, extras }
 
@@ -1674,7 +1666,7 @@ class _ChargeBottomSheetState extends State<_ChargeBottomSheet> {
     final takeawayCount = _takeawayCount;
     final takeawayFee = _takeawayFeeCents;
     final isCash = _method == OwnerPayMethod.efectivo && effectiveTotal > 0;
-    final receivedCents = isCash ? _parseCents(_cash.text) : null;
+    final receivedCents = isCash ? parsePosCents(_cash.text) : null;
     final invalid =
         isCash && _cash.text.trim().isNotEmpty && receivedCents == null;
     final shortfall =
@@ -1683,8 +1675,6 @@ class _ChargeBottomSheetState extends State<_ChargeBottomSheet> {
         receivedCents == null ? 0 : receivedCents - effectiveTotal;
     final canConfirm =
         (itemCount > 0) && (!isCash || (!invalid && !shortfall));
-    final bills =
-        [5, 10, 20].where((v) => v * 100 >= effectiveTotal).toList();
 
     return SafeArea(
       child: Padding(
@@ -2043,140 +2033,16 @@ class _ChargeBottomSheetState extends State<_ChargeBottomSheet> {
               ),
               if (effectiveTotal > 0) ...[
                 const SizedBox(height: 14),
-                const OwnerSectionLabel('Método de pago'),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    for (final (m, icon) in const [
-                      (OwnerPayMethod.efectivo, Icons.payments_outlined),
-                      (
-                        OwnerPayMethod.transferencia,
-                        Icons.account_balance_outlined
-                      ),
-                      (OwnerPayMethod.deuna, Icons.bolt_rounded),
-                    ]) ...[
-                      if (m != OwnerPayMethod.efectivo)
-                        const SizedBox(width: 8),
-                      Expanded(
-                        child: Material(
-                          color: _method == m
-                              ? colors.primary
-                              : Theme.of(context).scaffoldBackgroundColor,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14),
-                            side: BorderSide(
-                              color: _method == m
-                                  ? colors.primary
-                                  : colors.outlineVariant,
-                            ),
-                          ),
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(14),
-                            onTap: () => setState(() {
-                              _method = m;
-                              if (m != OwnerPayMethod.efectivo) _cash.clear();
-                            }),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    icon,
-                                    size: 20,
-                                    color: _method == m
-                                        ? colors.onPrimary
-                                        : colors.onSurface,
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    m.shortLabel,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w900,
-                                      color: _method == m
-                                          ? colors.onPrimary
-                                          : colors.onSurface,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
+                OwnerPosPaymentControls(
+                  method: _method,
+                  effectiveTotalCents: effectiveTotal,
+                  cashController: _cash,
+                  onMethodChanged: (m) => setState(() {
+                    _method = m;
+                    if (m != OwnerPayMethod.efectivo) _cash.clear();
+                  }),
+                  onCashChanged: () => setState(() {}),
                 ),
-              ],
-              if (isCash) ...[
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _cash,
-                        onChanged: (_) => setState(() {}),
-                        keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true,
-                        ),
-                        inputFormatters: [
-                          FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
-                        ],
-                        decoration: InputDecoration(
-                          isDense: true,
-                          prefixText: '\$ ',
-                          hintText: 'Efectivo recibido (opcional)',
-                          errorText: invalid
-                              ? 'Monto inválido'
-                              : (shortfall
-                                  ? 'Faltan ${_fmt(effectiveTotal - receivedCents)}'
-                                  : null),
-                        ),
-                      ),
-                    ),
-                    if (changeCents > 0) ...[
-                      const SizedBox(width: 10),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 8,
-                        ),
-                        decoration: BoxDecoration(
-                          color: b.successContainer,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Text(
-                          'Vuelto ${_fmt(changeCents)}',
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w900,
-                            color: b.success,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-                if (bills.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    children: [
-                      for (final v in bills)
-                        ActionChip(
-                          label: Text('\$$v'),
-                          onPressed: () => setState(() => _cash.text = '$v'),
-                        ),
-                      ActionChip(
-                        label: const Text('Exacto'),
-                        onPressed: () => setState(() => _cash.clear()),
-                      ),
-                    ],
-                  ),
-                ],
               ],
               const SizedBox(height: 16),
               ElevatedButton.icon(

@@ -15,6 +15,7 @@ import 'owner_controller.dart';
 import 'owner_format.dart';
 import 'flash_offers_manager.dart';
 import 'owner_widgets.dart';
+import 'pos_payment_sheet.dart';
 import 'scan_result_screen.dart';
 
 /// O1 · Caja: pantalla de entrada del dueño después del login.
@@ -1439,62 +1440,45 @@ class _PlanRequestsSection extends ConsumerStatefulWidget {
 
 class _PlanRequestsSectionState extends ConsumerState<_PlanRequestsSection> {
   String? _busyId;
+  final Set<String> _completedIds = <String>{};
 
   Future<void> _charge(OwnerPlanRequest req) async {
-    final method = await showModalBottomSheet<OwnerPayMethod>(
-      context: context,
-      showDragHandle: true,
-      builder: (ctx) {
-        final colors = ctx.colorScheme;
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text('Cobrar plan · ${req.clientName}',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: colors.onSurface)),
-                const SizedBox(height: 4),
-                Text('${req.planName} (${req.lunches} almuerzos) · ${OwnerFormat.money(req.price)}',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant)),
-                const SizedBox(height: 16),
-                for (final m in const [
-                  OwnerPayMethod.efectivo,
-                  OwnerPayMethod.transferencia,
-                  OwnerPayMethod.deuna,
-                ]) ...[
-                  ElevatedButton(
-                    onPressed: () => Navigator.of(ctx).pop(m),
-                    child: Text('Cobrar con ${m.label}'),
-                  ),
-                  const SizedBox(height: 8),
-                ],
-              ],
-            ),
-          ),
-        );
-      },
-    );
-    if (method == null || !mounted) return;
-    setState(() => _busyId = req.id);
     final repo = ref.read(apiOwnerRepositoryProvider);
-    final ok = await repo.chargePlanRequest(req.id, method: method);
-    if (!mounted) return;
-    setState(() => _busyId = null);
-    if (ok) {
-      ref.invalidate(planRequestsProvider);
-      ref.invalidate(dailySummaryProvider);
-      ref.invalidate(ownerClientsProvider);
-      unawaited(ref.read(cajaMovementsProvider.notifier).refresh());
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Plan ${req.planName} activado para ${req.clientName}.')),
-      );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(repo.consumeLastError() ?? 'No se pudo cobrar la solicitud.')),
-      );
-    }
+    final colors = context.colorScheme;
+    final messenger = ScaffoldMessenger.of(context);
+    final confirmed = await showModalBottomSheet<bool>(
+      context: context,
+      useRootNavigator: true,
+      isScrollControlled: true,
+      showDragHandle: true,
+      backgroundColor: colors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      builder: (_) => OwnerPlanChargeSheet(
+        request: req,
+        onConfirm: (method, reference) async {
+          final ok = await repo.chargePlanRequest(
+            req.id,
+            method: method,
+            referenciaExterna: reference,
+          );
+          if (ok) return null;
+          return repo.consumeLastError() ?? 'No se pudo cobrar la solicitud.';
+        },
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _completedIds.add(req.id));
+    ref.invalidate(planRequestsProvider);
+    ref.invalidate(dailySummaryProvider);
+    ref.invalidate(ownerClientsProvider);
+    unawaited(ref.read(cajaMovementsProvider.notifier).refresh());
+    unawaited(ref.read(cajaLiveSyncProvider.notifier).syncNow());
+    showInfoSnackBar(
+      messenger,
+      'Plan activado · ${OwnerFormat.money(req.price)} cobrados',
+    );
   }
 
   Future<void> _reject(OwnerPlanRequest req) async {
@@ -1518,6 +1502,12 @@ class _PlanRequestsSectionState extends ConsumerState<_PlanRequestsSection> {
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
+    final visibleRequests = [
+      for (final r in widget.requests)
+        if (!_completedIds.contains(r.id)) r,
+    ];
+    if (visibleRequests.isEmpty) return const SizedBox.shrink();
+
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -1533,13 +1523,13 @@ class _PlanRequestsSectionState extends ConsumerState<_PlanRequestsSection> {
             const SizedBox(width: 8),
             Expanded(
               child: Text(
-                'Solicitudes de plan (${widget.requests.length})',
+                'Solicitudes de plan (${visibleRequests.length})',
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: colors.onSurface),
               ),
             ),
           ]),
           const SizedBox(height: 10),
-          for (final req in widget.requests) ...[
+          for (final req in visibleRequests) ...[
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
@@ -1579,7 +1569,7 @@ class _PlanRequestsSectionState extends ConsumerState<_PlanRequestsSection> {
                 ]),
               ]),
             ),
-            if (req != widget.requests.last) const SizedBox(height: 8),
+            if (req != visibleRequests.last) const SizedBox(height: 8),
           ],
         ],
       ),
