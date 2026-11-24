@@ -396,16 +396,21 @@ class ApiOwnerRepository
     String? soup;
     String? mainDish;
     String? drink;
+    String? dessert;
     for (final p in platos.whereType<Map>()) {
       final seccion = (p['seccion'] ?? '').toString().toUpperCase();
       final nombre = (p['nombre'] ?? '').toString();
       if (nombre.isEmpty) continue;
       if (seccion == 'SOPA') {
         soup ??= nombre;
-      } else if (seccion == 'FUERTE') {
+      } else if (seccion == 'FUERTE' ||
+          seccion == 'SEGUNDO' ||
+          seccion == 'PLATO_FUERTE') {
         mainDish ??= nombre;
       } else if (seccion == 'JUGO' || seccion == 'BEBIDA') {
         drink ??= nombre;
+      } else if (seccion == 'POSTRE') {
+        dessert ??= nombre;
       }
     }
 
@@ -422,12 +427,40 @@ class ApiOwnerRepository
           .join(', ');
     }
 
+    final offerIdRaw = almuerzo?['ofertaId']?.toString().trim();
+    final offerId = (offerIdRaw != null && offerIdRaw.isNotEmpty)
+        ? offerIdRaw
+        : null;
+    final offersRaw = json['ofertas'] is List
+        ? json['ofertas'] as List
+        : const [];
+    final offers = <String>[
+      for (final o in offersRaw)
+        if (o is Map && (o['nombre'] ?? o['ofertaId'] ?? o['id']) != null)
+          (o['nombre'] ?? o['ofertaId'] ?? o['id']).toString()
+        else if (o is String && o.trim().isNotEmpty)
+          o.trim(),
+    ];
+
+    final cotizacion = json['cotizacion'] is Map
+        ? Map<String, dynamic>.from(json['cotizacion'] as Map)
+        : null;
+    final quoteLineas = cotizacion?['lineas'] is List
+        ? cotizacion!['lineas'] as List
+        : const [];
+    final hasPlanLineInQuote = quoteLineas.whereType<Map>().any(
+      (l) => (l['fuente'] ?? '').toString().trim().toUpperCase() == 'PLAN',
+    );
+    final quoteBalanceToCollectCents = _asNullableInt(
+      cotizacion?['saldoPorCobrarCentavos'],
+    );
+
     final cliente = json['cliente'] is Map ? json['cliente'] as Map : null;
     final comensal = json['comensal'] is Map ? json['comensal'] as Map : null;
     final dinerName = (cliente?['nombre'] ?? comensal?['nombre'] ?? 'Comensal')
         .toString();
 
-    final estado = (json['estado'] ?? '').toString().toUpperCase();
+    final estado = (json['estado'] ?? 'EN_CAMINO').toString().toUpperCase();
     final paidByPlan = almuerzo?['cubiertoPorPlan'] == true;
     final takeaway = json['paraLlevar'] == true;
     final number = _asInt(json['numero']).toString();
@@ -456,6 +489,7 @@ class ApiOwnerRepository
                     : (baseCents > 0 ? baseCents + recargoCents : 0)));
     final planCreditsUsed = _asInt(json['planCreditsUsed']);
     final rawCashToCollect =
+        quoteBalanceToCollectCents ??
         json['cashToCollectCents'] ??
         json['saldoPorCobrarCentavos'] ??
         json['porCobrarCentavos'];
@@ -487,6 +521,20 @@ class ApiOwnerRepository
       );
     }
 
+    final cleanSummary = CajaDishSummaryBuilder.fromPayload(
+      almuerzo: almuerzo,
+      cartaItems: json['cartaItems'] is List
+          ? json['cartaItems'] as List
+          : null,
+      extras: extras,
+      cotizacion: cotizacion,
+      dishSectionByLowerName: _dishSectionByLowerName,
+    );
+    if (cleanSummary != null && cleanSummary.isNotEmpty) {
+      if (id.isNotEmpty) _cleanSummaryByOrderKey[id] = cleanSummary;
+      if (number.isNotEmpty) _cleanSummaryByOrderKey['#$number'] = cleanSummary;
+    }
+
     final createdAt = _parseDateTime(json['creadoEn']);
     final rawEta = json['horaEstimada'] ?? json['horaLlegada'];
     final estimatedArrival = rawEta != null
@@ -504,14 +552,20 @@ class ApiOwnerRepository
       cashToCollectCents: cashToCollectCents,
       cashItems: cashItems,
       createdAt: createdAt,
+      estado: estado,
       soup: soup,
       main: mainDish,
       drink: drink,
+      dessert: dessert,
       estimatedArrival: estimatedArrival,
       takeaway: takeaway,
       takeawaySurchargeCents: recargoCents > 0 ? recargoCents : 25,
       paidByPlan: paidByPlan,
       validated: validated,
+      offerId: offerId,
+      offers: offers,
+      hasPlanLineInQuote: hasPlanLineInQuote,
+      quoteBalanceToCollectCents: quoteBalanceToCollectCents,
     );
   }
 
@@ -1239,6 +1293,141 @@ class ApiOwnerRepository
   }
 
   final Map<String, DateTime> _orderScanTimestampByKey = {};
+  final Map<String, String> _cleanSummaryByOrderKey = {};
+  final Map<String, String> _cleanSummaryByCuentaId = {};
+  final Map<String, String> _cleanSummaryByVentaId = {};
+  final Map<String, String> _dishSectionByLowerName = {};
+
+  @override
+  Future<List<PendingPaymentItem>> getPendingPayments(
+    String restaurantId,
+  ) async {
+    if (_isCashier) return const [];
+    try {
+      final rawList = await guard(
+        () => _api.send<dynamic>(
+          'GET',
+          '${ApiConfig.v1}/pagos/pendientes',
+          restaurant: true,
+        ),
+      );
+      final list = rawList is List
+          ? rawList
+          : (rawList is Map
+                ? ((rawList['items'] ?? rawList['data']) is List
+                      ? (rawList['items'] ?? rawList['data']) as List
+                      : const <dynamic>[])
+                : const <dynamic>[]);
+      return [
+        for (final raw in list.whereType<Map>())
+          if ((raw['pagoId'] ?? raw['id'] ?? '').toString().isNotEmpty)
+            PendingPaymentItem(
+              origen: (raw['origen'] ?? '').toString().trim().toUpperCase(),
+              pagoId: (raw['pagoId'] ?? raw['id'] ?? '').toString(),
+              origenId: (raw['origenId'] ?? '').toString(),
+              montoCentavos: _asInt(raw['montoCentavos']),
+              metodo: (raw['metodo'] ?? '').toString().trim(),
+              fecha: raw['fecha']?.toString(),
+              comprobanteUrl: raw['comprobanteUrl']?.toString(),
+              creadoEn: _tryParseDateTime(raw['creadoEn']),
+              clienteNombre: raw['clienteNombre']?.toString(),
+              referencia: (raw['referencia'] ?? '').toString().trim(),
+            ),
+      ];
+    } on ApiException catch (e) {
+      if (e.status == 403) return const [];
+      rethrow;
+    }
+  }
+
+  @override
+  Future<bool> resolvePendingPayment(
+    String pagoId, {
+    required bool confirm,
+  }) async {
+    _lastError = null;
+    try {
+      final action = confirm ? 'confirmar' : 'rechazar';
+      await guard(
+        () => _api.send<dynamic>(
+          'POST',
+          '${ApiConfig.v1}/pagos/$pagoId/$action',
+          restaurant: true,
+        ),
+      );
+      return true;
+    } on ApiException catch (e) {
+      _lastError = e.userMessage;
+      return false;
+    } catch (_) {
+      _lastError = 'No se pudo resolver el pago pendiente.';
+      return false;
+    }
+  }
+
+  @override
+  Future<List<CajaCuentaItem>> getCajaCuentasToday(String restaurantId) async {
+    final res = await _fetchCajaCuentasMap();
+    final rawItems = res['items'] is List
+        ? res['items'] as List
+        : (res['data'] is List ? res['data'] as List : const []);
+    final out = <CajaCuentaItem>[];
+    for (final raw in rawItems.whereType<Map>()) {
+      final id = (raw['id'] ?? '').toString();
+      if (id.isEmpty) continue;
+      final cotizacion = raw['cotizacion'] is Map
+          ? raw['cotizacion'] as Map
+          : null;
+      final summary = CajaDishSummaryBuilder.fromPayload(
+        almuerzo: raw['almuerzo'] is Map ? raw['almuerzo'] as Map : null,
+        cartaItems: raw['cartaItems'] is List
+            ? raw['cartaItems'] as List
+            : null,
+        extras: raw['extras'] is List ? raw['extras'] as List : null,
+        cotizacion: cotizacion,
+        dishSectionByLowerName: _dishSectionByLowerName,
+      );
+      if (summary != null && summary.isNotEmpty) {
+        _cleanSummaryByCuentaId[id] = summary;
+        final pid = (raw['pedidoId'] ?? '').toString();
+        if (pid.isNotEmpty) _cleanSummaryByOrderKey[pid] = summary;
+      }
+      final pagador = raw['pagador'] is Map ? raw['pagador'] as Map : null;
+      out.add(
+        CajaCuentaItem(
+          id: id,
+          origen: (raw['origen'] ?? '').toString().toUpperCase(),
+          estado: (raw['estado'] ?? '').toString().toUpperCase(),
+          pagadorNombre: (pagador?['nombre'] ?? raw['pagadorNombre'])
+              ?.toString(),
+          saldoCentavos: _asInt(raw['saldoCentavos']),
+          pagadoCentavos: _asInt(raw['pagadoCentavos']),
+          cleanDishSummary: summary,
+          pedidoId: raw['pedidoId']?.toString(),
+          creadaEn: _tryParseDateTime(raw['creadaEn']),
+          cobradaEn: _tryParseDateTime(raw['cobradaEn']),
+        ),
+      );
+    }
+    return out;
+  }
+
+  Future<Map<String, dynamic>> _fetchCajaCuentasMap() async {
+    try {
+      final raw = await guard(
+        () => _api.send<dynamic>(
+          'GET',
+          '${ApiConfig.v1}/caja/cuentas',
+          query: const {'estado': 'TODAS', 'limit': 50},
+          restaurant: true,
+        ),
+      );
+      if (raw is Map<String, dynamic>) return raw;
+      if (raw is Map) return Map<String, dynamic>.from(raw);
+      if (raw is List) return {'items': raw};
+    } catch (_) {}
+    return const {'items': <dynamic>[]};
+  }
 
   @override
   Future<CajaMovementsPage> getCajaMovements(
@@ -1252,13 +1441,52 @@ class ApiOwnerRepository
       'limit': limit,
       if (cursor != null && cursor.isNotEmpty) 'cursor': cursor,
     };
-    final data = await guard(
+    final isFirstTodayPage =
+        (cursor == null || cursor.isEmpty) && fecha == EcuadorTime.today();
+
+    final Future<Map<String, dynamic>> movFuture = guard(
       () => _api.getMap(
         '${ApiConfig.v1}/caja/movimientos',
         query: query,
         restaurant: true,
       ),
     );
+    final Future<Map<String, dynamic>?> cuentasFuture = isFirstTodayPage
+        ? _fetchCajaCuentasMap()
+        : Future<Map<String, dynamic>?>.value(null);
+
+    if (_dishSectionByLowerName.isEmpty) {
+      try {
+        await getDishes(restaurantId);
+      } catch (_) {}
+    }
+
+    final results = await Future.wait([movFuture, cuentasFuture]);
+    final data = results[0] ?? const <String, dynamic>{};
+    final cuentasData = results[1];
+
+    if (cuentasData != null) {
+      final rawCuentas = cuentasData['items'] is List
+          ? cuentasData['items'] as List
+          : (cuentasData['data'] is List
+                ? cuentasData['data'] as List
+                : const []);
+      for (final c in rawCuentas.whereType<Map>()) {
+        final cid = (c['id'] ?? '').toString();
+        final summary = CajaDishSummaryBuilder.fromPayload(
+          almuerzo: c['almuerzo'] is Map ? c['almuerzo'] as Map : null,
+          cartaItems: c['cartaItems'] is List ? c['cartaItems'] as List : null,
+          extras: c['extras'] is List ? c['extras'] as List : null,
+          cotizacion: c['cotizacion'] is Map ? c['cotizacion'] as Map : null,
+          dishSectionByLowerName: _dishSectionByLowerName,
+        );
+        if (summary == null || summary.isEmpty) continue;
+        if (cid.isNotEmpty) _cleanSummaryByCuentaId[cid] = summary;
+        final pid = (c['pedidoId'] ?? '').toString();
+        if (pid.isNotEmpty) _cleanSummaryByOrderKey[pid] = summary;
+      }
+    }
+
     final rawItems = data['items'] is List
         ? data['items'] as List
         : (data['movimientos'] is List
@@ -1271,20 +1499,38 @@ class ApiOwnerRepository
         _mapCajaMovement(raw, fechaFallback: responseFecha),
     ];
 
-    // Si algún movimiento PEDIDO llegó sin hora exacta desde `/v1/caja/movimientos`,
-    // resuelve `canjeadoEn ?? servidoEn ?? creadoEn` desde `/v1/caja/pedidos`
-    // sin inventar nunca la hora actual (`DateTime.now()`).
+    // Si algún movimiento PEDIDO llegó sin hora o sin detalle estructurado
+    // desde `/v1/caja/movimientos` (ej. pedidos solo de carta con `platoNombre: null`),
+    // hidrata fecha y etiqueta limpia desde `/v1/caja/pedidos` usando caché local.
     final missingPedidoIndices = <int>[
       for (var i = 0; i < mapped.length; i++)
-        if (mapped[i].timestamp == null &&
-            mapped[i].tipo == CajaMovementType.pedido)
+        if (mapped[i].tipo == CajaMovementType.pedido &&
+            (mapped[i].timestamp == null ||
+                mapped[i].cleanDishSummary == null))
           i,
     ];
     if (missingPedidoIndices.isNotEmpty) {
-      await _hydrateMissingPedidoTimestamps(
+      await _hydrateMissingPedidos(
         rawItems: rawItems,
         mapped: mapped,
         missingIndices: missingPedidoIndices,
+      );
+    }
+
+    // Si algún movimiento VENTA llegó sin detalle estructurado ni caché previa,
+    // consulta `/v1/caja/ventas` una sola vez por venta sin etiquetar.
+    final missingVentaIndices = <int>[
+      for (var i = 0; i < mapped.length; i++)
+        if (mapped[i].tipo == CajaMovementType.venta &&
+            mapped[i].cleanDishSummary == null &&
+            (mapped[i].planNombre == null || mapped[i].planNombre!.isEmpty))
+          i,
+    ];
+    if (missingVentaIndices.isNotEmpty && isFirstTodayPage) {
+      await _hydrateMissingVentas(
+        rawItems: rawItems,
+        mapped: mapped,
+        missingIndices: missingVentaIndices,
       );
     }
 
@@ -1296,7 +1542,7 @@ class ApiOwnerRepository
     );
   }
 
-  Future<void> _hydrateMissingPedidoTimestamps({
+  Future<void> _hydrateMissingPedidos({
     required List<dynamic> rawItems,
     required List<CajaMovement> mapped,
     required List<int> missingIndices,
@@ -1308,27 +1554,25 @@ class ApiOwnerRepository
       final numStr =
           _asNullableInt(raw['pedidoNumero'] ?? raw['numero'])?.toString() ??
           '';
-      final cached =
+      final cachedTs =
           _orderScanTimestampByKey[pedId] ??
           (numStr.isNotEmpty ? _orderScanTimestampByKey['#$numStr'] : null);
-      if (cached != null) {
-        final m = mapped[idx];
-        mapped[idx] = CajaMovement(
-          id: m.id,
-          tipo: m.tipo,
-          timestamp: cached,
-          title: m.title,
-          subtitle: m.subtitle,
-          montoCentavos: m.montoCentavos,
-          valorPedidoCentavos: m.valorPedidoCentavos,
-          pagoEstado: m.pagoEstado,
-          metodoPago: m.metodoPago,
-          revertido: m.revertido,
-          platoNombre: m.platoNombre,
-          customerName: m.customerName,
-          planNombre: m.planNombre,
+      final cachedSummary =
+          _cleanSummaryByOrderKey[pedId] ??
+          (numStr.isNotEmpty ? _cleanSummaryByOrderKey['#$numStr'] : null);
+
+      final m = mapped[idx];
+      final nextTs = m.timestamp ?? cachedTs;
+      final nextSummary = m.cleanDishSummary ?? cachedSummary;
+      if (nextTs != m.timestamp || nextSummary != m.cleanDishSummary) {
+        mapped[idx] = m.copyWith(
+          timestamp: nextTs,
+          cleanDishSummary: nextSummary,
+          subtitle: nextSummary ?? m.subtitle,
         );
-      } else {
+      }
+      if (mapped[idx].timestamp == null ||
+          mapped[idx].cleanDishSummary == null) {
         resolvedAllFromCache = false;
       }
     }
@@ -1353,42 +1597,104 @@ class ApiOwnerRepository
       ]);
       for (final list in lists) {
         for (final p in list.whereType<Map>()) {
+          final pid = (p['id'] ?? '').toString();
+          final pnum = _asNullableInt(p['numero'])?.toString() ?? '';
           final ts = _tryParseDateTime(
             p['canjeadoEn'] ?? p['servidoEn'] ?? p['creadoEn'],
           );
-          if (ts == null) continue;
-          final pid = (p['id'] ?? '').toString();
-          final pnum = _asNullableInt(p['numero'])?.toString() ?? '';
-          if (pid.isNotEmpty) _orderScanTimestampByKey[pid] = ts;
-          if (pnum.isNotEmpty) _orderScanTimestampByKey['#$pnum'] = ts;
+          if (ts != null) {
+            if (pid.isNotEmpty) _orderScanTimestampByKey[pid] = ts;
+            if (pnum.isNotEmpty) _orderScanTimestampByKey['#$pnum'] = ts;
+          }
+          final summary = CajaDishSummaryBuilder.fromPayload(
+            almuerzo: p['almuerzo'] is Map ? p['almuerzo'] as Map : null,
+            cartaItems: p['cartaItems'] is List ? p['cartaItems'] as List : null,
+            extras: p['extras'] is List ? p['extras'] as List : null,
+            cotizacion: p['cotizacion'] is Map ? p['cotizacion'] as Map : null,
+            platoNombre: p['platoNombre']?.toString(),
+            dishSectionByLowerName: _dishSectionByLowerName,
+            fallbackToAlmuerzoIfNamed: p['almuerzo'] != null,
+          );
+          if (summary != null && summary.isNotEmpty) {
+            if (pid.isNotEmpty) _cleanSummaryByOrderKey[pid] = summary;
+            if (pnum.isNotEmpty) _cleanSummaryByOrderKey['#$pnum'] = summary;
+          }
         }
       }
       for (final idx in missingIndices) {
-        if (mapped[idx].timestamp != null) continue;
         final raw = rawItems[idx] is Map ? rawItems[idx] as Map : const {};
         final pedId = (raw['pedidoId'] ?? raw['id'] ?? '').toString();
         final numStr =
             _asNullableInt(raw['pedidoNumero'] ?? raw['numero'])?.toString() ??
             '';
-        final found =
+        final foundTs =
+            mapped[idx].timestamp ??
             _orderScanTimestampByKey[pedId] ??
             (numStr.isNotEmpty ? _orderScanTimestampByKey['#$numStr'] : null);
-        if (found != null) {
+        final foundSummary =
+            mapped[idx].cleanDishSummary ??
+            _cleanSummaryByOrderKey[pedId] ??
+            (numStr.isNotEmpty ? _cleanSummaryByOrderKey['#$numStr'] : null);
+        if (foundTs != mapped[idx].timestamp ||
+            foundSummary != mapped[idx].cleanDishSummary) {
           final m = mapped[idx];
-          mapped[idx] = CajaMovement(
-            id: m.id,
-            tipo: m.tipo,
-            timestamp: found,
-            title: m.title,
-            subtitle: m.subtitle,
-            montoCentavos: m.montoCentavos,
-            valorPedidoCentavos: m.valorPedidoCentavos,
-            pagoEstado: m.pagoEstado,
-            metodoPago: m.metodoPago,
-            revertido: m.revertido,
-            platoNombre: m.platoNombre,
-            customerName: m.customerName,
-            planNombre: m.planNombre,
+          mapped[idx] = m.copyWith(
+            timestamp: foundTs,
+            cleanDishSummary: foundSummary,
+            subtitle: foundSummary ?? m.subtitle,
+          );
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _hydrateMissingVentas({
+    required List<dynamic> rawItems,
+    required List<CajaMovement> mapped,
+    required List<int> missingIndices,
+  }) async {
+    var allCached = true;
+    for (final idx in missingIndices) {
+      final raw = rawItems[idx] is Map ? rawItems[idx] as Map : const {};
+      final vid = (raw['ventaId'] ?? raw['id'] ?? '').toString();
+      final cached = _cleanSummaryByVentaId[vid];
+      if (cached != null && cached.isNotEmpty) {
+        mapped[idx] = mapped[idx].copyWith(
+          cleanDishSummary: cached,
+          subtitle: cached,
+        );
+      } else {
+        allCached = false;
+      }
+    }
+    if (allCached) return;
+
+    try {
+      final rawVentas = await guard(
+        () => _api.getList('${ApiConfig.v1}/caja/ventas', restaurant: true),
+      );
+      for (final v in rawVentas.whereType<Map>()) {
+        final vid = (v['id'] ?? '').toString();
+        if (vid.isEmpty) continue;
+        final items = v['items'] is List ? v['items'] as List : null;
+        final summary = CajaDishSummaryBuilder.fromPayload(
+          ventaItems: items,
+          cotizacion: v['cotizacion'] is Map ? v['cotizacion'] as Map : null,
+          dishSectionByLowerName: _dishSectionByLowerName,
+        );
+        if (summary != null && summary.isNotEmpty) {
+          _cleanSummaryByVentaId[vid] = summary;
+        }
+      }
+      for (final idx in missingIndices) {
+        if (mapped[idx].cleanDishSummary != null) continue;
+        final raw = rawItems[idx] is Map ? rawItems[idx] as Map : const {};
+        final vid = (raw['ventaId'] ?? raw['id'] ?? '').toString();
+        final found = _cleanSummaryByVentaId[vid];
+        if (found != null && found.isNotEmpty) {
+          mapped[idx] = mapped[idx].copyWith(
+            cleanDishSummary: found,
+            subtitle: found,
           );
         }
       }
@@ -1410,6 +1716,8 @@ class ApiOwnerRepository
     final consumoMap = raw['consumo'] is Map ? raw['consumo'] as Map : null;
     final pedidoMap = raw['pedido'] is Map ? raw['pedido'] as Map : null;
     final planMap = raw['plan'] is Map ? raw['plan'] as Map : null;
+    final ventaMap = raw['venta'] is Map ? raw['venta'] as Map : null;
+    final cuentaMap = raw['cuenta'] is Map ? raw['cuenta'] as Map : null;
 
     final customerName =
         (raw['clienteNombre'] ??
@@ -1438,6 +1746,57 @@ class ApiOwnerRepository
     final ticket = _asNullableInt(raw['ticket']);
     final numero = _asNullableInt(raw['pedidoNumero'] ?? raw['numero']);
 
+    final rawId = (raw['id'] ?? '').toString();
+    final pedId = (raw['pedidoId'] ?? pedidoMap?['id'] ?? '').toString();
+    final cuentaId = (raw['cuentaId'] ?? cuentaMap?['id'] ?? '').toString();
+    final ventaId = (raw['ventaId'] ?? ventaMap?['id'] ?? '').toString();
+
+    final almuerzoObj =
+        (raw['almuerzo'] ?? pedidoMap?['almuerzo'] ?? cuentaMap?['almuerzo'])
+            as Map<dynamic, dynamic>?;
+    final cartaItemsList =
+        (raw['cartaItems'] ??
+                pedidoMap?['cartaItems'] ??
+                cuentaMap?['cartaItems'])
+            as List<dynamic>?;
+    final extrasList =
+        (raw['extras'] ?? pedidoMap?['extras'] ?? cuentaMap?['extras'])
+            as List<dynamic>?;
+    final cotizacionObj =
+        (raw['cotizacion'] ??
+                pedidoMap?['cotizacion'] ??
+                cuentaMap?['cotizacion'])
+            as Map<dynamic, dynamic>?;
+    final ventaItemsList =
+        (raw['items'] ?? ventaMap?['items']) as List<dynamic>?;
+
+    final computedCleanSummary = CajaDishSummaryBuilder.fromPayload(
+      almuerzo: almuerzoObj,
+      cartaItems: cartaItemsList,
+      extras: extrasList,
+      cotizacion: cotizacionObj,
+      ventaItems: ventaItemsList,
+      platoNombre: rawPlato,
+      dishSectionByLowerName: _dishSectionByLowerName,
+      fallbackToAlmuerzoIfNamed:
+          tipo == CajaMovementType.canjeDirecto ||
+          tipo == CajaMovementType.pedido,
+    );
+    final cachedCleanSummary =
+        (cuentaId.isNotEmpty ? _cleanSummaryByCuentaId[cuentaId] : null) ??
+        (pedId.isNotEmpty ? _cleanSummaryByOrderKey[pedId] : null) ??
+        (numero != null ? _cleanSummaryByOrderKey['#$numero'] : null) ??
+        (ventaId.isNotEmpty ? _cleanSummaryByVentaId[ventaId] : null) ??
+        (rawId.isNotEmpty
+            ? (_cleanSummaryByCuentaId[rawId] ??
+                  _cleanSummaryByOrderKey[rawId] ??
+                  _cleanSummaryByVentaId[rawId])
+            : null);
+    final cleanDishSummary =
+        (computedCleanSummary != null && computedCleanSummary.isNotEmpty)
+        ? computedCleanSummary
+        : cachedCleanSummary;
+
     final String title;
     final String? subtitle;
     switch (tipo) {
@@ -1453,9 +1812,11 @@ class ApiOwnerRepository
         } else {
           title = 'Venta en caja';
         }
-        subtitle = (rawPlato != null && rawPlato.isNotEmpty)
-            ? rawPlato
-            : _mapMetodoToUi(metodoRaw);
+        subtitle = (cleanDishSummary != null && cleanDishSummary.isNotEmpty)
+            ? cleanDishSummary
+            : ((rawPlato != null && rawPlato.isNotEmpty)
+                  ? rawPlato
+                  : _mapMetodoToUi(metodoRaw));
       case CajaMovementType.pedido:
         if (rawTitulo.isNotEmpty) {
           title = rawTitulo;
@@ -1468,9 +1829,11 @@ class ApiOwnerRepository
               ? customerName
               : 'Preorden entregada';
         }
-        subtitle = (rawPlato != null && rawPlato.isNotEmpty)
-            ? rawPlato
-            : 'Preorden entregada';
+        subtitle = (cleanDishSummary != null && cleanDishSummary.isNotEmpty)
+            ? cleanDishSummary
+            : ((rawPlato != null && rawPlato.isNotEmpty)
+                  ? rawPlato
+                  : 'Preorden entregada');
       case CajaMovementType.canjeDirecto:
         if (rawTitulo.isNotEmpty) {
           title = rawTitulo;
@@ -1479,9 +1842,10 @@ class ApiOwnerRepository
         } else {
           title = 'Canje directo';
         }
-        final dishDisplay = (rawPlato != null && rawPlato.isNotEmpty)
-            ? rawPlato
-            : 'Almuerzo del día (Prepagado)';
+        final dishDisplay =
+            (cleanDishSummary != null && cleanDishSummary.isNotEmpty)
+            ? cleanDishSummary
+            : 'Almuerzo';
         subtitle = (planNombre != null && planNombre.isNotEmpty)
             ? '$planNombre · $dishDisplay'
             : dishDisplay;
@@ -1530,7 +1894,7 @@ class ApiOwnerRepository
     );
 
     return CajaMovement(
-      id: (raw['id'] ?? '').toString(),
+      id: rawId,
       tipo: tipo,
       timestamp: resolvedTs,
       title: title,
@@ -1541,6 +1905,7 @@ class ApiOwnerRepository
       metodoPago: metodoRaw != null ? _mapMetodoToUi(metodoRaw) : null,
       revertido: revertido,
       platoNombre: (rawPlato != null && rawPlato.isNotEmpty) ? rawPlato : null,
+      cleanDishSummary: cleanDishSummary,
       customerName: (customerName != null && customerName.isNotEmpty)
           ? customerName
           : null,
@@ -2678,6 +3043,26 @@ class ApiOwnerRepository
     for (final raw in list.whereType<Map>()) {
       final estado = (raw['estado'] ?? '').toString().toUpperCase();
       if (estado != 'EN_CAMINO' && estado != 'CANJEADA') continue;
+      final mapped = _mapOrder(Map<String, dynamic>.from(raw));
+      if (_pendingDeliverOrders.contains(mapped.number)) continue;
+      orders.add(mapped);
+    }
+    return orders;
+  }
+
+  @override
+  Future<List<OwnerOrder>> getEnCaminoOrders(String restaurantId) async {
+    final list = await guard(
+      () => _api.getList(
+        '${ApiConfig.v1}/caja/pedidos',
+        query: const {'estado': 'EN_CAMINO'},
+        restaurant: true,
+      ),
+    );
+    final orders = <OwnerOrder>[];
+    for (final raw in list.whereType<Map>()) {
+      final estado = (raw['estado'] ?? '').toString().toUpperCase();
+      if (estado != 'EN_CAMINO') continue;
       final mapped = _mapOrder(Map<String, dynamic>.from(raw));
       if (_pendingDeliverOrders.contains(mapped.number)) continue;
       orders.add(mapped);
@@ -4434,6 +4819,18 @@ class ApiOwnerRepository
     return list.whereType<Map>().map((raw) {
       final categoria = (raw['categoria'] ?? '').toString().toUpperCase();
       final seccion = (raw['seccion'] ?? '').toString().toUpperCase();
+      final rawName = (raw['nombre'] ?? '').toString().trim();
+      if (rawName.isNotEmpty) {
+        final mappedSection = switch (categoria) {
+          'A_LA_CARTA' => 'A_LA_CARTA',
+          'BEBIDA' => 'BEBIDA',
+          'EXTRA' => seccion == 'POSTRE' ? 'POSTRE' : seccion,
+          _ => seccion.isNotEmpty ? seccion : 'FUERTE',
+        };
+        if (mappedSection.isNotEmpty) {
+          _dishSectionByLowerName[rawName.toLowerCase()] = mappedSection;
+        }
+      }
       final tags = raw['etiquetas'] is List
           ? (raw['etiquetas'] as List)
                 .map((e) => e.toString().toLowerCase())

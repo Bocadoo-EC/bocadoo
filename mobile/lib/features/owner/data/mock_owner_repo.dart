@@ -547,19 +547,27 @@ class MockOwnerRepository
               tx.type == 'Validado' ||
               tx.paymentMethod == 'Plan');
       if (isPreorden) {
+        final summary = CajaDishSummaryBuilder.fromPayload(
+          almuerzo: (!isPlan && tx.type.contains('A la carta'))
+              ? null
+              : const {'sopa': 'Sopa', 'segundo': 'Segundo'},
+          platoNombre: tx.detail,
+          fallbackToAlmuerzoIfNamed: isPlan,
+        );
         mapped.add(
           CajaMovement(
             id: tx.id,
             tipo: CajaMovementType.pedido,
             timestamp: tx.timestamp,
             title: tx.customerName,
-            subtitle: tx.detail ?? 'Preorden entregada',
+            subtitle: summary ?? (tx.detail ?? 'Preorden entregada'),
             valorPedidoCentavos: isPlan
                 ? (_singleLunchPrice * 100).round()
                 : (tx.amount * 100).round(),
             pagoEstado: isPlan ? 'PLAN' : 'CONFIRMADO',
             metodoPago: tx.paymentMethod,
             platoNombre: tx.detail,
+            cleanDishSummary: summary,
             customerName: tx.customerName,
           ),
         );
@@ -570,9 +578,10 @@ class MockOwnerRepository
             tipo: CajaMovementType.canjeDirecto,
             timestamp: tx.timestamp,
             title: tx.customerName,
-            subtitle: tx.detail ?? 'Almuerzo del día (Prepagado)',
+            subtitle: 'Almuerzo',
             pagoEstado: 'CONFIRMADO',
             metodoPago: 'Plan',
+            cleanDishSummary: 'Almuerzo',
             customerName: tx.customerName,
           ),
         );
@@ -604,6 +613,29 @@ class MockOwnerRepository
       items: pageItems,
       nextCursor: nextCursor,
     );
+  }
+
+  @override
+  Future<List<PendingPaymentItem>> getPendingPayments(
+    String restaurantId,
+  ) async {
+    await _simulateLatency();
+    return const [];
+  }
+
+  @override
+  Future<bool> resolvePendingPayment(
+    String pagoId, {
+    required bool confirm,
+  }) async {
+    await _simulateLatency();
+    return true;
+  }
+
+  @override
+  Future<List<CajaCuentaItem>> getCajaCuentasToday(String restaurantId) async {
+    await _simulateLatency();
+    return const [];
   }
 
   // ---------------------------------------------------------------------------
@@ -1280,6 +1312,10 @@ class MockOwnerRepository
       .where((o) => o.restaurantId == DemoStore.ownerRestaurantId && o.isOpen)
       .toList()
     ..sort((a, b) => (int.tryParse(a.number) ?? 0).compareTo(int.tryParse(b.number) ?? 0));
+
+  @override
+  Future<List<OwnerOrder>> getEnCaminoOrders(String restaurantId) =>
+      getActiveOrders(restaurantId);
 
   @override
   Future<List<OwnerOrder>> getActiveOrders(String restaurantId) async {

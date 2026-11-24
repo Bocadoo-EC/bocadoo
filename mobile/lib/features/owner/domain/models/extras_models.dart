@@ -16,9 +16,11 @@ class OwnerOrder {
     required this.amount,
     this.totalCents,
     required this.createdAt,
+    this.estado = 'EN_CAMINO',
     this.soup,
     this.main,
     this.drink,
+    this.dessert,
     this.estimatedArrival,
     this.estimatedArrivalLabel,
     this.takeaway = false,
@@ -28,12 +30,21 @@ class OwnerOrder {
     this.planCreditsUsed = 0,
     this.cashToCollectCents = 0,
     this.cashItems = const [],
+    this.offerId,
+    this.offers = const [],
+    this.hasPlanLineInQuote = false,
+    this.quoteBalanceToCollectCents,
   });
 
   /// Orden híbrida: cupos de plan usados y saldo a cobrar en caja.
   final int planCreditsUsed;
   final int cashToCollectCents;
   final List<String> cashItems;
+  final String estado;
+  final String? offerId;
+  final List<String> offers;
+  final bool hasPlanLineInQuote;
+  final int? quoteBalanceToCollectCents;
 
   final String? id;
   final String? restaurantId;
@@ -42,6 +53,7 @@ class OwnerOrder {
   final String? soup;
   final String? main;
   final String? drink;
+  final String? dessert;
   final DateTime? estimatedArrival;
   final String? estimatedArrivalLabel;
   final bool takeaway;
@@ -57,6 +69,18 @@ class OwnerOrder {
 
   /// Con plan: ya se validó el QR y se descontó el almuerzo; falta entregar.
   final bool validated;
+
+  /// Flujo Oferta Flash (`almuerzo.ofertaId != null` o `ofertas` no vacío).
+  bool get hasFlashOffer =>
+      (offerId != null && offerId!.trim().isNotEmpty) || offers.isNotEmpty;
+
+  /// Flujo Plan prepagado (cotización con fuente `PLAN` sin oferta).
+  bool get isPlanFlow =>
+      !hasFlashOffer && (hasPlanLineInQuote || paidByPlan);
+
+  /// Saldo pendiente real a cobrar en caja.
+  int get effectiveBalanceToCollectCents =>
+      quoteBalanceToCollectCents ?? effectiveTotalCents;
 
   /// Con plan solo se cobra el saldo de carta / extras (`cashToCollectCents`).
   int get effectiveTotalCents => paidByPlan

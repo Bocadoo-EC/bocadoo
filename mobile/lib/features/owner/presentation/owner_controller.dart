@@ -477,6 +477,233 @@ final ordersOnTheWayProvider = FutureProvider.autoDispose<int>((ref) {
   return ref.read(ownerCashRepositoryProvider).getOrdersOnTheWayCount(ref.read(ownerRestaurantIdProvider));
 });
 
+enum CajaLiveAlertKind { ofertaFlash, planPrepagado, preorden, pedidoGrupal }
+
+@immutable
+class CajaLiveAlert {
+  const CajaLiveAlert({
+    required this.key,
+    required this.kind,
+    required this.message,
+    this.orderNumber,
+    this.tableId,
+    this.pendingPayment,
+  });
+
+  final String key;
+  final CajaLiveAlertKind kind;
+  final String message;
+  final String? orderNumber;
+  final String? tableId;
+  final PendingPaymentItem? pendingPayment;
+}
+
+@immutable
+class CajaLiveSyncState {
+  const CajaLiveSyncState({
+    this.enCaminoOrders = const [],
+    this.activeTables = const [],
+    this.pendingPayments = const [],
+    this.hasLoadedOnce = false,
+  });
+
+  final List<OwnerOrder> enCaminoOrders;
+  final List<PendingTable> activeTables;
+  final List<PendingPaymentItem> pendingPayments;
+  final bool hasLoadedOnce;
+
+  int get totalEnCamino => enCaminoOrders.length + activeTables.length;
+
+  CajaLiveSyncState copyWith({
+    List<OwnerOrder>? enCaminoOrders,
+    List<PendingTable>? activeTables,
+    List<PendingPaymentItem>? pendingPayments,
+    bool? hasLoadedOnce,
+  }) {
+    return CajaLiveSyncState(
+      enCaminoOrders: enCaminoOrders ?? this.enCaminoOrders,
+      activeTables: activeTables ?? this.activeTables,
+      pendingPayments: pendingPayments ?? this.pendingPayments,
+      hasLoadedOnce: hasLoadedOnce ?? this.hasLoadedOnce,
+    );
+  }
+}
+
+final cajaLiveSyncProvider =
+    NotifierProvider.autoDispose<CajaLiveSyncNotifier, CajaLiveSyncState>(
+  CajaLiveSyncNotifier.new,
+);
+
+class CajaLiveSyncNotifier extends Notifier<CajaLiveSyncState> {
+  final Set<String> _idsVistos = <String>{};
+  bool _hasSeededSeenIds = false;
+  bool _inFlight = false;
+  bool _disposed = false;
+
+  @override
+  CajaLiveSyncState build() {
+    ref.watch(ownerRestaurantIdProvider);
+    _idsVistos.clear();
+    _hasSeededSeenIds = false;
+    _inFlight = false;
+    _disposed = false;
+    ref.onDispose(() => _disposed = true);
+    return const CajaLiveSyncState();
+  }
+
+  static String _arrivalHHmm(OwnerOrder order) {
+    final raw = order.estimatedArrivalLabel?.trim() ?? '';
+    if (RegExp(r'^\d{1,2}:\d{2}$').hasMatch(raw)) {
+      return raw.padLeft(5, '0');
+    }
+    final target =
+        order.estimatedArrival ?? order.createdAt.add(const Duration(minutes: 15));
+    final ec = target.toUtc().subtract(const Duration(hours: 5));
+    final hh = ec.hour.toString().padLeft(2, '0');
+    final mm = ec.minute.toString().padLeft(2, '0');
+    return '$hh:$mm';
+  }
+
+  Future<List<CajaLiveAlert>> syncNow({bool includeMovements = true}) async {
+    if (_inFlight || _disposed) return const [];
+    _inFlight = true;
+    try {
+      final rid = ref.read(ownerRestaurantIdProvider);
+      final ordersRepo = ref.read(ownerOrdersRepositoryProvider);
+      final tablesRepo = ref.read(ownerTablesRepositoryProvider);
+      final cashRepo = ref.read(ownerCashRepositoryProvider);
+
+      final ordersFuture = ordersRepo
+          .getEnCaminoOrders(rid)
+          .catchError((_) => state.enCaminoOrders);
+      final tablesFuture = () async {
+        final simTables = GroupOrderSimulationStore.instance.ownerTablesFor(rid);
+        List<PendingTable> repoTables = const <PendingTable>[];
+        if (ApiCapabilities.ownerPendingTablesList) {
+          try {
+            repoTables = await tablesRepo.getPendingTables(rid);
+          } catch (_) {
+            repoTables = state.activeTables;
+          }
+        }
+        if (simTables.isEmpty) return repoTables;
+        final merged = <String, PendingTable>{
+          for (final t in repoTables) t.id: t,
+          for (final t in simTables) t.id: t,
+        };
+        return merged.values.toList();
+      }();
+      final paymentsFuture = cashRepo
+          .getPendingPayments(rid)
+          .catchError((_) => state.pendingPayments);
+      final movementsFuture = includeMovements
+          ? ref.read(cajaMovementsProvider.notifier).refresh().catchError((_) {})
+          : Future<void>.value();
+
+      final results = await Future.wait<dynamic>([
+        ordersFuture,
+        tablesFuture,
+        paymentsFuture,
+        movementsFuture,
+      ]);
+      if (_disposed) return const [];
+
+      final orders = results[0] as List<OwnerOrder>;
+      final tables = results[1] as List<PendingTable>;
+      final payments = results[2] as List<PendingPaymentItem>;
+
+      final newAlerts = <CajaLiveAlert>[];
+
+      if (!_hasSeededSeenIds) {
+        for (final o in orders) {
+          _idsVistos.add('ord:${o.id ?? o.number}');
+        }
+        for (final t in tables) {
+          _idsVistos.add('mesa:${t.id}');
+        }
+        for (final p in payments) {
+          _idsVistos.add('pago:${p.pagoId}');
+        }
+        _hasSeededSeenIds = true;
+      } else {
+        for (final o in orders) {
+          final key = 'ord:${o.id ?? o.number}';
+          if (!_idsVistos.add(key)) continue;
+          final nombre = o.dinerName.trim().isEmpty ? 'Comensal' : o.dinerName.trim();
+          if (o.hasFlashOffer) {
+            newAlerts.add(
+              CajaLiveAlert(
+                key: key,
+                kind: CajaLiveAlertKind.ofertaFlash,
+                message: '⚡ Oferta Flash · $nombre · En camino',
+                orderNumber: o.number,
+              ),
+            );
+          } else if (o.isPlanFlow) {
+            newAlerts.add(
+              CajaLiveAlert(
+                key: key,
+                kind: CajaLiveAlertKind.planPrepagado,
+                message: '🎟️ Plan · $nombre · En camino',
+                orderNumber: o.number,
+              ),
+            );
+          } else {
+            final hhmm = _arrivalHHmm(o);
+            newAlerts.add(
+              CajaLiveAlert(
+                key: key,
+                kind: CajaLiveAlertKind.preorden,
+                message: '🛍️ Preorden · $nombre · Llega $hhmm',
+                orderNumber: o.number,
+              ),
+            );
+          }
+        }
+
+        for (final t in tables) {
+          final key = 'mesa:${t.id}';
+          if (!_idsVistos.add(key)) continue;
+          final host = t.hostName.trim().isEmpty ? 'Anfitrión' : t.hostName.trim();
+          newAlerts.add(
+            CajaLiveAlert(
+              key: key,
+              kind: CajaLiveAlertKind.pedidoGrupal,
+              message: '👥 Pedido Grupal · $host · ${t.members} personas',
+              tableId: t.id,
+            ),
+          );
+        }
+
+        for (final p in payments) {
+          final key = 'pago:${p.pagoId}';
+          if (!_idsVistos.add(key)) continue;
+          if (p.isPlan) {
+            newAlerts.add(
+              CajaLiveAlert(
+                key: key,
+                kind: CajaLiveAlertKind.planPrepagado,
+                message: '🎟️ Plan · ${p.displayName} · En camino',
+                pendingPayment: p,
+              ),
+            );
+          }
+        }
+      }
+
+      state = CajaLiveSyncState(
+        enCaminoOrders: orders,
+        activeTables: tables,
+        pendingPayments: payments,
+        hasLoadedOnce: true,
+      );
+      return newAlerts;
+    } finally {
+      _inFlight = false;
+    }
+  }
+}
+
 final shiftClosedProvider = FutureProvider.autoDispose<bool>((ref) {
   return ref.read(ownerCashRepositoryProvider).isShiftClosed(ref.read(ownerRestaurantIdProvider));
 });

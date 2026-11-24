@@ -209,11 +209,23 @@ abstract class IOwnerCashRepository {
     String? cursor,
     int limit = 20,
   });
+
+  /// Consulta los pagos pendientes unificados (`GET /v1/pagos/pendientes`).
+  Future<List<PendingPaymentItem>> getPendingPayments(String restaurantId);
+
+  /// Confirma o rechaza un pago pendiente (`POST /v1/pagos/{pagoId}/confirmar|rechazar`).
+  Future<bool> resolvePendingPayment(String pagoId, {required bool confirm});
+
+  /// Consulta las cuentas del día en Caja (`GET /v1/caja/cuentas`).
+  Future<List<CajaCuentaItem>> getCajaCuentasToday(String restaurantId);
 }
 
 /// O12 · Preórdenes por cobrar (solo efectivo) y entregar.
 abstract class IOwnerOrdersRepository {
   Future<List<OwnerOrder>> getActiveOrders(String restaurantId);
+
+  /// Pedidos actualmente en estado `EN_CAMINO` (`GET /v1/caja/pedidos`).
+  Future<List<OwnerOrder>> getEnCaminoOrders(String restaurantId);
 
   /// Con plan prepagado: lee el QR del pedido y descuenta 1 almuerzo del plan.
   Future<bool> validateOrder(String restaurantId, String orderNumber);
