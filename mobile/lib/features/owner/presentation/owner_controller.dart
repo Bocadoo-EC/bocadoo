@@ -965,18 +965,24 @@ class ExecutivePricesNotifier extends Notifier<ExecutivePrices> {
   double? _lunchOverride;
   double _soloSecond = 2.50;
   double _soloSoup = 1.50;
-  double _takeawaySurcharge = 0.25;
+  double? _takeawayOverride;
 
   @override
   ExecutivePrices build() {
     final serverLunch = ref.watch(lunchPriceProvider).value;
+    final serverSurchargeCents =
+        ref.watch(localInfoProvider).value?.takeawaySurchargeCents;
     final lunch = _lunchOverride ??
         (serverLunch != null && serverLunch > 0 ? serverLunch : 3.00);
+    final takeawaySurcharge = _takeawayOverride ??
+        (serverSurchargeCents != null
+            ? Money.fromCents(serverSurchargeCents)
+            : 0.25);
     return ExecutivePrices(
       lunch: lunch,
       soloSecond: _soloSecond,
       soloSoup: _soloSoup,
-      takeawaySurcharge: _takeawaySurcharge,
+      takeawaySurcharge: takeawaySurcharge,
     );
   }
 
@@ -989,7 +995,7 @@ class ExecutivePricesNotifier extends Notifier<ExecutivePrices> {
     _lunchOverride = lunch;
     _soloSecond = soloSecond;
     _soloSoup = soloSoup;
-    _takeawaySurcharge = takeawaySurcharge;
+    _takeawayOverride = takeawaySurcharge;
     state = ExecutivePrices(
       lunch: lunch,
       soloSecond: soloSecond,

@@ -69,16 +69,19 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
   PermanentCatalogGroup _catalogFilter = PermanentCatalogGroup.carta;
 
   final Map<DishKind, List<String>> _today = {
-    DishKind.sopa: ['Locro de papa con queso', 'Sopa de lenteja'],
-    DishKind.segundo: ['Pollo a la plancha', 'Seco de pollo con maduro'],
-    DishKind.bebida: ['Jugo de naranjilla'],
-    DishKind.postre: ['Higos con queso'],
+    DishKind.sopa: [],
+    DishKind.segundo: [],
+    DishKind.bebida: [],
+    DishKind.postre: [],
   };
   final Set<String> _soldOut = {};
   final Set<String> _expandedSections = {};
   bool _published = false;
   bool _menuLoaded = false;
   bool _publishing = false;
+
+  int get _todayCount =>
+      _today.values.fold(0, (sum, list) => sum + list.length);
 
   void _toggleAccordion(String key) {
     setState(() {
@@ -107,7 +110,7 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
           for (final c in menu.courses)
             if (c.category == k.courseCategory) c.name,
         ];
-        if (names.isNotEmpty) _today[k] = names;
+        _today[k] = names;
       }
       _soldOut
         ..clear()
@@ -356,6 +359,7 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
     final catalog = ref.watch(catalogDishesProvider);
     final permanentState = ref.watch(permanentCatalogProvider);
     final dishes = catalog.value ?? const <CatalogDish>[];
+    final canPublishToday = _menuLoaded && !_publishing && _todayCount > 0;
 
     return Scaffold(
       backgroundColor: colors.surface,
@@ -386,25 +390,42 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
       ),
       bottomNavigationBar: _BottomActionContainer(
         child: !_catalogView
-            ? ElevatedButton.icon(
-                onPressed: _publishing || !_menuLoaded
-                    ? null
-                    : () => _publish(dishes),
-                icon: _publishing
-                    ? SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2.5,
-                          color: colors.onPrimary,
+            ? Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (_menuLoaded && _todayCount == 0)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        'Agrega al menos un plato para publicar tu menú',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w700,
+                          color: colors.onSurfaceVariant,
                         ),
-                      )
-                    : const Icon(Icons.visibility_outlined),
-                label: Text(
-                  _published
-                      ? 'Actualizar menú de hoy'
-                      : 'Publicar menú de hoy',
-                ),
+                      ),
+                    ),
+                  ElevatedButton.icon(
+                    onPressed: canPublishToday ? () => _publish(dishes) : null,
+                    icon: _publishing
+                        ? SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.5,
+                              color: colors.onPrimary,
+                            ),
+                          )
+                        : const Icon(Icons.visibility_outlined),
+                    label: Text(
+                      _published
+                          ? 'Actualizar menú de hoy'
+                          : 'Publicar menú de hoy',
+                    ),
+                  ),
+                ],
               )
             : ElevatedButton.icon(
                 onPressed: _savePermanentChanges,
@@ -576,14 +597,14 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
       ),
       (
         key: 'bebida',
-        title: 'Bebida',
+        title: 'Bebidas',
         icon: Icons.local_drink_outlined,
         kind: DishKind.bebida,
         items: _today[DishKind.bebida] ?? const <String>[],
       ),
       (
         key: 'postre',
-        title: 'Postre',
+        title: 'Postres',
         icon: Icons.icecream_outlined,
         kind: DishKind.postre,
         items: _today[DishKind.postre] ?? const <String>[],
@@ -597,6 +618,12 @@ class _OwnerMenuScreenState extends ConsumerState<OwnerMenuScreen> {
           prices: prices,
           onEditSettings: () => context.go('/owner/settings'),
         ),
+        if (_todayCount == 0) ...[
+          const SizedBox(height: 12),
+          _EmptyTodayMenuBanner(
+            onAddDish: () => _openOptions(DishKind.segundo),
+          ),
+        ],
         const SizedBox(height: 12),
         for (final sec in sections) ...[
           _AccordionSectionCard(
@@ -1346,7 +1373,11 @@ class _AccordionSectionCard extends StatelessWidget {
                   OutlinedButton.icon(
                     onPressed: onChooseDishes,
                     icon: const Icon(Icons.add_rounded, size: 18),
-                    label: const Text('Agregar plato del día'),
+                    label: Text(
+                      items.isEmpty
+                          ? 'Agregar plato'
+                          : 'Agregar plato del día',
+                    ),
                   ),
                 ],
               ),
@@ -1755,4 +1786,78 @@ Future<bool> _showConfirmDeleteDialog(
     ),
   );
   return result == true;
+}
+
+class _EmptyTodayMenuBanner extends StatelessWidget {
+  const _EmptyTodayMenuBanner({required this.onAddDish});
+
+  final VoidCallback onAddDish;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: colors.outlineVariant),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: colors.primaryContainer,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(
+              Icons.restaurant_menu_rounded,
+              size: 20,
+              color: colors.primary,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Sin platos para hoy todavía',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    color: colors.onSurface,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Empieza agregando tus platos por categoría.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: colors.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          FilledButton.tonalIcon(
+            onPressed: onAddDish,
+            style: FilledButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            ),
+            icon: const Icon(Icons.add_rounded, size: 16),
+            label: const Text(
+              'Agregar plato',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
