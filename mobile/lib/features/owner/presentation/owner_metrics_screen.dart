@@ -65,13 +65,33 @@ class _OwnerMetricsScreenState extends ConsumerState<OwnerMetricsScreen> {
               border: Border(bottom: BorderSide(color: colors.outlineVariant)),
             ),
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              Text('Tus números', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: colors.onSurface)),
-              Text(
-                '${ref.watch(ownerRestaurantNameProvider)} · '
-                '${_capitalize(_weekdays[now.weekday - 1])} ${now.day} de ${_months[now.month - 1]}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant),
+              Row(
+                children: [
+                  if (GoRouter.of(context).canPop()) ...[
+                    IconButton.filledTonal(
+                      tooltip: 'Volver a Ajustes',
+                      onPressed: () => context.pop(),
+                      icon: const Icon(Icons.arrow_back_rounded),
+                    ),
+                    const SizedBox(width: 10),
+                  ],
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Tus números',
+                            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: colors.onSurface)),
+                        Text(
+                          '${ref.watch(ownerRestaurantNameProvider)} · '
+                          '${_capitalize(_weekdays[now.weekday - 1])} ${now.day} de ${_months[now.month - 1]}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 10),
               OwnerSegmented(

@@ -91,10 +91,10 @@ class OwnerSettingsScreen extends ConsumerWidget {
                 const SizedBox(height: 12),
                 _LinkCard(
                   icon: Icons.bar_chart_rounded,
-                  title: 'Tus números',
-                  subtitle: 'Hoy, dinero y clientes por renovar',
+                  title: 'Reportes',
+                  subtitle: 'Resumen de ventas, cierre y movimientos del día',
                   action: 'Ver',
-                  onTap: () => context.go('/owner/metricas'),
+                  onTap: () => context.push('/owner/metricas'),
                 ),
                 const SizedBox(height: 12),
                 _LinkCard(

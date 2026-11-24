@@ -9,8 +9,17 @@ import '../domain/models/daily_menu.dart';
 import '../domain/models/extras_models.dart';
 import '../domain/models/menu_models.dart';
 import 'owner_controller.dart';
+import 'scan_result_screen.dart';
 
 const _ownerTabs = [
+  (
+    '/owner/caja',
+    BocadooNavItem(
+      label: 'Caja',
+      icon: Icons.point_of_sale_outlined,
+      selectedIcon: Icons.point_of_sale_rounded,
+    ),
+  ),
   (
     '/owner/menu',
     BocadooNavItem(
@@ -25,22 +34,6 @@ const _ownerTabs = [
       label: 'Planes',
       icon: Icons.inventory_2_outlined,
       selectedIcon: Icons.inventory_2_rounded,
-    ),
-  ),
-  (
-    '/owner/caja',
-    BocadooNavItem(
-      label: 'Caja',
-      icon: Icons.qr_code_scanner_rounded,
-      selectedIcon: Icons.qr_code_scanner_rounded,
-    ),
-  ),
-  (
-    '/owner/metricas',
-    BocadooNavItem(
-      label: 'Métricas',
-      icon: Icons.bar_chart_rounded,
-      selectedIcon: Icons.bar_chart_rounded,
     ),
   ),
   (
@@ -151,9 +144,17 @@ class _OwnerShellState extends ConsumerState<OwnerShell> {
     }
 
     final tabs = isCashier ? _cashierTabs : _ownerTabs;
-    final rawIndex = tabs.indexWhere((t) => widget.location.startsWith(t.$1));
-    final fallbackIndex = isCashier ? 0 : 2; // Caja al centro para Dueño
-    final currentIndex = rawIndex < 0 ? fallbackIndex : rawIndex;
+    int currentIndex;
+    if (isCashier) {
+      final rawIndex = tabs.indexWhere((t) => widget.location.startsWith(t.$1));
+      currentIndex = rawIndex < 0 ? 0 : rawIndex;
+    } else if (widget.location.startsWith('/owner/metricas') ||
+        widget.location.startsWith('/owner/opiniones')) {
+      currentIndex = 3; // Ajustes (incluye Reportes y Opiniones)
+    } else {
+      final rawIndex = tabs.indexWhere((t) => widget.location.startsWith(t.$1));
+      currentIndex = rawIndex < 0 ? 0 : rawIndex; // Caja por defecto
+    }
 
     return Scaffold(
       body: widget.child,
@@ -167,23 +168,26 @@ class _OwnerShellState extends ConsumerState<OwnerShell> {
               currentIndex: currentIndex,
               items: [for (final t in tabs) t.$2],
               onTap: (i) => context.go(tabs[i].$1),
+              onCenterQrTap: () => openScannerFlow(context, ref),
             ),
     );
   }
 }
 
-/// Barra inferior del Dueño con `Caja` en el centro (posición 3 de 5) como
-/// acción principal destacada en el morado de marca de Bocadoo.
+/// Barra inferior del Dueño de 5 espacios:
+/// `Caja`, `Menú`, botón circular central QR morado (sin texto), `Planes`, `Ajustes`.
 class _OwnerCenterBottomBar extends StatelessWidget {
   const _OwnerCenterBottomBar({
     required this.currentIndex,
     required this.items,
     required this.onTap,
+    required this.onCenterQrTap,
   });
 
   final int currentIndex;
   final List<BocadooNavItem> items;
   final ValueChanged<int> onTap;
+  final VoidCallback onCenterQrTap;
 
   @override
   Widget build(BuildContext context) {
@@ -199,25 +203,42 @@ class _OwnerCenterBottomBar extends StatelessWidget {
         child: SafeArea(
           top: false,
           child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 70),
+            constraints: const BoxConstraints(minHeight: 68),
             child: IntrinsicHeight(
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  for (var i = 0; i < items.length; i++)
-                    Expanded(
-                      child: i == 2
-                          ? _CenterCajaTab(
-                              selected: currentIndex == i,
-                              label: items[i].label,
-                              onTap: () => onTap(i),
-                            )
-                          : _StandardNavTab(
-                              item: items[i],
-                              selected: currentIndex == i,
-                              onTap: () => onTap(i),
-                            ),
+                  Expanded(
+                    child: _StandardNavTab(
+                      item: items[0],
+                      selected: currentIndex == 0,
+                      onTap: () => onTap(0),
                     ),
+                  ),
+                  Expanded(
+                    child: _StandardNavTab(
+                      item: items[1],
+                      selected: currentIndex == 1,
+                      onTap: () => onTap(1),
+                    ),
+                  ),
+                  Expanded(
+                    child: _CenterQrTab(onTap: onCenterQrTap),
+                  ),
+                  Expanded(
+                    child: _StandardNavTab(
+                      item: items[2],
+                      selected: currentIndex == 2,
+                      onTap: () => onTap(2),
+                    ),
+                  ),
+                  Expanded(
+                    child: _StandardNavTab(
+                      item: items[3],
+                      selected: currentIndex == 3,
+                      onTap: () => onTap(3),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -228,64 +249,36 @@ class _OwnerCenterBottomBar extends StatelessWidget {
   }
 }
 
-class _CenterCajaTab extends StatelessWidget {
-  const _CenterCajaTab({
-    required this.selected,
-    required this.label,
-    required this.onTap,
-  });
+class _CenterQrTab extends StatelessWidget {
+  const _CenterQrTab({required this.onTap});
 
-  final bool selected;
-  final String label;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return InkWell(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: AppColors.lightPrimary,
-                shape: BoxShape.circle,
-                border: selected
-                    ? Border.all(color: cs.primaryContainer, width: 2.5)
-                    : null,
-                boxShadow: [
-                  BoxShadow(
-                    color: AppColors.lightPrimary.withValues(alpha: 0.3),
-                    blurRadius: 8,
-                    offset: const Offset(0, 3),
-                  ),
-                ],
-              ),
-              child: const Icon(
-                Icons.qr_code_scanner_rounded,
-                color: AppColors.lightOnPrimary,
-                size: 22,
-              ),
-            ),
-            const SizedBox(height: 2),
-            FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text(
-                label,
-                maxLines: 1,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w900,
-                  color: cs.primary,
+    return Tooltip(
+      message: 'Escanear QR',
+      child: Center(
+        child: Material(
+          color: AppColors.lightPrimary,
+          elevation: 4,
+          shadowColor: AppColors.lightPrimary.withValues(alpha: 0.35),
+          shape: const CircleBorder(),
+          child: InkWell(
+            customBorder: const CircleBorder(),
+            onTap: onTap,
+            child: const SizedBox(
+              width: 52,
+              height: 52,
+              child: Center(
+                child: Icon(
+                  Icons.qr_code_scanner,
+                  color: AppColors.lightOnPrimary,
+                  size: 24,
                 ),
               ),
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -383,16 +376,16 @@ class _OwnerOnboardingDialogState extends State<_OwnerOnboardingDialog> {
           'En Planes crea paquetes prepagados (ej. 10 o 20 almuerzos) para fidelizar clientes y asegurar ingresos por adelantado.',
     ),
     _OnboardingStepData(
-      icon: Icons.qr_code_scanner_rounded,
-      title: '3. Tu Caja es el centro de todo',
+      icon: Icons.qr_code_scanner,
+      title: '3. Escanea QR desde cualquier lugar',
       description:
-          'Destaca el botón central morado Caja: ahí escanearás códigos QR, entregarás pedidos en camino y registrarás ventas rápidas.',
+          'Usa el botón central morado para escanear pases o pedidos al instante, y revisa en Caja los pedidos en camino y movimientos.',
     ),
     _OnboardingStepData(
       icon: Icons.bar_chart_rounded,
-      title: '4. Controla tus métricas y cierre',
+      title: '4. Controla tus reportes y cierre',
       description:
-          'En Métricas y Ajustes podrás revisar tus ingresos del día, hacer cierre de caja y editar horarios o precios cuando quieras.',
+          'En Ajustes > Reportes podrás revisar tus ventas, hacer cierre de caja y editar horarios o precios cuando quieras.',
     ),
   ];
 
