@@ -501,6 +501,69 @@ class CustomerController extends ChangeNotifier {
   DateTime? _lastSseRedemptionAt;
   bool _isLocationPromptOpen = false;
   final Set<String> _flashOrderNumbers = {};
+  final Set<String> _completedOrderKeys = <String>{};
+
+  void _markOrderCompletedLocally(ActiveOrder order) {
+    final numKey = order.orderNumber.trim();
+    if (numKey.isNotEmpty) {
+      _completedOrderKeys.add(numKey);
+      unawaited(_repository.acknowledgeOrder(numKey));
+    }
+    final oid = order.id?.trim();
+    if (oid != null && oid.isNotEmpty) {
+      _completedOrderKeys.add(oid);
+    }
+  }
+
+  bool _isLocallyCompletedOrder(ActiveOrder order) {
+    if (order.isDelivered) return true;
+    final numKey = order.orderNumber.trim();
+    if (numKey.isNotEmpty && _completedOrderKeys.contains(numKey)) return true;
+    final oid = order.id?.trim();
+    if (oid != null && oid.isNotEmpty && _completedOrderKeys.contains(oid)) {
+      return true;
+    }
+    return false;
+  }
+
+  bool _isOrderClearedByPassOrActivity({
+    required ActiveOrder order,
+    required List<CustomerPass> prevPasses,
+    required List<CustomerPass> nextPasses,
+    required List<ActivityItem> prevActivity,
+    required List<ActivityItem> nextActivity,
+  }) {
+    if (_isLocallyCompletedOrder(order)) return true;
+    final restId = order.restaurantId;
+    if (restId != null && restId.isNotEmpty) {
+      final prevPass =
+          prevPasses.where((p) => p.restaurantId == restId).firstOrNull;
+      final nextPass =
+          nextPasses.where((p) => p.restaurantId == restId).firstOrNull;
+      if (prevPass != null &&
+          nextPass != null &&
+          nextPass.remainingLunches < prevPass.remainingLunches) {
+        _markOrderCompletedLocally(order);
+        return true;
+      }
+    }
+    final prevIds = {for (final a in prevActivity) a.id};
+    final orderRestLower = order.restaurantName.trim().toLowerCase();
+    for (final a in nextActivity) {
+      if (prevIds.contains(a.id)) continue;
+      final detailLower = a.detail.toLowerCase();
+      final isCompletedLunch = !a.positive &&
+          (detailLower.contains('completado') ||
+              a.value.toLowerCase().contains('almuerzo'));
+      final sameRestaurant = orderRestLower.isEmpty ||
+          a.name.trim().toLowerCase() == orderRestLower;
+      if (isCompletedLunch && sameRestaurant) {
+        _markOrderCompletedLocally(order);
+        return true;
+      }
+    }
+    return false;
+  }
 
   bool get isLocationPromptOpen => _isLocationPromptOpen;
 
@@ -997,9 +1060,12 @@ class CustomerController extends ChangeNotifier {
       final passes = await passesFuture;
       final restaurants = await restaurantsFuture;
       final table = await tableFuture;
-      final order = await orderFuture;
+      final rawOrder = await orderFuture;
       final activity = await activityFuture;
       final feedback = await feedbackFuture;
+      final order = rawOrder != null && !_isLocallyCompletedOrder(rawOrder)
+          ? rawOrder
+          : null;
       final effectiveTable = _pruneExpiredCollectingTable(table);
 
       final stamps = <String, StampCard>{};
@@ -1100,25 +1166,44 @@ class CustomerController extends ChangeNotifier {
     try {
       final previousOrder = _state.activeOrder;
       final previousTable = _state.activeTable;
-      final order = await _repository.getActiveOrder();
+      final previousPasses = _state.passes;
+      final previousActivity = _state.recentActivity;
+      final fetchedOrder = await _repository.getActiveOrder();
       final table = await _repository.getActiveTable();
-      final orderJustFinished = (previousOrder != null && order == null) ||
-          (order != null &&
-              order.isDelivered &&
+      final rawJustFinished = (previousOrder != null && fetchedOrder == null) ||
+          (fetchedOrder != null &&
+              fetchedOrder.isDelivered &&
               !(previousOrder?.isDelivered ?? false));
       final tableJustFinished = previousTable != null && table == null;
 
       List<CustomerPass>? updatedPasses;
       List<ActivityItem>? updatedActivity;
       final pendingList = _state.pendingPlanRequests;
-      if (orderJustFinished || tableJustFinished || pendingList.isNotEmpty) {
+      if (rawJustFinished ||
+          tableJustFinished ||
+          pendingList.isNotEmpty ||
+          fetchedOrder != null) {
         try {
           updatedPasses = await _repository.getActivePasses();
           updatedActivity = await _repository.getRecentActivity();
         } catch (_) {}
       }
 
-      final activePasses = updatedPasses ?? _state.passes;
+      final activePasses = updatedPasses ?? previousPasses;
+      final activeActivity = updatedActivity ?? previousActivity;
+      var order = fetchedOrder;
+      if (order != null &&
+          _isOrderClearedByPassOrActivity(
+            order: order,
+            prevPasses: previousPasses,
+            nextPasses: activePasses,
+            prevActivity: previousActivity,
+            nextActivity: activeActivity,
+          )) {
+        order = null;
+      }
+      final orderJustFinished =
+          rawJustFinished || (previousOrder != null && order == null);
       final reconciled = _reconcilePendingPlanRequests(
         pendingList,
         activePasses,
@@ -1250,14 +1335,30 @@ class CustomerController extends ChangeNotifier {
     if (_disposed || _state.status == CustomerStatus.initial) return;
     try {
       final previousPasses = _state.passes;
+      final previousOrder = _state.activeOrder;
+      final previousActivity = _state.recentActivity;
       final pendingList = _state.pendingPlanRequests;
-      final results = await Future.wait([
+      final results = await Future.wait<dynamic>([
         _repository.getActivePasses(),
         _repository.getRecentActivity(),
+        _repository
+            .getActiveOrder()
+            .then<ActiveOrder?>((v) => v, onError: (_) => previousOrder),
       ]);
       if (_disposed || !_paseVisible) return;
       final passes = results[0] as List<CustomerPass>;
       final activity = results[1] as List<ActivityItem>;
+      var resolvedOrder = results[2] as ActiveOrder?;
+      if (resolvedOrder != null &&
+          _isOrderClearedByPassOrActivity(
+            order: resolvedOrder,
+            prevPasses: previousPasses,
+            nextPasses: passes,
+            prevActivity: previousActivity,
+            nextActivity: activity,
+          )) {
+        resolvedOrder = null;
+      }
       final nextMenuStates = await _resolveMenuStatesForPasses(
         passes,
         _state.restaurants,
@@ -1305,8 +1406,11 @@ class CustomerController extends ChangeNotifier {
       _emit(_state.copyWith(
         passes: passes,
         passIndex: activatedIdx,
-        selectedQrMode:
-            firstActivated != null ? QrMode.plan : _state.selectedQrMode,
+        selectedQrMode: firstActivated != null
+            ? QrMode.plan
+            : (resolvedOrder == null && _state.selectedQrMode == QrMode.preorden
+                ? QrMode.plan
+                : _state.selectedQrMode),
         pendingPlanRequests: reconciled.remaining,
         focusedWalletCardKey: firstActivated != null
             ? 'pass:${firstActivated.id}'
@@ -1314,6 +1418,8 @@ class CustomerController extends ChangeNotifier {
         walletFocusTick: firstActivated != null
             ? _state.walletFocusTick + 1
             : _state.walletFocusTick,
+        activeOrder: resolvedOrder,
+        clearActiveOrder: resolvedOrder == null,
         recentActivity: activity,
         consumptionNotice: notice,
         redemptionCelebrationTick: celebrationTick,
@@ -1322,15 +1428,48 @@ class CustomerController extends ChangeNotifier {
         todayMenuPublishedByRest: nextMenuStates.published,
         todayMenuAvailabilityByRest: nextMenuStates.availability,
       ));
+      _syncOrderPolling(
+        resolvedOrder,
+        table: _state.activeTable,
+        passes: passes,
+        menuPublishedByRest: nextMenuStates.published,
+        pendingPlanRequests: reconciled.remaining,
+      );
     } catch (_) {}
   }
 
   Future<void> _refreshRecentActivity() async {
     if (_disposed) return;
     try {
+      final prevActivity = _state.recentActivity;
       final activity = await _repository.getRecentActivity();
       if (_disposed) return;
-      _emit(_state.copyWith(recentActivity: activity));
+      final activeOrd = _state.activeOrder;
+      final shouldClear = activeOrd != null &&
+          _isOrderClearedByPassOrActivity(
+            order: activeOrd,
+            prevPasses: _state.passes,
+            nextPasses: _state.passes,
+            prevActivity: prevActivity,
+            nextActivity: activity,
+          );
+      _emit(_state.copyWith(
+        recentActivity: activity,
+        clearActiveOrder: shouldClear,
+        selectedQrMode:
+            shouldClear && _state.selectedQrMode == QrMode.preorden
+                ? QrMode.plan
+                : _state.selectedQrMode,
+      ));
+      if (shouldClear) {
+        _syncOrderPolling(
+          null,
+          table: _state.activeTable,
+          passes: _state.passes,
+          menuPublishedByRest: _state.todayMenuPublishedByRest,
+          pendingPlanRequests: _state.pendingPlanRequests,
+        );
+      }
     } catch (_) {}
   }
 
@@ -1410,6 +1549,16 @@ class CustomerController extends ChangeNotifier {
         return;
       case PaseEventType.canjeRegistrado:
         _lastSseRedemptionAt = DateTime.now();
+        final currentOrder = _state.activeOrder;
+        final eventRestLower = (event.restauranteNombre ?? '').trim().toLowerCase();
+        final clearCurrentOrder = currentOrder != null &&
+            (eventRestLower.isEmpty ||
+                currentOrder.hasPlan ||
+                currentOrder.restaurantName.trim().toLowerCase() ==
+                    eventRestLower);
+        if (clearCurrentOrder) {
+          _markOrderCompletedLocally(currentOrder);
+        }
         _applyBalanceFromEvent(
           restauranteNombre: event.restauranteNombre,
           saldoRestante: event.saldoRestante,
@@ -1420,6 +1569,7 @@ class CustomerController extends ChangeNotifier {
           reverted: false,
         );
         unawaited(_refreshRecentActivity());
+        unawaited(_refreshBalanceOnce());
         final restName = event.restauranteNombre?.trim();
         final plato = event.platoNombre?.trim();
         final subtitleParts = <String>[
@@ -1429,6 +1579,10 @@ class CustomerController extends ChangeNotifier {
             'Te quedan ${event.saldoRestante} almuerzos',
         ];
         _emit(_state.copyWith(
+          clearActiveOrder: clearCurrentOrder,
+          selectedQrMode: clearCurrentOrder && _state.selectedQrMode == QrMode.preorden
+              ? QrMode.plan
+              : _state.selectedQrMode,
           consumptionNotice: subtitleParts.isNotEmpty
               ? 'Almuerzo canjeado · ${subtitleParts.join(' · ')}'
               : 'Almuerzo canjeado',
@@ -1437,6 +1591,15 @@ class CustomerController extends ChangeNotifier {
           redemptionCelebrationSubtitle:
               subtitleParts.isNotEmpty ? subtitleParts.join(' · ') : null,
         ));
+        if (clearCurrentOrder) {
+          _syncOrderPolling(
+            null,
+            table: _state.activeTable,
+            passes: _state.passes,
+            menuPublishedByRest: _state.todayMenuPublishedByRest,
+            pendingPlanRequests: _state.pendingPlanRequests,
+          );
+        }
       case PaseEventType.canjeRevertido:
         _applyBalanceFromEvent(
           restauranteNombre: event.restauranteNombre,

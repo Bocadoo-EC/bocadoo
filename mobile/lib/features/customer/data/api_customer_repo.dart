@@ -736,11 +736,25 @@ class ApiCustomerRepository implements ICustomerRepository {
     final prefs = await SharedPreferences.getInstance();
     for (final item in items) {
       final estado = (item['estado'] ?? '').toString().toUpperCase();
-      if (estado == 'EXPIRADA' ||
-          estado == 'CANCELADA' ||
-          estado == 'RECHAZADA' ||
-          estado == 'FINALIZADA' ||
-          estado == 'ENTREGADA') {
+      const finishedStates = {
+        'COMPLETADO',
+        'COMPLETADA',
+        'ENTREGADO',
+        'ENTREGADA',
+        'SERVIDO',
+        'SERVIDA',
+        'FINALIZADA',
+        'FINALIZADO',
+        'CANCELADO',
+        'CANCELADA',
+        'RECHAZADO',
+        'RECHAZADA',
+        'EXPIRADO',
+        'EXPIRADA',
+        'CANJEADO',
+        'CANJEADA',
+      };
+      if (finishedStates.contains(estado)) {
         continue;
       }
 
@@ -749,19 +763,10 @@ class ApiCustomerRepository implements ICustomerRepository {
       if (id.isNotEmpty && numero.isNotEmpty) {
         _orderIdByNumber[numero] = id;
       }
-
-      if (estado == 'SERVIDA') {
-        final seenById = id.isNotEmpty && prefs.getBool('pedido_visto_$id') == true;
-        final seenByNumber =
-            numero.isNotEmpty && prefs.getBool('pedido_visto_$numero') == true;
-        if (seenById || seenByNumber) continue;
-        final createdRaw = item['creadoEn']?.toString();
-        final created = createdRaw != null ? DateTime.tryParse(createdRaw) : null;
-        if (created != null &&
-            EcuadorTime.now().difference(created.toUtc().subtract(const Duration(hours: 5))).inHours >= 12) {
-          continue;
-        }
-      }
+      final seenById = id.isNotEmpty && prefs.getBool('pedido_visto_$id') == true;
+      final seenByNumber =
+          numero.isNotEmpty && prefs.getBool('pedido_visto_$numero') == true;
+      if (seenById || seenByNumber) continue;
 
       return _mapPedidoToActiveOrder(item);
     }
@@ -2045,8 +2050,15 @@ class ApiCustomerRepository implements ICustomerRepository {
 
     final estado = (json['estado'] ?? 'EN_CAMINO').toString().toUpperCase();
     final status = switch (estado) {
-      'CANJEADA' => 'LISTO',
-      'SERVIDA' || 'ENTREGADA' || 'FINALIZADA' => 'ENTREGADO',
+      'CANJEADA' || 'CANJEADO' => 'LISTO',
+      'SERVIDA' ||
+      'SERVIDO' ||
+      'ENTREGADA' ||
+      'ENTREGADO' ||
+      'FINALIZADA' ||
+      'FINALIZADO' ||
+      'COMPLETADA' ||
+      'COMPLETADO' => 'ENTREGADO',
       _ => 'PREPARANDO',
     };
 

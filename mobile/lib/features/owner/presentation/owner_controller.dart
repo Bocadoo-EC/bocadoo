@@ -536,16 +536,21 @@ final cajaLiveSyncProvider =
 
 class CajaLiveSyncNotifier extends Notifier<CajaLiveSyncState> {
   final Set<String> _idsVistos = <String>{};
-  final Map<String, DateTime> _recentlyRemovedOrders = <String, DateTime>{};
+  final Set<String> _pedidosResueltosLocal = <String>{};
   bool _hasSeededSeenIds = false;
   bool _inFlight = false;
   bool _disposed = false;
+
+  static bool _isPendingOrderState(String rawEstado) {
+    final upper = rawEstado.trim().toUpperCase();
+    return upper == 'EN_CAMINO' || upper == 'PENDIENTE';
+  }
 
   @override
   CajaLiveSyncState build() {
     ref.watch(ownerRestaurantIdProvider);
     _idsVistos.clear();
-    _recentlyRemovedOrders.clear();
+    _pedidosResueltosLocal.clear();
     _hasSeededSeenIds = false;
     _inFlight = false;
     _disposed = false;
@@ -558,9 +563,7 @@ class CajaLiveSyncNotifier extends Notifier<CajaLiveSyncState> {
   void removeOrderOptimistically(String orderNumber) {
     final norm = orderNumber.trim();
     if (norm.isEmpty || _disposed) return;
-    _recentlyRemovedOrders[norm] = DateTime.now().add(
-      const Duration(seconds: 20),
-    );
+    _pedidosResueltosLocal.add(norm);
     final filtered = state.enCaminoOrders
         .where((o) => o.number != norm)
         .toList(growable: false);
@@ -574,7 +577,6 @@ class CajaLiveSyncNotifier extends Notifier<CajaLiveSyncState> {
     if (_disposed) return;
     final cid = clientId?.trim();
     final name = dinerName?.trim().toLowerCase();
-    final expiry = DateTime.now().add(const Duration(seconds: 20));
     var changed = false;
     final filtered = state.enCaminoOrders.where((o) {
       final byId = cid != null && cid.isNotEmpty && o.clientId == cid;
@@ -583,7 +585,7 @@ class CajaLiveSyncNotifier extends Notifier<CajaLiveSyncState> {
           name.isNotEmpty &&
           o.dinerName.trim().toLowerCase() == name;
       if ((byId || byName) && o.cashToCollectCents == 0) {
-        _recentlyRemovedOrders[o.number] = expiry;
+        _pedidosResueltosLocal.add(o.number);
         changed = true;
         return false;
       }
@@ -652,10 +654,13 @@ class CajaLiveSyncNotifier extends Notifier<CajaLiveSyncState> {
       if (_disposed) return const [];
 
       final rawOrders = results[0] as List<OwnerOrder>;
-      final now = DateTime.now();
-      _recentlyRemovedOrders.removeWhere((_, exp) => !exp.isAfter(now));
       final orders = rawOrders
-          .where((o) => !_recentlyRemovedOrders.containsKey(o.number))
+          .where(
+            (o) =>
+                _isPendingOrderState(o.estado) &&
+                !_pedidosResueltosLocal.contains(o.number) &&
+                (o.id == null || !_pedidosResueltosLocal.contains(o.id!)),
+          )
           .toList(growable: false);
       final tables = results[1] as List<PendingTable>;
       final payments = results[2] as List<PendingPaymentItem>;
@@ -1316,8 +1321,26 @@ class OwnerController extends Notifier<OwnerState> {
         _syncAfterPlanChange(removeOrderNumber: current.order.number);
         state = OwnerSuccess(enriched, redeemed: true);
       } else {
-        if (res.isAlreadyRedeemed) {
+        final msgLower = res.supportingLine.toLowerCase();
+        final conflictOrAlready = res.isAlreadyRedeemed ||
+            msgLower.contains('cambió mientras') ||
+            msgLower.contains('anteriormente') ||
+            msgLower.contains('ya fue');
+        if (conflictOrAlready) {
           _syncAfterPlanChange(removeOrderNumber: current.order.number);
+          final conflictResult = ScanResult(
+            isValid: false,
+            outcome: 'GRIS',
+            title: 'Pedido ya descontado',
+            supportingLine: 'Este pedido ya fue descontado anteriormente',
+            studentName: res.studentName ?? current.order.dinerName,
+            actionRequired: 'NINGUNA',
+          );
+          state = OwnerError(
+            conflictResult.supportingLine,
+            result: conflictResult,
+          );
+          return;
         }
         state = OwnerError(res.supportingLine, result: res);
       }

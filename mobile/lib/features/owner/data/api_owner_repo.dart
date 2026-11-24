@@ -586,9 +586,38 @@ class ApiOwnerRepository
   // ---------------------------------------------------------------------------
 
   final Set<String> _redeemedCodes = <String>{};
+  final Set<String> _pedidosResueltosLocal = <String>{};
   bool _lastAlreadyRedeemed = false;
   final List<TransactionItem> _sessionValidatedTransactions =
       <TransactionItem>[];
+
+  static bool _isPendingOrderState(String rawEstado) {
+    final upper = rawEstado.trim().toUpperCase();
+    return upper == 'EN_CAMINO' || upper == 'PENDIENTE';
+  }
+
+  static bool _isConflictOrAlreadyRedeemed(ApiException e) {
+    if (e.status == 409) return true;
+    final upper = '${e.code} ${e.detail} ${e.userMessage}'.toUpperCase();
+    return upper.contains('CAMBI') ||
+        upper.contains('SERVID') ||
+        upper.contains('CANJEAD') ||
+        upper.contains('DUPLICAD') ||
+        upper.contains('CONSUMO');
+  }
+
+  void markOrderResolvedLocally({String? orderId, String? orderNumber}) {
+    final num = orderNumber?.trim();
+    if (num != null && num.isNotEmpty) {
+      _pedidosResueltosLocal.add(num);
+      _redeemedCodes.add('ORD:$num');
+      _ordersByNumber.remove(num);
+    }
+    final oid = orderId?.trim();
+    if (oid != null && oid.isNotEmpty) {
+      _pedidosResueltosLocal.add(oid);
+    }
+  }
 
   Future<bool> _isOrderAlreadyServed(
     String orderIdOrCode,
@@ -939,8 +968,10 @@ class ApiOwnerRepository
               } on ApiException {
                 // Idempotente si ya estaba servida en backend.
               }
-              _redeemedCodes.add('ORD:${ord.number}');
-              _ordersByNumber.remove(ord.number);
+              markOrderResolvedLocally(
+                orderId: ord.id,
+                orderNumber: ord.number,
+              );
               break;
             }
           }
@@ -3119,9 +3150,13 @@ class ApiOwnerRepository
     final orders = <OwnerOrder>[];
     for (final raw in list.whereType<Map>()) {
       final estado = (raw['estado'] ?? '').toString().toUpperCase();
-      if (estado != 'EN_CAMINO' && estado != 'CANJEADA') continue;
+      if (!_isPendingOrderState(estado)) continue;
       final mapped = _mapOrder(Map<String, dynamic>.from(raw));
-      if (_pendingDeliverOrders.contains(mapped.number)) continue;
+      if (_pendingDeliverOrders.contains(mapped.number) ||
+          _pedidosResueltosLocal.contains(mapped.number) ||
+          (mapped.id != null && _pedidosResueltosLocal.contains(mapped.id!))) {
+        continue;
+      }
       orders.add(mapped);
     }
     return orders;
@@ -3139,9 +3174,13 @@ class ApiOwnerRepository
     final orders = <OwnerOrder>[];
     for (final raw in list.whereType<Map>()) {
       final estado = (raw['estado'] ?? '').toString().toUpperCase();
-      if (estado != 'EN_CAMINO') continue;
+      if (!_isPendingOrderState(estado)) continue;
       final mapped = _mapOrder(Map<String, dynamic>.from(raw));
-      if (_pendingDeliverOrders.contains(mapped.number)) continue;
+      if (_pendingDeliverOrders.contains(mapped.number) ||
+          _pedidosResueltosLocal.contains(mapped.number) ||
+          (mapped.id != null && _pedidosResueltosLocal.contains(mapped.id!))) {
+        continue;
+      }
       orders.add(mapped);
     }
     return orders;
@@ -3290,7 +3329,11 @@ class ApiOwnerRepository
 
     final ordKey = 'ORD:${order.number}';
     if (_redeemedCodes.contains(ordKey) ||
+        _pedidosResueltosLocal.contains(order.number) ||
+        (order.id != null && _pedidosResueltosLocal.contains(order.id!)) ||
+        !_isPendingOrderState(order.estado) ||
         _inFlightOrders.contains(order.number)) {
+      markOrderResolvedLocally(orderId: order.id, orderNumber: order.number);
       return (
         isValid: false,
         order: null,
@@ -3380,7 +3423,11 @@ class ApiOwnerRepository
 
     final ordKey = 'ORD:${order.number}';
     if (_redeemedCodes.contains(ordKey) ||
+        _pedidosResueltosLocal.contains(order.number) ||
+        (order.id != null && _pedidosResueltosLocal.contains(order.id!)) ||
+        !_isPendingOrderState(order.estado) ||
         _inFlightOrders.contains(order.number)) {
+      markOrderResolvedLocally(orderId: order.id, orderNumber: order.number);
       return ScanResult(
         isValid: false,
         outcome: 'GRIS',
@@ -3454,7 +3501,7 @@ class ApiOwnerRepository
         );
       }
 
-      _redeemedCodes.add(ordKey);
+      markOrderResolvedLocally(orderId: order.id, orderNumber: order.number);
       _redeemedCodes.add(codeKey);
       _redeemedCodes.add(
         BocadooQrParser.generateOrderCode(
@@ -3569,12 +3616,16 @@ class ApiOwnerRepository
 
     final ordKey = 'ORD:${order.number}';
     if (_redeemedCodes.contains(ordKey) ||
+        _pedidosResueltosLocal.contains(order.number) ||
+        (order.id != null && _pedidosResueltosLocal.contains(order.id!)) ||
+        !_isPendingOrderState(order.estado) ||
         _inFlightOrders.contains(order.number)) {
+      markOrderResolvedLocally(orderId: order.id, orderNumber: order.number);
       return ScanResult(
         isValid: false,
-        outcome: 'ROJO',
-        title: 'Ya canjeado',
-        supportingLine: 'Este código ya fue canjeado anteriormente',
+        outcome: 'GRIS',
+        title: 'Pedido ya descontado',
+        supportingLine: 'Este pedido ya fue descontado anteriormente',
         studentName: order.dinerName,
         actionRequired: 'NINGUNA',
       );
@@ -3613,6 +3664,30 @@ class ApiOwnerRepository
         if (!e.isNetwork && e.status != 504) {
           _idempotency.done(validarIntent);
         }
+        if (_isConflictOrAlreadyRedeemed(e)) {
+          markOrderResolvedLocally(
+            orderId: entry.id,
+            orderNumber: order.number,
+          );
+          try {
+            await guard(
+              () => _api.send<Map<String, dynamic>>(
+                'POST',
+                '${ApiConfig.v1}/caja/pedidos/${entry.id}/servir',
+                restaurant: true,
+              ),
+            );
+          } catch (_) {}
+          _lastError = 'Este pedido ya fue descontado anteriormente';
+          return ScanResult(
+            isValid: false,
+            outcome: 'GRIS',
+            title: 'Pedido ya descontado',
+            supportingLine: 'Este pedido ya fue descontado anteriormente',
+            studentName: order.dinerName,
+            actionRequired: 'NINGUNA',
+          );
+        }
         final detail = e.detail.trim();
         _lastError =
             ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
@@ -3631,8 +3706,7 @@ class ApiOwnerRepository
       final resultado = (validarRes['resultado'] ?? '').toString().toUpperCase();
       final mensaje = (validarRes['mensaje'] ?? '').toString().trim();
       if (resultado == 'DUPLICADO') {
-        _redeemedCodes.add(ordKey);
-        _ordersByNumber.remove(order.number);
+        markOrderResolvedLocally(orderId: entry.id, orderNumber: order.number);
         try {
           await guard(
             () => _api.send<Map<String, dynamic>>(
@@ -3693,8 +3767,7 @@ class ApiOwnerRepository
         if (!e.isNetwork && e.status != 504) {
           _idempotency.done(serveIntent);
         }
-        final alreadyServed = e.status == 409 ||
-            e.detail.toUpperCase().contains('SERVID');
+        final alreadyServed = _isConflictOrAlreadyRedeemed(e);
         if (!alreadyServed) {
           if (consumoId != null && consumoId.isNotEmpty) {
             try {
@@ -3724,7 +3797,7 @@ class ApiOwnerRepository
         }
       }
 
-      _redeemedCodes.add(ordKey);
+      markOrderResolvedLocally(orderId: entry.id, orderNumber: order.number);
       _redeemedCodes.add(
         BocadooQrParser.generateOrderCode(
           order.number,
@@ -3868,6 +3941,12 @@ class ApiOwnerRepository
         rethrow;
       }
     } on ApiException catch (e) {
+      if (_isConflictOrAlreadyRedeemed(e)) {
+        _lastAlreadyRedeemed = true;
+        _lastError = 'Este pedido ya fue descontado anteriormente';
+        markOrderResolvedLocally(orderNumber: orderNumber);
+        return false;
+      }
       final detail = e.detail.trim();
       _lastError = ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
           ? detail
@@ -4033,14 +4112,10 @@ class ApiOwnerRepository
         } catch (_) {}
       }
     } on ApiException catch (e) {
-      final upper = '${e.code} ${e.detail} ${e.userMessage}'.toUpperCase();
-      if (e.status == 409 ||
-          upper.contains('SERVID') ||
-          upper.contains('CANJEAD') ||
-          upper.contains('DUPLICAD') ||
-          upper.contains('CONSUMO')) {
+      if (_isConflictOrAlreadyRedeemed(e)) {
         _lastAlreadyRedeemed = true;
         _lastError = 'Este pedido ya fue descontado anteriormente';
+        markOrderResolvedLocally(orderId: entry.id, orderNumber: entry.number);
       } else {
         _lastError = e.userMessage;
       }

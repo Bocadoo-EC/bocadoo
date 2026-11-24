@@ -43,7 +43,20 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen>
   bool _routeVisible = true;
   bool _pollInFlight = false;
   String? _confirmingOrderNumber;
-  final Set<String> _optimisticallyRemoved = <String>{};
+  final Set<String> _pedidosResueltosLocal = <String>{};
+
+  static bool _isPendingOrderState(String rawEstado) {
+    final upper = rawEstado.trim().toUpperCase();
+    return upper == 'EN_CAMINO' || upper == 'PENDIENTE';
+  }
+
+  static bool _isConflictOrAlreadyMessage(String raw) {
+    final lower = raw.trim().toLowerCase();
+    return lower.contains('cambió mientras') ||
+        lower.contains('anteriormente') ||
+        lower.contains('ya fue') ||
+        lower.contains('409');
+  }
 
   @override
   void initState() {
@@ -244,8 +257,15 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen>
             );
       if (!mounted) return;
       if (!res.isValid) {
-        if (res.isAlreadyRedeemed) {
-          setState(() => _optimisticallyRemoved.add(order.number));
+        final conflictMsg = _isConflictOrAlreadyMessage(res.supportingLine);
+        if (res.isAlreadyRedeemed || conflictMsg) {
+          setState(() => _pedidosResueltosLocal.add(order.number));
+          if (!AppMode.useMock) {
+            ref.read(apiOwnerRepositoryProvider).markOrderResolvedLocally(
+                  orderId: order.id,
+                  orderNumber: order.number,
+                );
+          }
           ref
               .read(cajaLiveSyncProvider.notifier)
               .removeOrderOptimistically(order.number);
@@ -270,7 +290,13 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen>
       }
 
       // Cierre atómico: desaparece inmediatamente de Pedidos en camino y sincroniza Caja.
-      setState(() => _optimisticallyRemoved.add(order.number));
+      setState(() => _pedidosResueltosLocal.add(order.number));
+      if (!AppMode.useMock) {
+        ref.read(apiOwnerRepositoryProvider).markOrderResolvedLocally(
+              orderId: order.id,
+              orderNumber: order.number,
+            );
+      }
       ref
           .read(cajaLiveSyncProvider.notifier)
           .removeOrderOptimistically(order.number);
@@ -335,7 +361,11 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen>
     final lunchesToday =
         ref.watch(dailySummaryProvider).value?.lunchesRedeemedToday ?? 0;
     final visibleOrders = (orders.value ?? const <OwnerOrder>[])
-        .where((o) => !_optimisticallyRemoved.contains(o.number))
+        .where(
+          (o) =>
+              _isPendingOrderState(o.estado) &&
+              !_pedidosResueltosLocal.contains(o.number),
+        )
         .toList(growable: false);
     final count = visibleOrders.length + tables.length;
 
@@ -368,7 +398,11 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen>
               ),
               data: (list) {
                 final filteredList = list
-                    .where((o) => !_optimisticallyRemoved.contains(o.number))
+                    .where(
+                      (o) =>
+                          _isPendingOrderState(o.estado) &&
+                          !_pedidosResueltosLocal.contains(o.number),
+                    )
                     .toList(growable: false);
                 if (clientsAsync.hasValue || clientsAsync.hasError) {
                   _maybeOpenFromScanner(filteredList, clients);
