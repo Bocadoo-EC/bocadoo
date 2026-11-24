@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
@@ -127,10 +129,23 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
         context.pop(check.order);
         return;
       }
+      final alreadyRedeemed =
+          check.errorMessage == 'Este pedido ya fue descontado anteriormente';
+      if (alreadyRedeemed) {
+        ref
+            .read(cajaLiveSyncProvider.notifier)
+            .removeOrderOptimistically(expected.number);
+        ref.invalidate(activeOrdersProvider);
+        ref.invalidate(ordersOnTheWayProvider);
+        ref.invalidate(dailySummaryProvider);
+        unawaited(ref.read(cajaMovementsProvider.notifier).refresh());
+      }
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Código no válido'),
+          title: Text(
+            alreadyRedeemed ? 'Pedido ya descontado' : 'Código no válido',
+          ),
           content: Text(
             check.errorMessage ??
                 'El código no corresponde al pedido #${expected.number}.',
@@ -138,12 +153,16 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
           actions: [
             FilledButton(
               onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Volver a escanear'),
+              child: Text(alreadyRedeemed ? 'Entendido' : 'Volver a escanear'),
             ),
           ],
         ),
       );
       if (!mounted) return;
+      if (alreadyRedeemed) {
+        context.pop();
+        return;
+      }
       _isProcessingScan = false;
       _paused = false;
       if (_camera.value.hasCameraPermission) {
@@ -157,7 +176,10 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
     if (!mounted) return;
 
     final state = ref.read(ownerControllerProvider);
-    if (state is OwnerSuccess || state is OwnerError || state is OwnerRedirect) {
+    if (state is OwnerSuccess ||
+        state is OwnerError ||
+        state is OwnerRedirect ||
+        state is OwnerPlanOrderConfirm) {
       if (context.canPop()) {
         context.pop(true);
       } else {
@@ -240,44 +262,61 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
             ),
           ),
           SafeArea(
-            child: Column(
-              children: [
-                _TopBar(
-                  camera: _camera,
-                  onClose: _close,
-                  title: expected != null
-                      ? (expected.paidByPlan
-                          ? 'Canjear pedido #${expected.number}'
-                          : 'Cobrar pedido #${expected.number}')
-                      : (widget.pickCodeOnly ? widget.pickTitle : 'Escanear QR'),
-                ),
-                if (expected != null)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: scheme.primaryContainer,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        expected.paidByPlan
-                            ? '${expected.dinerName} · Escanea su QR para confirmar canje'
-                            : '${expected.dinerName} · Escanea su QR para confirmar cobro',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w800,
-                          color: scheme.onPrimaryContainer,
+            child: Builder(
+              builder: (context) {
+                var expectedHasPlan = expected?.paidByPlan ?? false;
+                if (expected != null && !expectedHasPlan) {
+                  final clients = ref.watch(ownerClientsProvider).value;
+                  if (clients != null) {
+                    final cid = expected.clientId?.trim() ?? '';
+                    final nameNorm = expected.dinerName.trim().toLowerCase();
+                    expectedHasPlan = clients.any(
+                      (c) =>
+                          c.activeLunches > 0 &&
+                          ((cid.isNotEmpty && c.id == cid) ||
+                              (nameNorm.isNotEmpty &&
+                                  c.name.trim().toLowerCase() == nameNorm)),
+                    );
+                  }
+                }
+                return Column(
+                  children: [
+                    _TopBar(
+                      camera: _camera,
+                      onClose: _close,
+                      title: expected != null
+                          ? (expectedHasPlan
+                              ? 'Canjear pedido #${expected.number}'
+                              : 'Cobrar pedido #${expected.number}')
+                          : (widget.pickCodeOnly ? widget.pickTitle : 'Escanear QR'),
+                    ),
+                    if (expected != null)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: scheme.primaryContainer,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            expectedHasPlan
+                                ? '${expected.dinerName} · Escanea su QR para descontar 1 almuerzo'
+                                : '${expected.dinerName} · Escanea su QR para confirmar cobro',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w800,
+                              color: scheme.onPrimaryContainer,
+                            ),
+                          ),
                         ),
                       ),
-                    ),
-                  ),
                 const Spacer(),
                 const SizedBox(height: _frameSize),
                 const SizedBox(height: 24),
@@ -305,6 +344,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen>
                   ),
                 ),
               ],
+            );
+              },
             ),
           ),
         ],

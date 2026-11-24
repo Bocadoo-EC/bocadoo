@@ -41,6 +41,7 @@ class _OrderCacheEntry {
   bool validated;
   final double amount;
   String? consumoId;
+  int? remainingLunches;
 }
 
 class _TableUndoEntry {
@@ -467,7 +468,8 @@ class ApiOwnerRepository
         .toString();
 
     final estado = (json['estado'] ?? 'EN_CAMINO').toString().toUpperCase();
-    final paidByPlan = almuerzo?['cubiertoPorPlan'] == true;
+    final paidByPlan =
+        hasPlanLineInQuote || (almuerzo?['cubiertoPorPlan'] == true);
     final takeaway = json['paraLlevar'] == true;
     final number = _asInt(json['numero']).toString();
     final id = (json['id'] ?? '').toString();
@@ -499,10 +501,10 @@ class ApiOwnerRepository
         json['cashToCollectCents'] ??
         json['saldoPorCobrarCentavos'] ??
         json['porCobrarCentavos'];
+    final cashItems = _cartaItemLabels(json['cartaItems']);
     final cashToCollectCents = rawCashToCollect != null
         ? _asInt(rawCashToCollect)
-        : (paidByPlan ? rawTotalCents : 0);
-    final cashItems = _cartaItemLabels(json['cartaItems']);
+        : (paidByPlan && cashItems.isNotEmpty ? rawTotalCents : 0);
     final amount = Money.fromCents(
       paidByPlan && cashToCollectCents > 0
           ? cashToCollectCents
@@ -553,6 +555,7 @@ class ApiOwnerRepository
     return OwnerOrder(
       id: id.isEmpty ? null : id,
       restaurantId: orderRestId.isEmpty ? null : orderRestId,
+      clientId: clientId.isEmpty ? null : clientId,
       number: number,
       dinerName: dinerName,
       amount: amount,
@@ -583,8 +586,46 @@ class ApiOwnerRepository
   // ---------------------------------------------------------------------------
 
   final Set<String> _redeemedCodes = <String>{};
+  bool _lastAlreadyRedeemed = false;
   final List<TransactionItem> _sessionValidatedTransactions =
       <TransactionItem>[];
+
+  Future<bool> _isOrderAlreadyServed(
+    String orderIdOrCode,
+    String activeRestaurantId,
+  ) async {
+    final cleaned = BocadooQrParser.sanitizeManualInput(orderIdOrCode);
+    try {
+      final servidas = await guard(
+        () => _api.getList(
+          '${ApiConfig.v1}/caja/pedidos',
+          query: {'estado': 'SERVIDA'},
+          restaurant: true,
+        ),
+      );
+      final numTarget =
+          BocadooQrParser.resolveOrderNumber(orderIdOrCode) ??
+          orderIdOrCode.replaceAll('#', '').trim();
+      for (final raw in servidas.whereType<Map>()) {
+        final rawNum = _asInt(raw['numero']).toString();
+        final rawId = (raw['id'] ?? '').toString();
+        final genCode = BocadooQrParser.generateOrderCode(
+          rawNum,
+          orderId: rawId,
+          restaurantId: activeRestaurantId,
+        );
+        if (rawNum == numTarget ||
+            rawId == orderIdOrCode.trim() ||
+            (cleaned.length == BocadooQrParser.shortCodeLength &&
+                genCode == cleaned)) {
+          _redeemedCodes.add('ORD:$rawNum');
+          _ordersByNumber.remove(rawNum);
+          return true;
+        }
+      }
+    } catch (_) {}
+    return false;
+  }
   static final _uuidRegex = RegExp(
     r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
   );
@@ -868,6 +909,43 @@ class ApiOwnerRepository
         );
         _lastBatchByPassId[passId] = batchId;
 
+        // Si el comensal tenía una preorden EN_CAMINO pendiente, cerrarla ahora
+        // que su almuerzo ya fue descontado del plan para evitar tarjetas fantasma.
+        try {
+          final activeOrders = await getEnCaminoOrders(restaurantId);
+          final targetId = clienteId?.trim();
+          final targetName = clienteNombre?.trim().toLowerCase();
+          for (final ord in activeOrders) {
+            final matchById =
+                targetId != null &&
+                targetId.isNotEmpty &&
+                ord.clientId == targetId;
+            final matchByName =
+                targetName != null &&
+                targetName.isNotEmpty &&
+                ord.dinerName.trim().toLowerCase() == targetName;
+            if ((matchById || matchByName) &&
+                ord.cashToCollectCents == 0 &&
+                ord.id != null &&
+                ord.id!.isNotEmpty) {
+              try {
+                await guard(
+                  () => _api.send<Map<String, dynamic>>(
+                    'POST',
+                    '${ApiConfig.v1}/caja/pedidos/${ord.id}/servir',
+                    restaurant: true,
+                  ),
+                );
+              } on ApiException {
+                // Idempotente si ya estaba servida en backend.
+              }
+              _redeemedCodes.add('ORD:${ord.number}');
+              _ordersByNumber.remove(ord.number);
+              break;
+            }
+          }
+        } catch (_) {}
+
         final isDup = _sessionValidatedTransactions.any(
           (tx) =>
               tx.id == passId ||
@@ -947,21 +1025,11 @@ class ApiOwnerRepository
             cashItems: cashItems,
           );
         case 'DUPLICADO':
-          final String dupLine;
-          if (prevRedeemedAt != null) {
-            final secs = DateTime.now()
-                .difference(prevRedeemedAt)
-                .inSeconds
-                .clamp(0, 86400);
-            dupLine = 'Ya canjeado hace $secs s';
-          } else {
-            dupLine = 'Este código ya fue procesado anteriormente';
-          }
           return ScanResult(
             isValid: false,
-            outcome: 'ADVERTENCIA',
-            title: 'Ya canjeado',
-            supportingLine: dupLine,
+            outcome: 'GRIS',
+            title: 'Pedido ya descontado',
+            supportingLine: 'Este pedido ya fue descontado anteriormente',
             studentName: clienteNombre,
             studentCareer: planNombre,
             redeemedAt: prevRedeemedAt,
@@ -3181,6 +3249,16 @@ class ApiOwnerRepository
     }
 
     if (order == null) {
+      if (await _isOrderAlreadyServed(
+        expectedOrder?.id ?? rawPayload,
+        activeRestaurantId,
+      )) {
+        return (
+          isValid: false,
+          order: null,
+          errorMessage: 'Este pedido ya fue descontado anteriormente',
+        );
+      }
       return (
         isValid: false,
         order: null,
@@ -3216,7 +3294,7 @@ class ApiOwnerRepository
       return (
         isValid: false,
         order: null,
-        errorMessage: 'Este pedido ya fue cobrado y entregado.',
+        errorMessage: 'Este pedido ya fue descontado anteriormente',
       );
     }
 
@@ -3231,6 +3309,7 @@ class ApiOwnerRepository
     OwnerPayMethod paymentMethod = OwnerPayMethod.efectivo,
   }) async {
     _lastError = null;
+    _lastAlreadyRedeemed = false;
     final cleaned = BocadooQrParser.sanitizeManualInput(orderIdOrCode);
     final codeKey =
         rawCodeKey ??
@@ -3255,9 +3334,9 @@ class ApiOwnerRepository
     if (_redeemedCodes.contains(codeKey)) {
       return const ScanResult(
         isValid: false,
-        outcome: 'ROJO',
-        title: 'Ya canjeado',
-        supportingLine: 'Este código ya fue canjeado anteriormente',
+        outcome: 'GRIS',
+        title: 'Pedido ya descontado',
+        supportingLine: 'Este pedido ya fue descontado anteriormente',
         actionRequired: 'NINGUNA',
       );
     }
@@ -3266,41 +3345,16 @@ class ApiOwnerRepository
     order ??= await resolveOrderByNumber(orderIdOrCode.trim());
     if (order == null) {
       // Comprobar si la orden ya fue completada (SERVIDA) hoy para idempotencia.
-      try {
-        final servidas = await guard(
-          () => _api.getList(
-            '${ApiConfig.v1}/caja/pedidos',
-            query: {'estado': 'SERVIDA'},
-            restaurant: true,
-          ),
+      if (await _isOrderAlreadyServed(orderIdOrCode, activeRestaurantId)) {
+        _redeemedCodes.add(codeKey);
+        return const ScanResult(
+          isValid: false,
+          outcome: 'GRIS',
+          title: 'Pedido ya descontado',
+          supportingLine: 'Este pedido ya fue descontado anteriormente',
+          actionRequired: 'NINGUNA',
         );
-        final numTarget =
-            BocadooQrParser.resolveOrderNumber(orderIdOrCode) ??
-            orderIdOrCode.replaceAll('#', '').trim();
-        for (final raw in servidas.whereType<Map>()) {
-          final rawNum = _asInt(raw['numero']).toString();
-          final rawId = (raw['id'] ?? '').toString();
-          final genCode = BocadooQrParser.generateOrderCode(
-            rawNum,
-            orderId: rawId,
-            restaurantId: activeRestaurantId,
-          );
-          if (rawNum == numTarget ||
-              rawId == orderIdOrCode.trim() ||
-              (cleaned.length == BocadooQrParser.shortCodeLength &&
-                  genCode == cleaned)) {
-            _redeemedCodes.add('ORD:$rawNum');
-            _redeemedCodes.add(codeKey);
-            return const ScanResult(
-              isValid: false,
-              outcome: 'ROJO',
-              title: 'Ya canjeado',
-              supportingLine: 'Este código ya fue canjeado anteriormente',
-              actionRequired: 'NINGUNA',
-            );
-          }
-        }
-      } catch (_) {}
+      }
 
       return const ScanResult(
         isValid: false,
@@ -3329,9 +3383,9 @@ class ApiOwnerRepository
         _inFlightOrders.contains(order.number)) {
       return ScanResult(
         isValid: false,
-        outcome: 'ROJO',
-        title: 'Ya canjeado',
-        supportingLine: 'Este código ya fue canjeado anteriormente',
+        outcome: 'GRIS',
+        title: 'Pedido ya descontado',
+        supportingLine: 'Este pedido ya fue descontado anteriormente',
         studentName: order.dinerName,
         actionRequired: 'NINGUNA',
       );
@@ -3342,6 +3396,18 @@ class ApiOwnerRepository
       if (order.paidByPlan && !order.validated) {
         final okVal = await validateOrder(activeRestaurantId, order.number);
         if (!okVal) {
+          if (_lastAlreadyRedeemed) {
+            _redeemedCodes.add(ordKey);
+            _ordersByNumber.remove(order.number);
+            return ScanResult(
+              isValid: false,
+              outcome: 'GRIS',
+              title: 'Pedido ya descontado',
+              supportingLine: 'Este pedido ya fue descontado anteriormente',
+              studentName: order.dinerName,
+              actionRequired: 'NINGUNA',
+            );
+          }
           return ScanResult(
             isValid: false,
             outcome: 'ROJO',
@@ -3365,6 +3431,18 @@ class ApiOwnerRepository
           );
 
       await _commitDeliverOrder(entry, paymentMethod: paymentMethod);
+      if (_lastAlreadyRedeemed) {
+        _redeemedCodes.add(ordKey);
+        _ordersByNumber.remove(order.number);
+        return ScanResult(
+          isValid: false,
+          outcome: 'GRIS',
+          title: 'Pedido ya descontado',
+          supportingLine: 'Este pedido ya fue descontado anteriormente',
+          studentName: order.dinerName,
+          actionRequired: 'NINGUNA',
+        );
+      }
       if (_lastError != null && _lastError!.isNotEmpty) {
         return ScanResult(
           isValid: false,
@@ -3431,6 +3509,7 @@ class ApiOwnerRepository
             : (dishSummary ?? 'Pedido completado'),
         studentName: order.dinerName,
         passId: ordKey,
+        remainingLunches: entry.remainingLunches,
         dishName: dishSummary,
         actionRequired: 'NINGUNA',
         planCreditsUsed: order.paidByPlan && order.planCreditsUsed <= 0
@@ -3551,6 +3630,27 @@ class ApiOwnerRepository
 
       final resultado = (validarRes['resultado'] ?? '').toString().toUpperCase();
       final mensaje = (validarRes['mensaje'] ?? '').toString().trim();
+      if (resultado == 'DUPLICADO') {
+        _redeemedCodes.add(ordKey);
+        _ordersByNumber.remove(order.number);
+        try {
+          await guard(
+            () => _api.send<Map<String, dynamic>>(
+              'POST',
+              '${ApiConfig.v1}/caja/pedidos/${entry.id}/servir',
+              restaurant: true,
+            ),
+          );
+        } catch (_) {}
+        return ScanResult(
+          isValid: false,
+          outcome: 'GRIS',
+          title: 'Pedido ya descontado',
+          supportingLine: 'Este pedido ya fue descontado anteriormente',
+          studentName: order.dinerName,
+          actionRequired: 'NINGUNA',
+        );
+      }
       if (resultado.isNotEmpty &&
           resultado != 'OK' &&
           resultado != 'OK_ADVERTENCIA') {
@@ -3723,6 +3823,17 @@ class ApiOwnerRepository
         final consumoId = almuerzo?['consumoId']?.toString();
         if (consumoId != null && consumoId.isNotEmpty) {
           entry.consumoId = consumoId;
+        }
+        final rem = _asNullableInt(
+          res['almuerzosRestantes'] ?? almuerzo?['almuerzosRestantes'],
+        );
+        if (rem != null) {
+          entry.remainingLunches = rem;
+        }
+        if (resultado == 'DUPLICADO') {
+          _lastAlreadyRedeemed = true;
+          _lastError = 'Este pedido ya fue descontado anteriormente';
+          return false;
         }
         final ok =
             res['yaCanjeado'] == true ||
@@ -3922,7 +4033,17 @@ class ApiOwnerRepository
         } catch (_) {}
       }
     } on ApiException catch (e) {
-      _lastError = e.userMessage;
+      final upper = '${e.code} ${e.detail} ${e.userMessage}'.toUpperCase();
+      if (e.status == 409 ||
+          upper.contains('SERVID') ||
+          upper.contains('CANJEAD') ||
+          upper.contains('DUPLICAD') ||
+          upper.contains('CONSUMO')) {
+        _lastAlreadyRedeemed = true;
+        _lastError = 'Este pedido ya fue descontado anteriormente';
+      } else {
+        _lastError = e.userMessage;
+      }
     } finally {
       _pendingDeliverOrders.remove(entry.number);
       _ordersByNumber.remove(entry.number);

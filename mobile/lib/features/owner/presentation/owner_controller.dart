@@ -536,6 +536,7 @@ final cajaLiveSyncProvider =
 
 class CajaLiveSyncNotifier extends Notifier<CajaLiveSyncState> {
   final Set<String> _idsVistos = <String>{};
+  final Map<String, DateTime> _recentlyRemovedOrders = <String, DateTime>{};
   bool _hasSeededSeenIds = false;
   bool _inFlight = false;
   bool _disposed = false;
@@ -544,11 +545,53 @@ class CajaLiveSyncNotifier extends Notifier<CajaLiveSyncState> {
   CajaLiveSyncState build() {
     ref.watch(ownerRestaurantIdProvider);
     _idsVistos.clear();
+    _recentlyRemovedOrders.clear();
     _hasSeededSeenIds = false;
     _inFlight = false;
     _disposed = false;
     ref.onDispose(() => _disposed = true);
     return const CajaLiveSyncState();
+  }
+
+  /// Quita inmediatamente una preorden de `En camino` tras descontarla o detectar
+  /// que ya había sido canjeada, evitando tarjetas fantasma mientras sincroniza.
+  void removeOrderOptimistically(String orderNumber) {
+    final norm = orderNumber.trim();
+    if (norm.isEmpty || _disposed) return;
+    _recentlyRemovedOrders[norm] = DateTime.now().add(
+      const Duration(seconds: 20),
+    );
+    final filtered = state.enCaminoOrders
+        .where((o) => o.number != norm)
+        .toList(growable: false);
+    if (filtered.length != state.enCaminoOrders.length) {
+      state = state.copyWith(enCaminoOrders: filtered);
+    }
+  }
+
+  /// Quita órdenes activas en `$0` del comensal tras escanear su QR de plan.
+  void removeOrdersForDiner({String? clientId, String? dinerName}) {
+    if (_disposed) return;
+    final cid = clientId?.trim();
+    final name = dinerName?.trim().toLowerCase();
+    final expiry = DateTime.now().add(const Duration(seconds: 20));
+    var changed = false;
+    final filtered = state.enCaminoOrders.where((o) {
+      final byId = cid != null && cid.isNotEmpty && o.clientId == cid;
+      final byName =
+          name != null &&
+          name.isNotEmpty &&
+          o.dinerName.trim().toLowerCase() == name;
+      if ((byId || byName) && o.cashToCollectCents == 0) {
+        _recentlyRemovedOrders[o.number] = expiry;
+        changed = true;
+        return false;
+      }
+      return true;
+    }).toList(growable: false);
+    if (changed) {
+      state = state.copyWith(enCaminoOrders: filtered);
+    }
   }
 
   static String _arrivalHHmm(OwnerOrder order) {
@@ -608,7 +651,12 @@ class CajaLiveSyncNotifier extends Notifier<CajaLiveSyncState> {
       ]);
       if (_disposed) return const [];
 
-      final orders = results[0] as List<OwnerOrder>;
+      final rawOrders = results[0] as List<OwnerOrder>;
+      final now = DateTime.now();
+      _recentlyRemovedOrders.removeWhere((_, exp) => !exp.isAfter(now));
+      final orders = rawOrders
+          .where((o) => !_recentlyRemovedOrders.containsKey(o.number))
+          .toList(growable: false);
       final tables = results[1] as List<PendingTable>;
       final payments = results[2] as List<PendingPaymentItem>;
 
@@ -990,6 +1038,30 @@ class OwnerRedirect extends OwnerState {
   final String location;
 }
 
+/// Preorden detectada en el escáner cubierta por plan activo sin saldo en caja.
+class OwnerPlanOrderConfirm extends OwnerState {
+  const OwnerPlanOrderConfirm({
+    required this.order,
+    this.availableLunches,
+    this.overrideClientId,
+    this.isSubmitting = false,
+  });
+
+  final OwnerOrder order;
+  final int? availableLunches;
+  final String? overrideClientId;
+  final bool isSubmitting;
+
+  OwnerPlanOrderConfirm copyWith({bool? isSubmitting}) {
+    return OwnerPlanOrderConfirm(
+      order: order,
+      availableLunches: availableLunches,
+      overrideClientId: overrideClientId,
+      isSubmitting: isSubmitting ?? this.isSubmitting,
+    );
+  }
+}
+
 /// Pase rechazado (con [result]) o error inesperado (solo [message]).
 class OwnerError extends OwnerState {
   const OwnerError(this.message, {this.result});
@@ -1031,11 +1103,63 @@ class OwnerController extends Notifier<OwnerState> {
     await onCodeDetected(code);
   }
 
+  Future<OwnerClient?> _findActivePlanClient(OwnerOrder order) async {
+    List<OwnerClient>? clients = ref.read(ownerClientsProvider).asData?.value;
+    if (clients == null) {
+      try {
+        clients = await ref.read(ownerClientsProvider.future);
+      } catch (_) {
+        clients = null;
+      }
+    }
+    if (clients == null || clients.isEmpty) return null;
+    final cid = order.clientId?.trim() ?? '';
+    if (cid.isNotEmpty) {
+      for (final c in clients) {
+        if (c.id == cid && c.activeLunches > 0) {
+          return c;
+        }
+      }
+    }
+    final nameNorm = order.dinerName.trim().toLowerCase();
+    if (nameNorm.isEmpty) return null;
+    for (final c in clients) {
+      if (c.activeLunches > 0 && c.name.trim().toLowerCase() == nameNorm) {
+        return c;
+      }
+    }
+    return null;
+  }
+
+  void _syncAfterPlanChange({
+    String? removeOrderNumber,
+    String? removeDinerName,
+  }) {
+    final liveSync = ref.read(cajaLiveSyncProvider.notifier);
+    if (removeOrderNumber != null && removeOrderNumber.isNotEmpty) {
+      liveSync.removeOrderOptimistically(removeOrderNumber);
+    } else if (removeDinerName != null && removeDinerName.isNotEmpty) {
+      liveSync.removeOrdersForDiner(dinerName: removeDinerName);
+    }
+    ref.invalidate(activeOrdersProvider);
+    ref.invalidate(ordersOnTheWayProvider);
+    ref.invalidate(ownerClientsProvider);
+    ref.invalidate(dailySummaryProvider);
+    unawaited(ref.read(cajaMovementsProvider.notifier).refresh());
+    unawaited(liveSync.syncNow(includeMovements: false));
+  }
+
   /// Valida un QR leído por la cámara o ingresado a mano. Reconoce todos los
   /// formatos: código corto de 6 caracteres, pase de plan (`BCD1.`), mesa
   /// (`BCD-MESA-`), preorden (`BCD-ORD-`, UUID o `#N`).
   Future<void> onCodeDetected(String rawPayload) async {
-    if (_busy || state is OwnerSuccess || state is OwnerError || state is OwnerRedirect) return;
+    if (_busy ||
+        state is OwnerSuccess ||
+        state is OwnerError ||
+        state is OwnerRedirect ||
+        state is OwnerPlanOrderConfirm) {
+      return;
+    }
     if (rawPayload.trim().isEmpty) return;
 
     _busy = true;
@@ -1049,16 +1173,44 @@ class OwnerController extends Notifier<OwnerState> {
           !upper.startsWith('BCD-MESA-') &&
           !upper.startsWith('MESA-');
       if (couldBeOrder) {
+        final rid = ref.read(ownerRestaurantIdProvider);
         final orderCheck = await ref
             .read(ownerOrdersRepositoryProvider)
-            .verifyOrderQrCode(
-              rawPayload,
-              ref.read(ownerRestaurantIdProvider),
+            .verifyOrderQrCode(rawPayload, rid);
+        if (!orderCheck.isValid &&
+            orderCheck.errorMessage ==
+                'Este pedido ya fue descontado anteriormente') {
+          final resolvedNum = BocadooQrParser.resolveOrderNumber(rawPayload);
+          _syncAfterPlanChange(removeOrderNumber: resolvedNum);
+          const alreadyResult = ScanResult(
+            isValid: false,
+            outcome: 'GRIS',
+            title: 'Pedido ya descontado',
+            supportingLine: 'Este pedido ya fue descontado anteriormente',
+            actionRequired: 'NINGUNA',
+          );
+          state = const OwnerError(
+            'Este pedido ya fue descontado anteriormente',
+            result: alreadyResult,
+          );
+          return;
+        }
+        if (orderCheck.isValid && orderCheck.order != null) {
+          final ord = orderCheck.order!;
+          final matchedClient = await _findActivePlanClient(ord);
+          final hasPlanPriority =
+              ord.paidByPlan ||
+              (matchedClient != null && matchedClient.activeLunches > 0);
+          final cashCents = ord.paidByPlan ? ord.cashToCollectCents : 0;
+          if (hasPlanPriority && cashCents == 0) {
+            state = OwnerPlanOrderConfirm(
+              order: ord,
+              availableLunches: matchedClient?.activeLunches,
+              overrideClientId: (!ord.paidByPlan ? matchedClient?.id : null),
             );
-        if (orderCheck.isValid &&
-            orderCheck.order != null &&
-            !orderCheck.order!.paidByPlan) {
-          state = OwnerRedirect('/owner/pedidos?cobrar=${orderCheck.order!.number}');
+            return;
+          }
+          state = OwnerRedirect('/owner/pedidos?cobrar=${ord.number}');
           return;
         }
       }
@@ -1069,13 +1221,19 @@ class OwnerController extends Notifier<OwnerState> {
         if (result.title == 'Menú no publicado') {
           ref.invalidate(posMenuProvider);
         }
+        if (result.isAlreadyRedeemed) {
+          _syncAfterPlanChange(removeDinerName: result.studentName);
+        }
         state = OwnerError(result.supportingLine, result: result);
         return;
       }
       final ok = await _repo.confirmRedeem(passId);
-      state = ok
-          ? OwnerSuccess(result, redeemed: true)
-          : OwnerError('No se pudo registrar el almuerzo.', result: result);
+      if (ok) {
+        _syncAfterPlanChange(removeDinerName: result.studentName);
+        state = OwnerSuccess(result, redeemed: true);
+      } else {
+        state = OwnerError('No se pudo registrar el almuerzo.', result: result);
+      }
     } on ApiException catch (e) {
       if (e.code == 'MENU_NO_PUBLICADO') {
         ref.invalidate(posMenuProvider);
@@ -1103,6 +1261,68 @@ class OwnerController extends Notifier<OwnerState> {
       }
     } catch (e) {
       state = OwnerError('No se pudo validar el código: $e');
+    } finally {
+      _busy = false;
+    }
+  }
+
+  /// Descuenta 1 almuerzo del plan activo para la preorden detectada en el escáner.
+  Future<void> confirmPendingPlanOrder() async {
+    final current = state;
+    if (_busy || current is! OwnerPlanOrderConfirm || current.isSubmitting) {
+      return;
+    }
+    _busy = true;
+    state = current.copyWith(isSubmitting: true);
+    try {
+      final rid = ref.read(ownerRestaurantIdProvider);
+      final repo = ref.read(ownerOrdersRepositoryProvider);
+      final ScanResult res;
+      if (current.overrideClientId != null &&
+          current.overrideClientId!.isNotEmpty &&
+          !current.order.paidByPlan &&
+          repo is ApiOwnerRepository) {
+        res = await repo.confirmOrderWithPlanPriority(
+          current.order.number,
+          rid,
+          clientId: current.overrideClientId!,
+        );
+      } else {
+        res = await repo.confirmAndRedeemOrder(current.order.number, rid);
+      }
+      if (res.isValid) {
+        final resolvedRemaining = res.remainingLunches ??
+            (current.availableLunches != null
+                ? (current.availableLunches! - 1).clamp(0, 999)
+                : null);
+        final enriched = ScanResult(
+          isValid: res.isValid,
+          outcome: res.outcome,
+          title: res.title,
+          supportingLine: res.supportingLine,
+          studentName: res.studentName ?? current.order.dinerName,
+          studentCareer: res.studentCareer,
+          passId: res.passId,
+          remainingLunches: resolvedRemaining,
+          redemptionId: res.redemptionId,
+          batchRedemptionId: res.batchRedemptionId,
+          redeemedAt: res.redeemedAt,
+          dishName: res.dishName,
+          actionRequired: res.actionRequired,
+          planCreditsUsed: res.planCreditsUsed,
+          cashToCollectCents: res.cashToCollectCents,
+          cashItems: res.cashItems,
+        );
+        _syncAfterPlanChange(removeOrderNumber: current.order.number);
+        state = OwnerSuccess(enriched, redeemed: true);
+      } else {
+        if (res.isAlreadyRedeemed) {
+          _syncAfterPlanChange(removeOrderNumber: current.order.number);
+        }
+        state = OwnerError(res.supportingLine, result: res);
+      }
+    } catch (e) {
+      state = OwnerError('No se pudo descontar el almuerzo: $e');
     } finally {
       _busy = false;
     }
