@@ -148,32 +148,65 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
     HybridOrderNotifier notifier,
   ) async {
     final (start, end) = _parseLunchRange(r.schedule);
-    final initial = TimeOfDay(
-      hour: start.hour < 12 ? 12 : start.hour,
-      minute: 30,
-    );
-    final picked = await showTimePicker(
-      context: context,
-      initialTime: initial,
-      helpText: 'Hora estimada (${r.schedule})',
-    );
-    if (picked == null || !mounted) return;
-    final pickedMins = picked.hour * 60 + picked.minute;
     final startMins = start.hour * 60 + start.minute;
     final endMins = end.hour * 60 + end.minute;
-    if (pickedMins < startMins || pickedMins > endMins) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Elige una hora dentro del horario de atención (${r.schedule}).',
-          ),
-        ),
+    final messenger = ScaffoldMessenger.of(context);
+
+    while (mounted) {
+      final nowEc = EcuadorTime.now();
+      final suggestedEc = nowEc.add(const Duration(minutes: 5));
+      final initial = TimeOfDay(
+        hour: suggestedEc.hour,
+        minute: suggestedEc.minute,
       );
+      final nowHhmm =
+          '${nowEc.hour.toString().padLeft(2, '0')}:${nowEc.minute.toString().padLeft(2, '0')}';
+
+      final picked = await showTimePicker(
+        context: context,
+        initialTime: initial,
+        helpText: 'Hora de consumo (Ecuador $nowHhmm)',
+      );
+      if (picked == null || !mounted) return;
+
+      final currentEc = EcuadorTime.now();
+      final currentMins = currentEc.hour * 60 + currentEc.minute;
+      final pickedMins = picked.hour * 60 + picked.minute;
+
+      if (pickedMins <= currentMins) {
+        final currentHhmm =
+            '${currentEc.hour.toString().padLeft(2, '0')}:${currentEc.minute.toString().padLeft(2, '0')}';
+        messenger.hideCurrentSnackBar();
+        messenger.showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            content: Text(
+              'Selecciona una hora futura para tu consumo (hora actual: $currentHhmm).',
+            ),
+          ),
+        );
+        continue;
+      }
+
+      if (currentMins <= endMins &&
+          (pickedMins < startMins || pickedMins > endMins)) {
+        messenger.hideCurrentSnackBar();
+        messenger.showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            content: Text(
+              'Elige una hora dentro del horario de atención (${r.schedule}).',
+            ),
+          ),
+        );
+        continue;
+      }
+
+      final formatted =
+          '${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}';
+      notifier.setArrival(formatted, isCustom: true);
       return;
     }
-    final formatted =
-        '${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}';
-    notifier.setArrival(formatted, isCustom: true);
   }
 
   String _resolveArrivalHhmm(HybridOrderState draft) {

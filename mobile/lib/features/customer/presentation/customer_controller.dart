@@ -14,6 +14,7 @@ import '../../../core/network/api_client.dart';
 import '../../../core/network/api_exception.dart';
 import '../../../core/network/polling.dart';
 import '../../../core/session/session_notifier.dart';
+import '../../../core/utils/formatters.dart';
 import '../data/api_customer_repo.dart';
 import '../data/mock_customer_repo.dart';
 import '../data/pase_events_stream.dart';
@@ -947,6 +948,7 @@ class CustomerController extends ChangeNotifier {
       menuPublishedByRest: _state.todayMenuPublishedByRest,
     );
     await _repository.acknowledgeOrder(order.orderNumber);
+    unawaited(_refreshRecentActivity());
   }
 
   /// Controla el stream SSE (`GET /v1/pase/eventos`) y el refresco inicial
@@ -969,22 +971,65 @@ class CustomerController extends ChangeNotifier {
     }
   }
 
-  /// Refresca el saldo una vez al abrir Pase (devoluciones por reclamo no emiten SSE).
+  /// Refresca saldo y movimientos recientes al abrir Pase o en fallback polling.
   Future<void> _refreshBalanceOnce() async {
     if (_disposed || _state.status == CustomerStatus.initial) return;
     try {
-      final passes = await _repository.getActivePasses();
+      final results = await Future.wait([
+        _repository.getActivePasses(),
+        _repository.getRecentActivity(),
+      ]);
       if (_disposed || !_paseVisible) return;
+      final passes = results[0] as List<CustomerPass>;
+      final activity = results[1] as List<ActivityItem>;
       final nextMenuStates = await _resolveMenuStatesForPasses(
         passes,
         _state.restaurants,
       );
       _emit(_state.copyWith(
         passes: passes,
+        recentActivity: activity,
         todayMenuPublishedByRest: nextMenuStates.published,
         todayMenuAvailabilityByRest: nextMenuStates.availability,
       ));
     } catch (_) {}
+  }
+
+  Future<void> _refreshRecentActivity() async {
+    if (_disposed) return;
+    try {
+      final activity = await _repository.getRecentActivity();
+      if (_disposed) return;
+      _emit(_state.copyWith(recentActivity: activity));
+    } catch (_) {}
+  }
+
+  void _prependRealtimeActivity({
+    required String? restauranteNombre,
+    required String? detailLabel,
+    required bool reverted,
+  }) {
+    final nowEc = EcuadorTime.now();
+    final hhmm =
+        '${nowEc.hour.toString().padLeft(2, '0')}:${nowEc.minute.toString().padLeft(2, '0')}';
+    final restName = (restauranteNombre ?? '').trim().isNotEmpty
+        ? restauranteNombre!.trim()
+        : (_state.currentPass?.restaurantName ?? 'Restaurante');
+    final itemLabel = (detailLabel ?? '').trim().isNotEmpty
+        ? detailLabel!.trim()
+        : 'Almuerzo';
+    final statusLabel = reverted ? 'Anulado' : 'Completado';
+    final optimistic = ActivityItem(
+      id: 'rt_${nowEc.microsecondsSinceEpoch}',
+      name: restName,
+      detail: 'Hoy $hhmm · $itemLabel · $statusLabel',
+      value: reverted ? '+1 devuelto' : '-1 almuerzo',
+      positive: reverted,
+      kind: 'lunch',
+    );
+    _emit(_state.copyWith(
+      recentActivity: [optimistic, ..._state.recentActivity].take(20).toList(),
+    ));
   }
 
   Future<void> _connectPaseSse() async {
@@ -1038,6 +1083,12 @@ class CustomerController extends ChangeNotifier {
           restauranteNombre: event.restauranteNombre,
           saldoRestante: event.saldoRestante,
         );
+        _prependRealtimeActivity(
+          restauranteNombre: event.restauranteNombre,
+          detailLabel: event.platoNombre,
+          reverted: false,
+        );
+        unawaited(_refreshRecentActivity());
         final restName = event.restauranteNombre?.trim();
         final plato = event.platoNombre?.trim();
         final subtitleParts = <String>[
@@ -1060,6 +1111,12 @@ class CustomerController extends ChangeNotifier {
           restauranteNombre: event.restauranteNombre,
           saldoRestante: event.saldoRestante,
         );
+        _prependRealtimeActivity(
+          restauranteNombre: event.restauranteNombre,
+          detailLabel: event.platoNombre,
+          reverted: true,
+        );
+        unawaited(_refreshRecentActivity());
         final restName = event.restauranteNombre?.trim();
         _emit(_state.copyWith(
           consumptionNotice: restName != null && restName.isNotEmpty
