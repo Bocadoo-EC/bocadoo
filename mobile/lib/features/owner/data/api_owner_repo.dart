@@ -104,7 +104,12 @@ class ApiOwnerRepository
   final Map<String, String> _lastBatchByPassId = {};
   final Map<String, _SaleUndoKind> _saleUndoById = {};
   final Map<String, _OrderCacheEntry> _ordersByNumber = {};
+  final Map<String, String> _orderClientIdByNumber = {};
   final Map<String, String> _orderDishByNumber = {};
+
+  /// ID de cliente asociado a una preorden cargada recientemente (si el backend lo envió).
+  String? clientIdForOrder(String orderNumber) =>
+      _orderClientIdByNumber[orderNumber];
   final Map<String, DeferredCommit> _orderDeliverCommits = {};
   final Set<String> _pendingDeliverOrders = {};
   final Map<String, _TableUndoEntry> _tableUndoByChargeId = {};
@@ -457,6 +462,7 @@ class ApiOwnerRepository
 
     final cliente = json['cliente'] is Map ? json['cliente'] as Map : null;
     final comensal = json['comensal'] is Map ? json['comensal'] as Map : null;
+    final clientId = (cliente?['id'] ?? comensal?['id'] ?? '').toString().trim();
     final dinerName = (cliente?['nombre'] ?? comensal?['nombre'] ?? 'Comensal')
         .toString();
 
@@ -519,6 +525,9 @@ class ApiOwnerRepository
         amount: amount,
         consumoId: prev?.consumoId,
       );
+      if (clientId.isNotEmpty) {
+        _orderClientIdByNumber[number] = clientId;
+      }
     }
 
     final cleanSummary = CajaDishSummaryBuilder.fromPayload(
@@ -3415,18 +3424,260 @@ class ApiOwnerRepository
         isValid: true,
         outcome: 'VERDE',
         title: order.paidByPlan
-            ? 'Preorden #${order.number} canjeada'
+            ? '1 almuerzo descontado del plan'
             : 'Preorden #${order.number} cobrada',
         supportingLine: order.paidByPlan
-            ? (dishSummary ?? 'Almuerzo del día (Prepagado)')
+            ? '#${order.number} · ${dishSummary ?? 'Almuerzo del día'}'
             : (dishSummary ?? 'Pedido completado'),
         studentName: order.dinerName,
         passId: ordKey,
         dishName: dishSummary,
         actionRequired: 'NINGUNA',
-        planCreditsUsed: order.planCreditsUsed,
+        planCreditsUsed: order.paidByPlan && order.planCreditsUsed <= 0
+            ? 1
+            : order.planCreditsUsed,
         cashToCollectCents: order.cashToCollectCents,
         cashItems: order.cashItems,
+      );
+    } finally {
+      _inFlightOrders.remove(order.number);
+    }
+  }
+
+  /// Prioridad absoluta de plan activo sobre una preorden previa creada sin plan:
+  /// descuenta 1 almuerzo del plan activo del comensal (`POST /v1/caja/validar`
+  /// con `clienteId`) y cierra la orden pendiente (`POST /v1/caja/pedidos/:id/servir`)
+  /// sin cobrar efectivo ni registrar ventas sueltas.
+  Future<ScanResult> confirmOrderWithPlanPriority(
+    String orderIdOrCode,
+    String activeRestaurantId, {
+    required String clientId,
+    OwnerPayMethod paymentMethod = OwnerPayMethod.efectivo,
+  }) async {
+    _lastError = null;
+    var order = await _findOrderByAnyCode(orderIdOrCode, activeRestaurantId);
+    order ??= await resolveOrderByNumber(orderIdOrCode.trim());
+    if (order == null) {
+      return const ScanResult(
+        isValid: false,
+        outcome: 'ROJO',
+        title: 'No encontrado',
+        supportingLine: 'No encontramos esa preorden activa.',
+        actionRequired: 'NINGUNA',
+      );
+    }
+
+    if (order.paidByPlan) {
+      return confirmAndRedeemOrder(
+        order.number,
+        activeRestaurantId,
+        paymentMethod: paymentMethod,
+      );
+    }
+
+    if (order.restaurantId != null &&
+        order.restaurantId!.isNotEmpty &&
+        activeRestaurantId.isNotEmpty &&
+        order.restaurantId != activeRestaurantId) {
+      return const ScanResult(
+        isValid: false,
+        outcome: 'ROJO',
+        title: 'Es de otro local',
+        supportingLine: 'Este código pertenece a otro restaurante',
+        actionRequired: 'NINGUNA',
+      );
+    }
+
+    final ordKey = 'ORD:${order.number}';
+    if (_redeemedCodes.contains(ordKey) ||
+        _inFlightOrders.contains(order.number)) {
+      return ScanResult(
+        isValid: false,
+        outcome: 'ROJO',
+        title: 'Ya canjeado',
+        supportingLine: 'Este código ya fue canjeado anteriormente',
+        studentName: order.dinerName,
+        actionRequired: 'NINGUNA',
+      );
+    }
+
+    final entry =
+        _ordersByNumber[order.number] ??
+        _OrderCacheEntry(
+          id: order.id ?? order.number,
+          number: order.number,
+          paidByPlan: false,
+          validated: order.validated,
+          amount: Money.fromCents(0),
+        );
+
+    _inFlightOrders.add(order.number);
+    String? consumoId;
+    try {
+      final validarIntent = 'plan_priority_validar:${entry.id}:$clientId';
+      final validarIk = _idempotency.keyFor(validarIntent);
+      Map<String, dynamic> validarRes;
+      try {
+        validarRes = await guard(
+          () => _api
+              .send<Map<String, dynamic>>(
+                'POST',
+                '${ApiConfig.v1}/caja/validar',
+                body: {'clienteId': clientId},
+                restaurant: true,
+                idempotencyKey: validarIk,
+              )
+              .then((v) => v ?? <String, dynamic>{}),
+        );
+        _idempotency.done(validarIntent);
+      } on ApiException catch (e) {
+        if (!e.isNetwork && e.status != 504) {
+          _idempotency.done(validarIntent);
+        }
+        final detail = e.detail.trim();
+        _lastError =
+            ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+                ? detail
+                : e.userMessage;
+        return ScanResult(
+          isValid: false,
+          outcome: 'ROJO',
+          title: 'No se pudo descontar del plan',
+          supportingLine: _lastError!,
+          studentName: order.dinerName,
+          actionRequired: 'NINGUNA',
+        );
+      }
+
+      final resultado = (validarRes['resultado'] ?? '').toString().toUpperCase();
+      final mensaje = (validarRes['mensaje'] ?? '').toString().trim();
+      if (resultado.isNotEmpty &&
+          resultado != 'OK' &&
+          resultado != 'OK_ADVERTENCIA') {
+        _lastError = mensaje.isNotEmpty
+            ? mensaje
+            : 'No se pudo descontar 1 almuerzo del plan activo.';
+        return ScanResult(
+          isValid: false,
+          outcome: 'ROJO',
+          title: 'Plan no disponible',
+          supportingLine: _lastError!,
+          studentName: order.dinerName,
+          actionRequired: 'NINGUNA',
+        );
+      }
+
+      final remainingLunches = _asNullableInt(validarRes['almuerzosRestantes']);
+      final consumoMap =
+          validarRes['consumo'] is Map ? validarRes['consumo'] as Map : null;
+      consumoId = consumoMap?['id']?.toString();
+      if (consumoId != null && consumoId.isNotEmpty) {
+        entry.consumoId = consumoId;
+      }
+      entry.validated = true;
+
+      // Cerrar la preorden previa sin pasar por cobro de efectivo.
+      final serveIntent = 'plan_priority_servir:${entry.id}';
+      final serveIk = _idempotency.keyFor(serveIntent);
+      try {
+        await guard(
+          () => _api.send<Map<String, dynamic>>(
+            'POST',
+            '${ApiConfig.v1}/caja/pedidos/${entry.id}/servir',
+            restaurant: true,
+            idempotencyKey: serveIk,
+          ),
+        );
+        _idempotency.done(serveIntent);
+      } on ApiException catch (e) {
+        if (!e.isNetwork && e.status != 504) {
+          _idempotency.done(serveIntent);
+        }
+        final alreadyServed = e.status == 409 ||
+            e.detail.toUpperCase().contains('SERVID');
+        if (!alreadyServed) {
+          if (consumoId != null && consumoId.isNotEmpty) {
+            try {
+              await guard(
+                () => _api.send<dynamic>(
+                  'POST',
+                  '${ApiConfig.v1}/caja/consumos/$consumoId/deshacer',
+                  body: const <String, dynamic>{},
+                  restaurant: true,
+                ),
+              );
+            } catch (_) {}
+          }
+          final detail = e.detail.trim();
+          _lastError =
+              ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
+                  ? detail
+                  : e.userMessage;
+          return ScanResult(
+            isValid: false,
+            outcome: 'ROJO',
+            title: 'No se pudo cerrar el pedido',
+            supportingLine: _lastError!,
+            studentName: order.dinerName,
+            actionRequired: 'NINGUNA',
+          );
+        }
+      }
+
+      _redeemedCodes.add(ordKey);
+      _redeemedCodes.add(
+        BocadooQrParser.generateOrderCode(
+          order.number,
+          orderId: order.id,
+          restaurantId: activeRestaurantId,
+        ),
+      );
+
+      final dishParts = <String>[
+        if (order.soup != null && order.soup!.isNotEmpty) order.soup!,
+        if (order.main != null && order.main!.isNotEmpty) order.main!,
+      ];
+      final cachedDish = _orderDishByNumber[order.number];
+      final dishSummary = (cachedDish != null && cachedDish.isNotEmpty)
+          ? cachedDish
+          : (dishParts.isNotEmpty ? dishParts.join(' + ') : null);
+      final now = DateTime.now();
+      _sessionValidatedTransactions.insert(
+        0,
+        TransactionItem(
+          id: 'ord-plan-${order.number}-${now.millisecondsSinceEpoch}',
+          customerName: 'Pedido #${order.number} · ${order.dinerName}',
+          type: 'Canje de plan',
+          amount: Money.fromCents(0),
+          paymentMethod: 'Plan',
+          timestamp: now,
+          detail: 'Canje de plan · -1 almuerzo (${dishSummary ?? 'Almuerzo del día'})',
+        ),
+      );
+
+      eventsService.track(
+        'dueno.pedido_plan_prioridad',
+        restaurantId: activeRestaurantId,
+      );
+
+      final leftLabel = remainingLunches != null
+          ? (remainingLunches == 1
+              ? 'Queda 1 almuerzo'
+              : 'Quedan $remainingLunches almuerzos')
+          : '#${order.number} · ${dishSummary ?? 'Almuerzo del día'}';
+
+      return ScanResult(
+        isValid: true,
+        outcome: 'VERDE',
+        title: '1 almuerzo descontado del plan',
+        supportingLine: leftLabel,
+        studentName: order.dinerName,
+        passId: ordKey,
+        remainingLunches: remainingLunches,
+        dishName: dishSummary,
+        actionRequired: 'NINGUNA',
+        planCreditsUsed: 1,
+        cashToCollectCents: 0,
       );
     } finally {
       _inFlightOrders.remove(order.number);

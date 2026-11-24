@@ -167,8 +167,15 @@ class _PaseScreenState extends ConsumerState<PaseScreen>
           });
         }
         final hasActiveOrder = s.activeOrder != null;
-        final isSingleActiveOrder =
-            hasActiveOrder && !s.activeOrder!.hasPlan && !s.activeOrder!.isDelivered;
+        final activeOrderRestId = s.activeOrder?.restaurantId;
+        final hasActivePlanForOrder = s.activeOrder != null &&
+            activeOrderRestId != null &&
+            (s.passFor(activeOrderRestId)?.remainingLunches ?? 0) > 0 &&
+            !(s.passFor(activeOrderRestId)?.isExpired ?? true);
+        final isSingleActiveOrder = hasActiveOrder &&
+            !s.activeOrder!.hasPlan &&
+            !hasActivePlanForOrder &&
+            !s.activeOrder!.isDelivered;
         final activePasses =
             s.passes.where((p) => p.remainingLunches > 0).toList();
         final hasAnyPassOrLive = s.passes.isNotEmpty ||
@@ -473,6 +480,11 @@ class _WalletCardData {
     this.hasActiveOrderQr = false,
     this.inactiveQrLabel = 'Se activará al pedir',
     this.statusBadgeLabel,
+    this.statusBadgeIcon,
+    this.metricLabelOverride,
+    this.metricValueOverride,
+    this.extraPillLabelOverride,
+    this.dormantQrIcon,
     this.actionLabel = 'VER ESTADO',
     this.shortRestaurantId,
     this.displayCodeOverride,
@@ -494,6 +506,11 @@ class _WalletCardData {
   final bool hasActiveOrderQr;
   final String inactiveQrLabel;
   final String? statusBadgeLabel;
+  final IconData? statusBadgeIcon;
+  final String? metricLabelOverride;
+  final String? metricValueOverride;
+  final String? extraPillLabelOverride;
+  final IconData? dormantQrIcon;
   final String actionLabel;
   final String? shortRestaurantId;
   final String? displayCodeOverride;
@@ -525,15 +542,22 @@ class _WalletDeck extends StatelessWidget {
             .where((p) => p.remainingLunches > 0 && !p.isExpired)
             .toList();
 
-    // 1. Preorden activa (Individual, con Plan u Oferta Flash)
+    // 1. Preorden activa (Individual, con Plan u Oferta Flash).
+    // Regla de prioridad absoluta: si existe un plan activo en el mismo
+    // restaurante aunque la preorden se haya creado antes de aprobarse el plan,
+    // se fusionan en una sola tarjeta unificada "Preorden con Plan".
     if (order != null && !order.isDelivered) {
       final isFlash = controller.isFlashOfferOrder(order);
       final matchingPass = order.restaurantId != null
           ? state.passFor(order.restaurantId!)
           : null;
+      final hasActivePlanHere = matchingPass != null &&
+          matchingPass.remainingLunches > 0 &&
+          !matchingPass.isExpired;
+      final effectiveHasPlan = order.hasPlan || (!isFlash && hasActivePlanHere);
       final orderType = isFlash
           ? BocadooOrderCardType.flashOffer
-          : (order.hasPlan
+          : (effectiveHasPlan
               ? BocadooOrderCardType.preorderWithPlan
               : BocadooOrderCardType.preorderWithoutPlan);
       final shortCode = BocadooQrParser.toShortCode(
@@ -544,12 +568,12 @@ class _WalletDeck extends StatelessWidget {
       final hasQr = qrData.isNotEmpty;
       final chipLabel = isFlash
           ? 'Flash · ${order.restaurantName}'
-          : (order.hasPlan
+          : (effectiveHasPlan
               ? 'Orden c/Plan #${order.orderNumber}'
               : 'Preorden #${order.orderNumber}');
       final chipIcon = isFlash
           ? Icons.bolt_rounded
-          : (order.hasPlan
+          : (effectiveHasPlan
               ? Icons.confirmation_number_rounded
               : Icons.receipt_long_rounded);
 
@@ -560,12 +584,12 @@ class _WalletDeck extends StatelessWidget {
           chipIcon: chipIcon,
           title: order.restaurantName,
           orderType: orderType,
-          totalCents: order.hasPlan
+          totalCents: effectiveHasPlan
               ? null
               : (order.cashToCollectCents > 0
                   ? order.cashToCollectCents
                   : order.effectiveTotalCents),
-          availableLunches: order.hasPlan
+          availableLunches: effectiveHasPlan
               ? (matchingPass?.remainingLunches ?? order.planCreditsUsed)
               : null,
           scheduledTime: order.estimatedArrivalLabel,
@@ -573,7 +597,9 @@ class _WalletDeck extends StatelessWidget {
           qrData: qrData,
           hasActiveOrderQr: hasQr,
           inactiveQrLabel: 'Generando QR...',
-          statusBadgeLabel: order.hasPlan ? 'Plan Activo' : null,
+          statusBadgeLabel: effectiveHasPlan ? 'Preorden con Plan' : null,
+          statusBadgeIcon:
+              effectiveHasPlan ? Icons.confirmation_number_rounded : null,
           actionLabel: 'VER ESTADO',
           shortRestaurantId: order.restaurantId,
           displayCodeOverride: !AppMode.useMock ? '#${order.orderNumber}' : null,
@@ -634,11 +660,12 @@ class _WalletDeck extends StatelessWidget {
       );
     }
 
-    // 3. Planes activos (con QR dormido si aún no tienen orden con plan hoy)
+    // 3. Planes activos (con QR dormido si aún no tienen orden no-flash en curso hoy)
+    final isOrderFlash = order != null && controller.isFlashOfferOrder(order);
     for (final pass in frontPasses) {
       final alreadyShownWithPlanOrder = order != null &&
           !order.isDelivered &&
-          order.hasPlan &&
+          !isOrderFlash &&
           order.restaurantId == pass.restaurantId;
       if (alreadyShownWithPlanOrder) continue;
 
@@ -682,40 +709,175 @@ class _WalletDeck extends StatelessWidget {
       );
     }
 
-    // 4. Solicitudes de plan pendientes de pago/activación en caja
+    // 4. Tarjetas temporales de solicitud de plan ("Pendiente de aprobación")
     for (final pending in state.pendingPlanRequests) {
       final hasActiveHere = frontPasses.any(
         (p) => p.restaurantId == pending.plan.restaurantId,
       );
       if (hasActiveHere) continue;
-      void openRest() =>
-          context.push('/customer/restaurants/${pending.restaurant.id}');
 
       cards.add(
         _WalletCardData(
           keyId: 'pending:${pending.plan.restaurantId}',
-          chipLabel: 'Por activar · ${pending.restaurant.name}',
-          chipIcon: Icons.storefront_rounded,
+          chipLabel: 'Pendiente · ${pending.restaurant.name}',
+          chipIcon: Icons.hourglass_top_rounded,
           title: pending.restaurant.name,
           orderType: BocadooOrderCardType.preorderWithPlan,
           availableLunches: pending.plan.lunches,
-          extraCashCents: pending.plan.priceCents,
+          metricLabelOverride: 'Plan solicitado',
+          metricValueOverride: '${pending.plan.lunches} almuerzos',
+          extraPillLabelOverride: '${formatCents(pending.plan.priceCents)} en caja',
           hasActiveOrderQr: false,
-          inactiveQrLabel: 'Activa en caja',
-          statusBadgeLabel: 'Por activar',
-          actionLabel: 'VER LOCAL',
+          inactiveQrLabel: 'Esperando aprobación en caja',
+          dormantQrIcon: Icons.hourglass_top_rounded,
+          statusBadgeLabel: 'Pendiente de aprobación',
+          statusBadgeIcon: Icons.hourglass_top_rounded,
+          actionLabel: 'VER ESTADO',
           shortRestaurantId: pending.restaurant.id,
-          onViewStatus: openRest,
-          onTapInactiveQr: openRest,
-          contextualFooter: _PendingPlanActivationBanner(
-            pending: pending,
-            onRefresh: () => controller.refreshLive(),
-          ),
+          onViewStatus: () =>
+              _showPendingPlanStatusSheet(context, controller, pending),
+          onTapInactiveQr: () =>
+              _showPendingPlanStatusSheet(context, controller, pending),
         ),
       );
     }
 
     return cards;
+  }
+
+  Future<void> _showPendingPlanStatusSheet(
+    BuildContext context,
+    CustomerController controller,
+    PendingPlanRequest pending,
+  ) async {
+    final colors = context.colorScheme;
+    final b = context.bocadooColors;
+    final textTheme = Theme.of(context).textTheme;
+    await showModalBottomSheet<void>(
+      context: context,
+      useRootNavigator: true,
+      showDragHandle: true,
+      backgroundColor: colors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      builder: (ctx) => SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: b.walletAccent.withValues(alpha: 0.28),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.hourglass_top_rounded,
+                      color: b.onWalletAccent,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Solicitud pendiente de aprobación',
+                          style: (textTheme.titleMedium ?? const TextStyle())
+                              .copyWith(
+                            fontWeight: FontWeight.w900,
+                            color: colors.onSurface,
+                          ),
+                        ),
+                        Text(
+                          pending.restaurant.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: (textTheme.bodySmall ?? const TextStyle())
+                              .copyWith(
+                            fontWeight: FontWeight.w700,
+                            color: colors.primary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: colors.primaryContainer.withValues(alpha: 0.36),
+                  borderRadius: BorderRadius.circular(18),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${pending.plan.name} · ${pending.plan.lunches} almuerzos',
+                      style: (textTheme.titleSmall ?? const TextStyle())
+                          .copyWith(
+                        fontWeight: FontWeight.w800,
+                        color: colors.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Monto a cancelar en caja: ${formatCents(pending.plan.priceCents)}',
+                      style: (textTheme.bodyMedium ?? const TextStyle())
+                          .copyWith(
+                        fontWeight: FontWeight.w800,
+                        color: colors.primary,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Tu solicitud ya fue enviada al dueño del restaurante. Cuando realices el pago en caja y la aprueben, esta tarjeta se convertirá automáticamente en tu Plan Activo.',
+                      style: (textTheme.bodySmall ?? const TextStyle())
+                          .copyWith(
+                        height: 1.4,
+                        fontWeight: FontWeight.w500,
+                        color: colors.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.of(ctx).pop();
+                  controller.refreshLive();
+                },
+                icon: const Icon(Icons.refresh_rounded, size: 18),
+                label: const Text('Actualizar estado'),
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: () async {
+                  Navigator.of(ctx).pop();
+                  await controller
+                      .dismissPendingPlanRequest(pending.plan.restaurantId);
+                },
+                icon: Icon(Icons.close_rounded, size: 18, color: colors.error),
+                label: Text(
+                  'Cancelar solicitud',
+                  style: TextStyle(color: colors.error),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _confirmCancelGroupTable(
@@ -1005,6 +1167,11 @@ class _WalletCardStackState extends State<_WalletCardStack>
                       hasActiveOrderQr: card.hasActiveOrderQr,
                       inactiveQrLabel: card.inactiveQrLabel,
                       statusBadgeLabel: card.statusBadgeLabel,
+                      statusBadgeIcon: card.statusBadgeIcon,
+                      metricLabelOverride: card.metricLabelOverride,
+                      metricValueOverride: card.metricValueOverride,
+                      extraPillLabelOverride: card.extraPillLabelOverride,
+                      dormantQrIcon: card.dormantQrIcon,
                       actionLabel: card.actionLabel,
                       gradientColors: _gradientForDepth(depth),
                       boxShadow: _shadowForDepth(depth),
@@ -1149,66 +1316,6 @@ class _DiscoverWalletTab extends StatelessWidget {
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _PendingPlanActivationBanner extends StatelessWidget {
-  const _PendingPlanActivationBanner({
-    required this.pending,
-    required this.onRefresh,
-  });
-
-  final PendingPlanRequest pending;
-  final VoidCallback onRefresh;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: colors.primaryContainer.withValues(alpha: 0.42),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: colors.primary.withValues(alpha: 0.25)),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.storefront_rounded, size: 22, color: colors.primary),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Activa tu ${pending.plan.name} en caja',
-                  style: (textTheme.titleSmall ?? const TextStyle()).copyWith(
-                    fontSize: 13.5,
-                    fontWeight: FontWeight.w800,
-                    color: colors.onSurface,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  'Cancela ${formatCents(pending.plan.priceCents)} en el local. Al aprobarse, tu saldo y QR aparecerán aquí automáticamente.',
-                  style: (textTheme.bodySmall ?? const TextStyle()).copyWith(
-                    fontSize: 12,
-                    height: 1.35,
-                    fontWeight: FontWeight.w500,
-                    color: colors.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          IconButton(
-            tooltip: 'Actualizar estado',
-            onPressed: onRefresh,
-            icon: Icon(Icons.refresh_rounded, color: colors.primary),
-          ),
-        ],
       ),
     );
   }

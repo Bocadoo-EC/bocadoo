@@ -142,6 +142,7 @@ Future<void> openScannerFlow(BuildContext context, WidgetRef ref) async {
       ref.invalidate(activeOrdersProvider);
       ref.invalidate(pendingTablesProvider);
       ref.invalidate(ordersOnTheWayProvider);
+      ref.invalidate(ownerClientsProvider);
       unawaited(ref.read(cajaMovementsProvider.notifier).refresh());
 
       if (action == ScanDialogAction.scanAgain) break;

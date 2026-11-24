@@ -16,6 +16,7 @@ import '../../../core/network/polling.dart';
 import '../../../core/session/session_notifier.dart';
 import '../../../core/utils/formatters.dart';
 import '../data/api_customer_repo.dart';
+import '../data/local_customer_cache.dart';
 import '../data/mock_customer_repo.dart';
 import '../data/pase_events_stream.dart';
 import '../../group_orders/presentation/group_order_models.dart';
@@ -65,6 +66,54 @@ class PendingPlanRequest {
     required this.restaurant,
     required this.requestedAt,
   });
+
+  bool get isExpired =>
+      DateTime.now().difference(requestedAt) > const Duration(hours: 24);
+
+  Map<String, dynamic> toMap() => {
+        'planId': plan.id,
+        'restaurantId': plan.restaurantId,
+        'type': plan.type,
+        'name': plan.name,
+        'lunches': plan.lunches,
+        'priceCents': plan.priceCents,
+        'validityDays': plan.validityDays,
+        'category': plan.category,
+        'restaurantName': restaurant.name,
+        'restaurantAddress': restaurant.address,
+        'restaurantZone': restaurant.zone,
+        'restaurantImageUrl': restaurant.imageUrl,
+        'restaurantSinglePrice': restaurant.singleLunchPrice,
+        'requestedAt': requestedAt.toIso8601String(),
+      };
+
+  factory PendingPlanRequest.fromMap(Map<String, dynamic> map) {
+    final restId = (map['restaurantId'] ?? '').toString();
+    return PendingPlanRequest(
+      plan: PlanTemplate(
+        id: (map['planId'] ?? '').toString(),
+        restaurantId: restId,
+        type: (map['type'] ?? 'Mensual').toString(),
+        name: (map['name'] ?? 'Plan de almuerzos').toString(),
+        lunches: (map['lunches'] as num?)?.toInt() ?? 1,
+        priceCents: (map['priceCents'] as num?)?.toInt() ?? 0,
+        validityDays: (map['validityDays'] as num?)?.toInt() ?? 30,
+        category: (map['category'] ?? 'ALMUERZO').toString(),
+      ),
+      restaurant: Restaurant(
+        id: restId,
+        name: (map['restaurantName'] ?? 'Restaurante').toString(),
+        address: (map['restaurantAddress'] ?? '').toString(),
+        zone: (map['restaurantZone'] ?? '').toString(),
+        imageUrl: (map['restaurantImageUrl'] ?? '').toString(),
+        singleLunchPrice:
+            (map['restaurantSinglePrice'] as num?)?.toDouble() ?? 3.0,
+      ),
+      requestedAt:
+          DateTime.tryParse((map['requestedAt'] ?? '').toString()) ??
+              DateTime.now(),
+    );
+  }
 }
 
 @immutable
@@ -433,6 +482,7 @@ class CustomerUiState {
 /// Estado del módulo Comensal compartido por Mi Pase, Dónde comer y Planes.
 class CustomerController extends ChangeNotifier {
   final ICustomerRepository _repository;
+  final LocalCustomerCache _pendingCache = LocalCustomerCache();
   CustomerUiState _state = const CustomerUiState();
   Timer? _undoTimer;
   Future<void> Function()? _undoAction;
@@ -458,16 +508,50 @@ class CustomerController extends ChangeNotifier {
     _isLocationPromptOpen = open;
   }
 
-  ({List<PendingPlanRequest> remaining, List<CustomerPass> newlyActivated})
-      _reconcilePendingPlanRequests(
+  Future<void> _persistPendingRequests(List<PendingPlanRequest> list) =>
+      _pendingCache.savePendingPlanRequests([for (final r in list) r.toMap()]);
+
+  Future<void> dismissPendingPlanRequest(
+    String restaurantId, {
+    bool notify = true,
+  }) async {
+    final next = _state.pendingPlanRequests
+        .where((r) => r.plan.restaurantId != restaurantId)
+        .toList();
+    if (next.length == _state.pendingPlanRequests.length) return;
+    await _persistPendingRequests(next);
+    _emit(_state.copyWith(
+      pendingPlanRequests: next,
+      consumptionNotice:
+          notify ? 'Solicitud de plan cancelada.' : _state.consumptionNotice,
+    ));
+    _syncOrderPolling(
+      _state.activeOrder,
+      table: _state.activeTable,
+      passes: _state.passes,
+      menuPublishedByRest: _state.todayMenuPublishedByRest,
+      pendingPlanRequests: next,
+    );
+  }
+
+  ({
+    List<PendingPlanRequest> remaining,
+    List<CustomerPass> newlyActivated,
+    List<PendingPlanRequest> expired,
+  }) _reconcilePendingPlanRequests(
     List<PendingPlanRequest> requests,
     List<CustomerPass> passes,
   ) {
     if (requests.isEmpty) {
-      return (remaining: const [], newlyActivated: const []);
+      return (
+        remaining: const [],
+        newlyActivated: const [],
+        expired: const [],
+      );
     }
     final remaining = <PendingPlanRequest>[];
     final newlyActivated = <CustomerPass>[];
+    final expired = <PendingPlanRequest>[];
     for (final req in requests) {
       final activePass = passes
           .where(
@@ -479,11 +563,17 @@ class CustomerController extends ChangeNotifier {
           .firstOrNull;
       if (activePass != null) {
         newlyActivated.add(activePass);
+      } else if (req.isExpired) {
+        expired.add(req);
       } else {
         remaining.add(req);
       }
     }
-    return (remaining: remaining, newlyActivated: newlyActivated);
+    return (
+      remaining: remaining,
+      newlyActivated: newlyActivated,
+      expired: expired,
+    );
   }
 
   /// Etiquetas reales de qué incluye el plan (`incluye[]` de backend o menú del local).
@@ -867,8 +957,19 @@ class CustomerController extends ChangeNotifier {
 
     try {
       final cached = await _repository.getCachedPass();
-      if (cached != null && _state.passes.isEmpty) {
-        _emit(_state.copyWith(passes: [cached]));
+      final cachedPendingMaps = await _pendingCache.getPendingPlanRequests();
+      final restoredPending = [
+        for (final m in cachedPendingMaps) PendingPlanRequest.fromMap(m),
+      ];
+      final initialPending = _state.pendingPlanRequests.isNotEmpty
+          ? _state.pendingPlanRequests
+          : restoredPending;
+      if ((cached != null && _state.passes.isEmpty) ||
+          (restoredPending.isNotEmpty && _state.pendingPlanRequests.isEmpty)) {
+        _emit(_state.copyWith(
+          passes: _state.passes.isEmpty && cached != null ? [cached] : _state.passes,
+          pendingPlanRequests: initialPending,
+        ));
       }
 
       // Dispara en paralelo los recursos principales; los secundarios no tumban la carga.
@@ -912,13 +1013,22 @@ class CustomerController extends ChangeNotifier {
       final menuStates = await menuStatesFuture;
 
       final reconciled = _reconcilePendingPlanRequests(
-        _state.pendingPlanRequests,
+        initialPending,
         passes,
       );
+      if (reconciled.remaining.length != initialPending.length) {
+        unawaited(_persistPendingRequests(reconciled.remaining));
+      }
       final firstActivated = reconciled.newlyActivated.firstOrNull;
+      final firstExpired = reconciled.expired.firstOrNull;
       final resolvedPassIndex = firstActivated != null
           ? passes.indexWhere((p) => p.id == firstActivated.id)
           : _state.passIndex.clamp(0, passes.isEmpty ? 0 : passes.length - 1);
+      final approvalNotice = firstActivated != null
+          ? '¡Tu plan en ${firstActivated.restaurantName} fue aprobado y activado!'
+          : (firstExpired != null
+              ? 'Tu solicitud de plan en ${firstExpired.restaurant.name} no fue aprobada a tiempo.'
+              : _state.consumptionNotice);
 
       _emit(CustomerUiState(
         status: CustomerStatus.success,
@@ -938,6 +1048,7 @@ class CustomerController extends ChangeNotifier {
             ? _state.walletFocusTick + 1
             : _state.walletFocusTick,
         recentActivity: activity,
+        consumptionNotice: approvalNotice,
         restaurants: restaurants,
         searchQuery: _state.searchQuery,
         filters: _state.filters,
@@ -1012,7 +1123,11 @@ class CustomerController extends ChangeNotifier {
         pendingList,
         activePasses,
       );
+      if (reconciled.remaining.length != pendingList.length) {
+        unawaited(_persistPendingRequests(reconciled.remaining));
+      }
       final firstActivated = reconciled.newlyActivated.firstOrNull;
+      final firstExpired = reconciled.expired.firstOrNull;
       final activatedPassIdx = firstActivated != null
           ? activePasses.indexWhere((p) => p.id == firstActivated.id)
           : _state.passIndex;
@@ -1030,21 +1145,32 @@ class CustomerController extends ChangeNotifier {
           DateTime.now().difference(_lastSseRedemptionAt!) <
               const Duration(seconds: 6);
       if (orderJustFinished && previousOrder != null && !recentSse) {
-        notice = previousOrder.hasPlan
-            ? 'Almuerzo confirmado en ${previousOrder.restaurantName} (-1 de tu plan).'
+        final effectivePlanOrder = previousOrder.hasPlan ||
+            (previousOrder.restaurantId != null &&
+                activePasses.any(
+                  (p) =>
+                      p.restaurantId == previousOrder.restaurantId &&
+                      p.remainingLunches > 0 &&
+                      !p.isExpired,
+                ));
+        notice = effectivePlanOrder
+            ? 'Descontado 1 almuerzo de tu plan en ${previousOrder.restaurantName}.'
             : 'Pedido #${previousOrder.orderNumber} confirmado en ${previousOrder.restaurantName}.';
         celebrationTick += 1;
-        celebrationTitle = previousOrder.hasPlan
-            ? 'Almuerzo descontado'
+        celebrationTitle = effectivePlanOrder
+            ? '1 almuerzo descontado del plan'
             : '¡Orden aprobada!';
-        celebrationSubtitle = previousOrder.hasPlan
+        celebrationSubtitle = effectivePlanOrder
             ? (previousOrder.cashToCollectCents > 0
-                ? '${previousOrder.restaurantName} · -1 cupo de tu plan + adicionales confirmados'
+                ? '${previousOrder.restaurantName} · Descontado 1 almuerzo del plan + extras'
                 : '${previousOrder.restaurantName} · Descontado 1 almuerzo de tu plan')
             : '${previousOrder.restaurantName} · Pedido #${previousOrder.orderNumber} confirmado';
       } else if (firstActivated != null) {
         notice =
-            '¡Tu plan ${firstActivated.planName} ya está activo! (${firstActivated.remainingLunches} almuerzos disponibles).';
+            '¡Tu plan en ${firstActivated.restaurantName} fue aprobado y activado!';
+      } else if (firstExpired != null) {
+        notice =
+            'Tu solicitud de plan en ${firstExpired.restaurant.name} no fue aprobada a tiempo.';
       }
 
       final effectiveTable = _pruneExpiredCollectingTable(table);
@@ -1138,7 +1264,11 @@ class CustomerController extends ChangeNotifier {
       );
 
       final reconciled = _reconcilePendingPlanRequests(pendingList, passes);
+      if (reconciled.remaining.length != pendingList.length) {
+        unawaited(_persistPendingRequests(reconciled.remaining));
+      }
       final firstActivated = reconciled.newlyActivated.firstOrNull;
+      final firstExpired = reconciled.expired.firstOrNull;
       final activatedIdx = firstActivated != null
           ? passes.indexWhere((p) => p.id == firstActivated.id)
           : _state.passIndex;
@@ -1152,16 +1282,19 @@ class CustomerController extends ChangeNotifier {
               const Duration(seconds: 6);
       if (firstActivated != null) {
         notice =
-            '¡Tu plan ${firstActivated.planName} ya está activo! (${firstActivated.remainingLunches} almuerzos disponibles).';
+            '¡Tu plan en ${firstActivated.restaurantName} fue aprobado y activado!';
+      } else if (firstExpired != null) {
+        notice =
+            'Tu solicitud de plan en ${firstExpired.restaurant.name} no fue aprobada a tiempo.';
       } else if (!recentSse) {
         for (final np in passes) {
           final prev =
               previousPasses.where((p) => p.id == np.id).firstOrNull;
           if (prev != null && np.remainingLunches < prev.remainingLunches) {
             notice =
-                'Almuerzo canjeado · ${np.restaurantName} · Te quedan ${np.remainingLunches} almuerzos';
+                'Descontado 1 almuerzo del plan · ${np.restaurantName} · Te quedan ${np.remainingLunches}';
             celebrationTick += 1;
-            celebrationTitle = 'Almuerzo canjeado';
+            celebrationTitle = '1 almuerzo descontado del plan';
             celebrationSubtitle =
                 '${np.restaurantName} · Te quedan ${np.remainingLunches} almuerzos';
             break;
@@ -1721,6 +1854,7 @@ class CustomerController extends ChangeNotifier {
             ]
           : _state.pendingPlanRequests;
       final reconciled = _reconcilePendingPlanRequests(rawPending, passes);
+      unawaited(_persistPendingRequests(reconciled.remaining));
       final nextFocusedKey = matchedIdx >= 0
           ? 'pass:${passes[matchedIdx].id}'
           : 'pending:${plan.restaurantId}';
@@ -1736,8 +1870,8 @@ class CustomerController extends ChangeNotifier {
         todayMenuPublishedByRest: menuStates.published,
         todayMenuAvailabilityByRest: menuStates.availability,
         consumptionNotice: matchedIdx >= 0
-            ? 'Plan ${plan.name} activo (${passes[matchedIdx].remainingLunches} almuerzos disponibles).'
-            : 'Solicitud de ${plan.name} enviada · Acércate a caja para activarlo.',
+            ? '¡Tu plan en ${passes[matchedIdx].restaurantName} fue aprobado y activado!'
+            : 'Solicitud de ${plan.name} enviada · Esperando aprobación en caja.',
       ));
       _syncOrderPolling(
         _state.activeOrder,

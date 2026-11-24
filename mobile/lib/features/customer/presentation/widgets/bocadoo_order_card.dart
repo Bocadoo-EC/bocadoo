@@ -28,6 +28,11 @@ class BocadooOrderCard extends StatelessWidget {
     this.hasActiveOrderQr = false,
     this.inactiveQrLabel = 'Se activará al pedir',
     this.statusBadgeLabel,
+    this.statusBadgeIcon,
+    this.metricLabelOverride,
+    this.metricValueOverride,
+    this.extraPillLabelOverride,
+    this.dormantQrIcon,
     this.onTapQr,
     this.onTapInactiveQr,
     required this.onTapViewStatus,
@@ -46,6 +51,11 @@ class BocadooOrderCard extends StatelessWidget {
   final bool hasActiveOrderQr;
   final String inactiveQrLabel;
   final String? statusBadgeLabel;
+  final IconData? statusBadgeIcon;
+  final String? metricLabelOverride;
+  final String? metricValueOverride;
+  final String? extraPillLabelOverride;
+  final IconData? dormantQrIcon;
   final VoidCallback? onTapQr;
   final VoidCallback? onTapInactiveQr;
   final VoidCallback onTapViewStatus;
@@ -61,11 +71,15 @@ class BocadooOrderCard extends StatelessWidget {
     final cleanRestaurant = restaurantName.trim().isEmpty
         ? 'RESTAURANTE'
         : restaurantName.trim().toUpperCase();
-    final metricLabel = _isPlanType ? 'Almuerzos disponibles' : 'Total de';
-    final metricValue = _isPlanType
-        ? '${availableLunches ?? 0}'
-        : formatCents(totalCents ?? 0);
+    final metricLabel = metricLabelOverride ??
+        (_isPlanType ? 'Almuerzos disponibles' : 'Total de');
+    final metricValue = metricValueOverride ??
+        (_isPlanType
+            ? '${availableLunches ?? 0}'
+            : formatCents(totalCents ?? 0));
     final hasTime = scheduledTime != null && scheduledTime!.trim().isNotEmpty;
+    final hasExtraPill =
+        extraPillLabelOverride != null && extraPillLabelOverride!.trim().isNotEmpty;
 
     final colors = gradientColors != null && gradientColors!.length >= 2
         ? gradientColors!
@@ -144,6 +158,7 @@ class BocadooOrderCard extends StatelessWidget {
                         _OrderTypePill(
                           orderType: orderType,
                           labelOverride: statusBadgeLabel,
+                          iconOverride: statusBadgeIcon,
                         ),
                       ],
                     ),
@@ -178,7 +193,7 @@ class BocadooOrderCard extends StatelessWidget {
                                           const TextStyle())
                                       .copyWith(
                                     color: Colors.white,
-                                    fontSize: 42,
+                                    fontSize: metricValue.length > 6 ? 28 : 42,
                                     fontWeight: FontWeight.w700,
                                     height: 1.05,
                                     fontFeatures: const [
@@ -187,7 +202,9 @@ class BocadooOrderCard extends StatelessWidget {
                                   ),
                                 ),
                               ),
-                              if (hasTime || extraCashCents > 0) ...[
+                              if (hasTime ||
+                                  extraCashCents > 0 ||
+                                  hasExtraPill) ...[
                                 const SizedBox(height: 10),
                                 Wrap(
                                   spacing: 6,
@@ -198,7 +215,12 @@ class BocadooOrderCard extends StatelessWidget {
                                         icon: Icons.access_time_rounded,
                                         label: 'Hora: ${scheduledTime!.trim()}',
                                       ),
-                                    if (_isPlanType && extraCashCents > 0)
+                                    if (hasExtraPill)
+                                      _TranslucentMetaPill(
+                                        icon: Icons.payments_outlined,
+                                        label: extraPillLabelOverride!.trim(),
+                                      )
+                                    else if (_isPlanType && extraCashCents > 0)
                                       _TranslucentMetaPill(
                                         icon: Icons.payments_outlined,
                                         label:
@@ -221,6 +243,7 @@ class BocadooOrderCard extends StatelessWidget {
                               qrPayload: qrPayload,
                               hasActiveOrderQr: hasActiveOrderQr,
                               inactiveQrLabel: inactiveQrLabel,
+                              dormantQrIcon: dormantQrIcon,
                               onTapQr: onTapQr,
                               onTapInactiveQr: onTapInactiveQr,
                             ),
@@ -268,15 +291,17 @@ class _OrderTypePill extends StatelessWidget {
   const _OrderTypePill({
     required this.orderType,
     this.labelOverride,
+    this.iconOverride,
   });
 
   final BocadooOrderCardType orderType;
   final String? labelOverride;
+  final IconData? iconOverride;
 
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
-    final (defaultLabel, icon, isHighlighted) = switch (orderType) {
+    final (defaultLabel, defaultIcon, isHighlighted) = switch (orderType) {
       BocadooOrderCardType.preorderWithoutPlan => (
           'Preorden',
           Icons.receipt_long_rounded,
@@ -301,6 +326,7 @@ class _OrderTypePill extends StatelessWidget {
     final label = (labelOverride != null && labelOverride!.trim().isNotEmpty)
         ? labelOverride!.trim()
         : defaultLabel;
+    final icon = iconOverride ?? defaultIcon;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -384,6 +410,7 @@ class _QrFocusFrame extends StatelessWidget {
     required this.qrPayload,
     required this.hasActiveOrderQr,
     required this.inactiveQrLabel,
+    this.dormantQrIcon,
     this.onTapQr,
     this.onTapInactiveQr,
   });
@@ -391,6 +418,7 @@ class _QrFocusFrame extends StatelessWidget {
   final String? qrPayload;
   final bool hasActiveOrderQr;
   final String inactiveQrLabel;
+  final IconData? dormantQrIcon;
   final VoidCallback? onTapQr;
   final VoidCallback? onTapInactiveQr;
 
@@ -475,7 +503,7 @@ class _QrFocusFrame extends StatelessWidget {
                                       shape: BoxShape.circle,
                                     ),
                                     child: Icon(
-                                      Icons.bedtime_outlined,
+                                      dormantQrIcon ?? Icons.bedtime_outlined,
                                       size: 16,
                                       color:
                                           Colors.white.withValues(alpha: 0.94),

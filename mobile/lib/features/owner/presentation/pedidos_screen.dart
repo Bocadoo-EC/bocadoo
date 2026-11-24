@@ -43,10 +43,37 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
     ref.invalidate(ordersOnTheWayProvider);
     ref.invalidate(pendingTablesProvider);
     ref.invalidate(dailySummaryProvider);
+    ref.invalidate(ownerClientsProvider);
     unawaited(ref.read(cajaMovementsProvider.notifier).refresh());
   }
 
-  void _maybeOpenFromScanner(List<OwnerOrder> orders) {
+  OwnerClient? _resolveActivePlanClient(
+    List<OwnerClient> clients,
+    OwnerOrder order,
+  ) {
+    final activeClients = clients.where((c) => c.activeLunches > 0).toList();
+    if (activeClients.isEmpty) return null;
+    if (!AppMode.useMock) {
+      final clientId =
+          ref.read(apiOwnerRepositoryProvider).clientIdForOrder(order.number);
+      if (clientId != null && clientId.isNotEmpty) {
+        final byId = activeClients.where((c) => c.id == clientId).firstOrNull;
+        if (byId != null) return byId;
+      }
+    }
+    final normalizedName = order.dinerName.trim().toLowerCase();
+    if (normalizedName.isEmpty) return null;
+    final byName = activeClients
+        .where((c) => c.name.trim().toLowerCase() == normalizedName)
+        .toList();
+    if (byName.length == 1) return byName.first;
+    return null;
+  }
+
+  void _maybeOpenFromScanner(
+    List<OwnerOrder> orders,
+    List<OwnerClient> clients,
+  ) {
     final number = widget.chargeNumber;
     if (_autoHandled || number == null) return;
     _autoHandled = true;
@@ -60,28 +87,50 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
         );
         return;
       }
-      _openPosChargeSheet(order);
+      _openPosChargeSheet(
+        order,
+        planOverrideClient: _resolveActivePlanClient(clients, order),
+      );
     });
   }
 
-  /// Flujo unificado de tarjeta (`Cobrar y entregar` y `Canjear y entregar`):
+  /// Flujo unificado de tarjeta (`Cobrar y entregar` y `Descontar 1 almuerzo`):
   /// navega directo al escáner QR pasando el pedido esperado y luego abre el modal POS.
-  Future<void> _act(OwnerOrder order) async {
+  Future<void> _act(OwnerOrder order, {OwnerClient? planOverrideClient}) async {
     final verifiedOrder = await context.push<OwnerOrder?>(
       '/owner/scanner',
       extra: order,
     );
     if (!mounted || verifiedOrder == null) return;
-    await _openPosChargeSheet(verifiedOrder);
+    final clients =
+        ref.read(ownerClientsProvider).value ?? const <OwnerClient>[];
+    final resolvedClient =
+        planOverrideClient ?? _resolveActivePlanClient(clients, verifiedOrder);
+    await _openPosChargeSheet(
+      verifiedOrder,
+      planOverrideClient: resolvedClient,
+    );
   }
 
-  Future<void> _openPosChargeSheet(OwnerOrder order) async {
+  Future<void> _openPosChargeSheet(
+    OwnerOrder order, {
+    OwnerClient? planOverrideClient,
+  }) async {
+    final overrideLunches = !order.paidByPlan &&
+            planOverrideClient != null &&
+            planOverrideClient.activeLunches > 0
+        ? planOverrideClient.activeLunches
+        : null;
     final payment = await _openSheet<({OwnerPayMethod method, int changeCents})>(
-      _OrderConfirmChargeSheet(order: order),
+      _OrderConfirmChargeSheet(
+        order: order,
+        planOverrideLunches: overrideLunches,
+      ),
     );
     if (payment == null || !mounted) return;
     await _confirmOrder(
       order,
+      planOverrideClient: planOverrideClient,
       paymentMethod: payment.method,
       changeCents: payment.changeCents,
     );
@@ -89,17 +138,31 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
 
   Future<void> _confirmOrder(
     OwnerOrder order, {
+    OwnerClient? planOverrideClient,
     OwnerPayMethod paymentMethod = OwnerPayMethod.efectivo,
     int changeCents = 0,
   }) async {
     final messenger = ScaffoldMessenger.of(context);
     final repo = ref.read(ownerOrdersRepositoryProvider);
     final restaurantId = ref.read(ownerRestaurantIdProvider);
-    final res = await repo.confirmAndRedeemOrder(
-      order.number,
-      restaurantId,
-      paymentMethod: paymentMethod,
-    );
+    final usePlanPriority = !order.paidByPlan &&
+        planOverrideClient != null &&
+        planOverrideClient.activeLunches > 0 &&
+        !AppMode.useMock;
+    final res = usePlanPriority
+        ? await ref
+            .read(apiOwnerRepositoryProvider)
+            .confirmOrderWithPlanPriority(
+              order.number,
+              restaurantId,
+              clientId: planOverrideClient.id,
+              paymentMethod: paymentMethod,
+            )
+        : await repo.confirmAndRedeemOrder(
+            order.number,
+            restaurantId,
+            paymentMethod: paymentMethod,
+          );
     if (!mounted) return;
     _refresh();
     if (!res.isValid) {
@@ -115,7 +178,7 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
       return;
     }
 
-    if (order.paidByPlan && order.cashToCollectCents <= 0) {
+    if ((order.paidByPlan && order.cashToCollectCents <= 0) || usePlanPriority) {
       showInfoSnackBar(messenger, '${res.title} · ${res.supportingLine}');
       return;
     }
@@ -154,6 +217,8 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     final orders = ref.watch(activeOrdersProvider);
+    final clients =
+        ref.watch(ownerClientsProvider).value ?? const <OwnerClient>[];
     final tables = ref.watch(pendingTablesProvider).value ?? const <PendingTable>[];
     final lunchesToday =
         ref.watch(dailySummaryProvider).value?.lunchesRedeemedToday ?? 0;
@@ -187,7 +252,7 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
                 onRetry: _refresh,
               ),
               data: (list) {
-                _maybeOpenFromScanner(list);
+                _maybeOpenFromScanner(list, clients);
                 if (list.isEmpty && tables.isEmpty) {
                   return _Empty(
                     onBack: _back,
@@ -213,7 +278,21 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
                         );
                       }
                       final order = list[i - tables.length];
-                      return _OrderCard(order: order, onAction: () => _act(order));
+                      final matchedClient =
+                          _resolveActivePlanClient(clients, order);
+                      final planLunches = !order.paidByPlan &&
+                              matchedClient != null &&
+                              matchedClient.activeLunches > 0
+                          ? matchedClient.activeLunches
+                          : null;
+                      return _OrderCard(
+                        order: order,
+                        planOverrideLunches: planLunches,
+                        onAction: () => _act(
+                          order,
+                          planOverrideClient: matchedClient,
+                        ),
+                      );
                     },
                   ),
                 );
@@ -390,16 +469,23 @@ class _TableOrderCard extends StatelessWidget {
 }
 
 class _OrderCard extends StatelessWidget {
-  const _OrderCard({required this.order, required this.onAction});
+  const _OrderCard({
+    required this.order,
+    required this.onAction,
+    this.planOverrideLunches,
+  });
 
   final OwnerOrder order;
   final VoidCallback onAction;
+  final int? planOverrideLunches;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     final b = context.bocadooColors;
     final arrival = _arrivalLabel(order);
+    final isPlan = order.paidByPlan ||
+        (planOverrideLunches != null && planOverrideLunches! > 0);
     TextSpan line(String label, String value) => TextSpan(children: [
           TextSpan(text: '$label: ', style: TextStyle(fontWeight: FontWeight.w800, color: colors.primary)),
           TextSpan(text: value),
@@ -467,22 +553,25 @@ class _OrderCard extends StatelessWidget {
               ),
               const TextSpan(text: '\n'),
               line('Llegada est.', arrival),
-              if (!order.paidByPlan) ...[
+              if (!isPlan) ...[
                 const TextSpan(text: '\n'),
                 line('Pago', 'Pago por confirmar en caja'),
-              ] else if (order.cashToCollectCents > 0) ...[
+              ] else if (order.paidByPlan && order.cashToCollectCents > 0) ...[
                 const TextSpan(text: '\n'),
                 line(
                   'Saldo por cobrar',
                   OwnerFormat.money(Money.fromCents(order.cashToCollectCents)),
                 ),
+              ] else ...[
+                const TextSpan(text: '\n'),
+                line('Cobertura', '1 almuerzo del plan activo'),
               ],
             ]),
             style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, height: 1.4, color: colors.onSurface),
           ),
         ),
         const SizedBox(height: 12),
-        if (!order.paidByPlan)
+        if (!isPlan)
           // Preorden sin plan: abre escáner QR -> modal POS Confirmar cobro.
           LayoutBuilder(
             builder: (context, constraints) {
@@ -530,16 +619,18 @@ class _OrderCard extends StatelessWidget {
             },
           )
         else
-          // Preorden con Plan (Prepagado): sin cobro en caja, se canjea y entrega.
+          // Preorden cubierta por plan activo: descuenta 1 almuerzo del plan y entrega.
           LayoutBuilder(
             builder: (context, constraints) {
               final badge = OwnerBadge(
-                label: '🎫 Plan activo (Prepagado)',
+                label: planOverrideLunches != null
+                    ? '🎫 Plan activo ($planOverrideLunches disp.)'
+                    : '🎫 Plan activo · 1 almuerzo',
                 background: b.successContainer,
                 foreground: b.onSuccessContainer,
               );
               final actionBtn = OwnerSmallButton(
-                label: 'Canjear y entregar',
+                label: 'Descontar 1 almuerzo',
                 icon: Icons.qr_code_scanner_rounded,
                 onPressed: onAction,
               );
@@ -572,12 +663,16 @@ class _OrderCard extends StatelessWidget {
   }
 }
 
-/// Modal POS unificado ("Confirmar canje" para pedidos con plan activo y
-/// "Confirmar cobro" para pedidos sin plan) abierto tras validar el QR.
+/// Modal POS unificado ("Descontar 1 almuerzo del plan" para pedidos con plan activo
+/// y "Confirmar cobro" para pedidos sin plan) abierto tras validar el QR.
 class _OrderConfirmChargeSheet extends StatefulWidget {
-  const _OrderConfirmChargeSheet({required this.order});
+  const _OrderConfirmChargeSheet({
+    required this.order,
+    this.planOverrideLunches,
+  });
 
   final OwnerOrder order;
+  final int? planOverrideLunches;
 
   @override
   State<_OrderConfirmChargeSheet> createState() =>
@@ -610,8 +705,14 @@ class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
     final colors = context.colorScheme;
     final b = context.bocadooColors;
     final order = widget.order;
-    final isPlan = order.paidByPlan;
-    final totalCents = order.effectiveTotalCents;
+    final hasPlanOverride =
+        !order.paidByPlan &&
+        widget.planOverrideLunches != null &&
+        widget.planOverrideLunches! > 0;
+    final isPlan = order.paidByPlan || hasPlanOverride;
+    final totalCents = hasPlanOverride
+        ? 0
+        : (order.paidByPlan ? order.cashToCollectCents : order.effectiveTotalCents);
     final hasCashToCollect = totalCents > 0;
     final arrival = _arrivalLabel(order);
     final dishesParts = [
@@ -645,9 +746,12 @@ class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
 
     final primaryButtonLabel = isPlan
         ? (hasCashToCollect
-            ? 'Confirmar canje y cobro · $totalFormatted'
-            : 'Confirmar canje y entrega')
+            ? 'Descontar 1 almuerzo y cobrar · $totalFormatted'
+            : 'Descontar 1 almuerzo del plan')
         : 'Confirmar cobro y entrega · $totalFormatted';
+    final headlineMetric = isPlan
+        ? (hasCashToCollect ? totalFormatted : '1 almuerzo')
+        : totalFormatted;
 
     return ConstrainedBox(
       constraints: BoxConstraints(
@@ -667,7 +771,9 @@ class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
                   children: [
                     Expanded(
                       child: Text(
-                        isPlan ? 'Confirmar canje' : 'Confirmar cobro',
+                        isPlan
+                            ? 'Descontar 1 almuerzo del plan'
+                            : 'Confirmar cobro',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -716,9 +822,11 @@ class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
                                   ),
                                   const SizedBox(width: 8),
                                   Text(
-                                    totalFormatted,
+                                    headlineMetric,
                                     style: TextStyle(
-                                      fontSize: 24,
+                                      fontSize: isPlan && !hasCashToCollect
+                                          ? 20
+                                          : 24,
                                       fontWeight: FontWeight.w900,
                                       color: colors.primary,
                                     ),
@@ -741,7 +849,9 @@ class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
                                   crossAxisAlignment: WrapCrossAlignment.center,
                                   children: [
                                     OwnerBadge(
-                                      label: 'Plan activo · -1 almuerzo',
+                                      label: hasPlanOverride
+                                          ? 'Plan activo (${widget.planOverrideLunches} disp.) · 1 almuerzo'
+                                          : 'Plan activo · 1 almuerzo',
                                       background: b.successContainer,
                                       foreground: b.onSuccessContainer,
                                     ),
@@ -822,8 +932,12 @@ class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
                                     ),
                                     if (isPlan)
                                       _OrderDetailLine(
-                                        label: 'Saldo por cobrar',
-                                        value: totalFormatted,
+                                        label: hasCashToCollect
+                                            ? 'Saldo por cobrar'
+                                            : 'Descuento del plan',
+                                        value: hasCashToCollect
+                                            ? totalFormatted
+                                            : '1 almuerzo del plan',
                                       ),
                                   ],
                                 ),
@@ -847,7 +961,7 @@ class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Cubierto por tu plan · \$0,00',
+                          '1 almuerzo del plan',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           textAlign: TextAlign.end,

@@ -66,7 +66,7 @@ class _OrderStatusSheetState extends ConsumerState<OrderStatusSheet> {
           ),
           Expanded(
             child: found
-                ? _content(order)
+                ? _content(order, controller)
                 : SocialEmpty(
                     icon: Icons.schedule_rounded,
                     title: 'Sin pedidos hoy',
@@ -84,7 +84,7 @@ class _OrderStatusSheetState extends ConsumerState<OrderStatusSheet> {
     );
   }
 
-  Widget _content(ActiveOrder order) {
+  Widget _content(ActiveOrder order, CustomerController controller) {
     final colors = context.colorScheme;
     final b = context.bocadooColors;
     final textTheme = Theme.of(context).textTheme;
@@ -93,6 +93,15 @@ class _OrderStatusSheetState extends ConsumerState<OrderStatusSheet> {
     final countdown = left == null || expired
         ? null
         : '${left.inMinutes}:${(left.inSeconds % 60).toString().padLeft(2, '0')}';
+
+    final matchingPass = order.restaurantId != null
+        ? controller.state.passFor(order.restaurantId!)
+        : null;
+    final hasActivePlanHere = matchingPass != null &&
+        matchingPass.remainingLunches > 0 &&
+        !matchingPass.isExpired;
+    final effectiveHasPlan = order.hasPlan || hasActivePlanHere;
+    final extraCashOnly = order.hasPlan ? order.cashToCollectCents : 0;
 
     final isReady = order.status == 'LISTO' || order.status == 'ENTREGADO';
     final currentStep = isReady ? 2 : 1; // 0: Recibida, 1: En cocina, 2: Lista/En caja
@@ -104,18 +113,18 @@ class _OrderStatusSheetState extends ConsumerState<OrderStatusSheet> {
     final IconData contextualIcon;
     final Color contextualBg;
     final Color contextualFg;
-    if (order.hasPlan && order.cashToCollectCents <= 0) {
+    if (effectiveHasPlan && extraCashOnly <= 0) {
       contextualIcon = Icons.verified_rounded;
       contextualBg = b.successContainer.withValues(alpha: 0.72);
       contextualFg = b.onSuccessContainer;
       contextualRule =
-          'Presenta este QR en caja para descontar 1 almuerzo de tu plan (\$0,00 a pagar).';
-    } else if (order.hasPlan && order.cashToCollectCents > 0) {
+          'Presenta este QR en caja para descontar 1 almuerzo de tu plan.';
+    } else if (effectiveHasPlan && extraCashOnly > 0) {
       contextualIcon = Icons.payments_outlined;
       contextualBg = colors.primaryContainer.withValues(alpha: 0.65);
       contextualFg = colors.onPrimaryContainer;
       contextualRule =
-          'Presenta este QR en caja para descontar 1 almuerzo de tu plan y pagar ${formatCents(order.cashToCollectCents)} adicionales.';
+          'Presenta este QR en caja para descontar 1 almuerzo de tu plan y pagar ${formatCents(extraCashOnly)} adicionales.';
     } else {
       contextualIcon = Icons.payments_outlined;
       contextualBg = colors.primaryContainer.withValues(alpha: 0.65);
@@ -227,14 +236,14 @@ class _OrderStatusSheetState extends ConsumerState<OrderStatusSheet> {
                         value: order.estimatedArrivalLabel!,
                       ),
                     _SummaryRow(
-                      icon: order.hasPlan
+                      icon: effectiveHasPlan
                           ? Icons.confirmation_number_outlined
                           : Icons.payments_outlined,
-                      label: 'Total en caja',
-                      value: order.hasPlan
-                          ? (order.cashToCollectCents > 0
-                              ? '1 cupo + ${formatCents(order.cashToCollectCents)}'
-                              : 'Plan Activo (\$0,00)')
+                      label: effectiveHasPlan ? 'Cobro en caja' : 'Total en caja',
+                      value: effectiveHasPlan
+                          ? (extraCashOnly > 0
+                              ? '1 almuerzo del plan + ${formatCents(extraCashOnly)}'
+                              : '1 almuerzo del plan')
                           : formatCents(cashToPay),
                       highlightValue: true,
                       isLast: true,

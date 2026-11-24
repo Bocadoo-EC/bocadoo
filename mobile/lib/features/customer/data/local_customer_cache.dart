@@ -8,8 +8,10 @@ import '../../../core/contracts/models.dart';
 /// Permite mostrar el último [CustomerPass] y su token QR sin conexión a internet.
 class LocalCustomerCache {
   static const String _cachedPassKey = 'bocadoo_cached_customer_pass';
+  static const String _pendingPlansKey = 'bocadoo_pending_plan_requests';
 
   CustomerPass? _memoryFallback;
+  List<Map<String, dynamic>> _pendingMemoryFallback = const [];
 
   /// Guarda el [CustomerPass] en almacenamiento local persistente.
   Future<void> savePass(CustomerPass pass) async {
@@ -47,6 +49,39 @@ class LocalCustomerCache {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_cachedPassKey);
     } catch (_) {}
+  }
+
+  /// Guarda las solicitudes de plan pendientes de aprobación en caja.
+  Future<void> savePendingPlanRequests(List<Map<String, dynamic>> items) async {
+    _pendingMemoryFallback = items;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (items.isEmpty) {
+        await prefs.remove(_pendingPlansKey);
+      } else {
+        await prefs.setString(_pendingPlansKey, jsonEncode(items));
+      }
+    } catch (_) {}
+  }
+
+  /// Recupera las solicitudes de plan pendientes guardadas en `SharedPreferences`.
+  Future<List<Map<String, dynamic>>> getPendingPlanRequests() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_pendingPlansKey);
+      if (raw != null && raw.isNotEmpty) {
+        final decoded = jsonDecode(raw);
+        if (decoded is List) {
+          final parsed = [
+            for (final item in decoded.whereType<Map>())
+              Map<String, dynamic>.from(item),
+          ];
+          _pendingMemoryFallback = parsed;
+          return parsed;
+        }
+      }
+    } catch (_) {}
+    return _pendingMemoryFallback;
   }
 }
 
