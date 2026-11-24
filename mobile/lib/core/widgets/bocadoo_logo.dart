@@ -14,9 +14,14 @@ class BocadooLogo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final asset = _wordmark
-        ? 'assets/logos/logo completo.png'
-        : 'assets/logos/logo isotopo.png';
+        ? (isDark
+            ? 'assets/logos/LetrasParaFondoNegro.png'
+            : 'assets/logos/LetrasParaFondoBlanco.png')
+        : (isDark
+            ? 'assets/logos/LOGO-MAIN-CLARO.png'
+            : 'assets/logos/LOGO-MAIN-OSCURO.png');
     return Semantics(
       label: 'Bocadoo',
       image: true,

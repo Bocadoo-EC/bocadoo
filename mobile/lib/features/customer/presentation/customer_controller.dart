@@ -414,6 +414,41 @@ class CustomerController extends ChangeNotifier {
   Timer? _sseReconnectTimer;
   Timer? _sseFallbackPoller;
   int _sseRetryAttempt = 0;
+  final Set<String> _flashOrderNumbers = {};
+
+  /// `true` si el pedido activo corresponde a una Oferta Flash real.
+  bool isFlashOfferOrder(ActiveOrder order) {
+    if (_flashOrderNumbers.contains(order.orderNumber)) return true;
+    final repo = _repository;
+    if (repo is ApiCustomerRepository) {
+      return repo.isFlashOfferOrder(order.orderNumber);
+    }
+    return false;
+  }
+
+  /// Total real a cobrar en centavos para una mesa grupal (`cotizacion.saldoPorCobrarCentavos` o participantes).
+  int tableTotalCentsFor(ActiveTable table, CustomerUiState state) {
+    final repo = _repository;
+    if (repo is ApiCustomerRepository) {
+      final cached = repo.cachedTableTotalCents(table.id);
+      if (cached != null) return cached;
+    }
+    final simSession =
+        GroupOrderSimulationStore.instance.sessionById(table.id) ??
+            GroupOrderSimulationStore.instance.activeSession;
+    if (simSession != null && simSession.tableId == table.id) {
+      final rest = state.restaurantById(simSession.restaurantId);
+      final unitCents = ((rest?.singleLunchPrice ?? 3.00) * 100).round();
+      final surchargeCents = (simSession.dailyMenu.takeawaySurcharge * 100).round();
+      var total = 0;
+      for (final p in simSession.participants) {
+        if (!p.paidByPlan) total += unitCents;
+        if (p.selection.takeaway) total += surchargeCents;
+      }
+      return total;
+    }
+    return 0;
+  }
 
   /// Último mensaje de error en una acción (preorden o solicitud de plan).
   String? lastActionError;
@@ -1302,6 +1337,11 @@ class CustomerController extends ChangeNotifier {
         estimatedArrival: estimatedArrival,
         cartaItems: cartaItems,
       );
+      if (offerId != null && offerId.isNotEmpty) {
+        _flashOrderNumbers.add(order.orderNumber);
+      } else {
+        _flashOrderNumbers.remove(order.orderNumber);
+      }
       final matchingPassIdx =
           _state.passes.indexWhere((p) => p.restaurantId == restaurant.id);
       _emit(_state.copyWith(

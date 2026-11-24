@@ -14,6 +14,7 @@ import '../domain/feedback_rules.dart';
 import 'customer_controller.dart';
 import 'customer_widgets.dart';
 import 'feedback_card.dart';
+import 'widgets/bocadoo_order_card.dart';
 
 /// C1 · Mi Pase: QR del plan, preorden o mesa, sellos y últimos movimientos.
 class PaseScreen extends ConsumerStatefulWidget {
@@ -765,9 +766,6 @@ class _ActiveWalletCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.colorScheme;
-    final b = context.bocadooColors;
-    final fg = b.imageForeground;
     final mode = state.qrMode;
     final pass = state.currentPass;
     final order = state.activeOrder;
@@ -785,427 +783,226 @@ class _ActiveWalletCard extends StatelessWidget {
         simSession != null &&
         simSession.status == GroupOrderStatus.confirmed;
 
+    final menuAvail = mode == QrMode.plan && pass != null
+        ? state.menuAvailabilityFor(pass.restaurantId)
+        : MenuAvailabilityState.disponible;
+
     final String title;
-    final String badgeLabel;
-    final Color badgeBg;
-    final Color badgeFg;
+    final BocadooOrderCardType orderType;
+    final int? totalCents;
+    final int? availableLunches;
+    final String? scheduledTime;
+    final int extraCashCents;
+    final String qrData;
+    final bool hasActiveOrderQr;
+    final String inactiveQrLabel;
     final String? shortRestaurantId;
+    final String? displayCodeOverride;
+    final VoidCallback onViewStatus;
 
     if (mode == QrMode.preorden && order != null) {
       title = order.restaurantName;
-      badgeLabel = order.hasPlan ? 'Preorden · Plan Activo' : 'Preorden Sin Plan';
-      badgeBg = order.hasPlan ? b.successContainer : b.walletAccent;
-      badgeFg = order.hasPlan ? b.success : b.onWalletAccent;
+      final isFlash = controller.isFlashOfferOrder(order);
+      orderType = isFlash
+          ? BocadooOrderCardType.flashOffer
+          : (order.hasPlan
+              ? BocadooOrderCardType.preorderWithPlan
+              : BocadooOrderCardType.preorderWithoutPlan);
+      final matchingPass = order.restaurantId != null
+          ? state.passFor(order.restaurantId!)
+          : null;
+      availableLunches = order.hasPlan
+          ? (matchingPass?.remainingLunches ?? order.planCreditsUsed)
+          : null;
+      totalCents = order.hasPlan
+          ? null
+          : (order.cashToCollectCents > 0
+              ? order.cashToCollectCents
+              : order.effectiveTotalCents);
+      extraCashCents = order.hasPlan ? order.cashToCollectCents : 0;
+      scheduledTime = order.estimatedArrivalLabel;
       shortRestaurantId = order.restaurantId;
+      final shortCode = BocadooQrParser.toShortCode(
+        state.qrValue,
+        restaurantId: shortRestaurantId,
+      );
+      qrData = AppMode.useMock ? shortCode : state.qrValue;
+      hasActiveOrderQr = AppMode.useMock ? qrData.isNotEmpty : state.qrValue.isNotEmpty;
+      inactiveQrLabel = 'Generando QR...';
+      displayCodeOverride = !AppMode.useMock ? '#${order.orderNumber}' : null;
+      onViewStatus = () => context.push('/customer/pedido/${order.orderNumber}');
     } else if (mode == QrMode.mesa && table != null) {
       title = simSession != null
           ? 'Mesa de ${simSession.hostName}'
           : table.restaurantName;
-      if (isMesaCollecting) {
-        badgeLabel =
-            'Pendiente (${simSession.confirmedCount}/${simSession.totalParticipants})';
-        badgeBg = colors.surface;
-        badgeFg = colors.primary;
-      } else if (isMesaConfirmed) {
-        badgeLabel = '✅ Confirmado · Listo para caja';
-        badgeBg = b.successContainer;
-        badgeFg = b.success;
-      } else {
-        badgeLabel = 'Mesa Compartida';
-        badgeBg = colors.surface;
-        badgeFg = colors.primary;
-      }
+      orderType = BocadooOrderCardType.groupOrder;
+      availableLunches = null;
+      totalCents = controller.tableTotalCentsFor(table, state);
+      extraCashCents = 0;
+      scheduledTime = simSession?.timeHhmm ?? table.time;
       shortRestaurantId = null;
+      final shortCode = BocadooQrParser.toShortCode(state.qrValue);
+      qrData = isMesaConfirmed
+          ? simSession.qrPayload
+          : (AppMode.useMock ? shortCode : state.qrValue);
+      hasActiveOrderQr = !isMesaCollecting && qrData.isNotEmpty;
+      inactiveQrLabel = isMesaCollecting
+          ? 'Esperando (${simSession.confirmedCount}/${simSession.totalParticipants})'
+          : 'QR pendiente';
+      displayCodeOverride = isMesaConfirmed ? 'Mesa #${simSession.shortCode}' : null;
+      onViewStatus = () => context.push(
+            '/customer/mesa?groupOrderId=${table.id}${simSession != null ? '&restaurantId=${simSession.restaurantId}' : ''}',
+          );
     } else if (pass != null) {
       title = pass.restaurantName;
-      badgeLabel = 'Plan Activo';
-      badgeBg = b.successContainer;
-      badgeFg = b.success;
+      orderType = BocadooOrderCardType.preorderWithPlan;
+      availableLunches = pass.remainingLunches;
+      totalCents = null;
+      final activeOrderHere = order != null &&
+          !order.isDelivered &&
+          order.restaurantId == pass.restaurantId
+          ? order
+          : null;
+      extraCashCents = activeOrderHere?.cashToCollectCents ?? 0;
+      scheduledTime = activeOrderHere?.estimatedArrivalLabel;
       shortRestaurantId = pass.restaurantId;
+      if (activeOrderHere != null) {
+        final orderCode = BocadooQrParser.toShortCode(
+          activeOrderHere.qrPayload,
+          restaurantId: shortRestaurantId,
+        );
+        qrData = AppMode.useMock ? orderCode : activeOrderHere.qrPayload;
+        hasActiveOrderQr = qrData.isNotEmpty;
+        displayCodeOverride =
+            !AppMode.useMock ? '#${activeOrderHere.orderNumber}' : null;
+        inactiveQrLabel = 'Generando QR...';
+        onViewStatus =
+            () => context.push('/customer/pedido/${activeOrderHere.orderNumber}');
+      } else {
+        qrData = '';
+        hasActiveOrderQr = false;
+        displayCodeOverride = null;
+        inactiveQrLabel = switch (menuAvail) {
+          MenuAvailabilityState.sinPublicar => 'Menú sin publicar',
+          MenuAvailabilityState.agotadoTotal => 'Menú agotado hoy',
+          MenuAvailabilityState.disponible => 'Se activará al pedir',
+        };
+        onViewStatus =
+            () => context.push('/customer/restaurants/${pass.restaurantId}');
+      }
     } else {
       title = 'Bocadoo';
-      badgeLabel = 'Mi Pase';
-      badgeBg = colors.surface;
-      badgeFg = colors.primary;
+      orderType = BocadooOrderCardType.preorderWithoutPlan;
+      availableLunches = null;
+      totalCents = 0;
+      extraCashCents = 0;
+      scheduledTime = null;
       shortRestaurantId = null;
+      qrData = '';
+      hasActiveOrderQr = false;
+      displayCodeOverride = null;
+      inactiveQrLabel = 'Se activará al pedir';
+      onViewStatus = () => context.go('/customer/restaurants');
     }
 
-    final shortCode = mode == QrMode.plan
-        ? BocadooQrParser.displayPlanCode(
-            state.qrValue,
-            restaurantId: shortRestaurantId,
-          )
-        : BocadooQrParser.toShortCode(
-            state.qrValue,
-            restaurantId: shortRestaurantId,
-          );
-
-    return Container(
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: colors.outlineVariant),
-        boxShadow: [
-          BoxShadow(
-            color: colors.primary.withValues(alpha: 0.14),
-            blurRadius: 24,
-            offset: const Offset(0, 10),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        BocadooOrderCard(
+          restaurantName: title,
+          orderType: orderType,
+          totalCents: totalCents,
+          availableLunches: availableLunches,
+          scheduledTime: scheduledTime,
+          extraCashCents: extraCashCents,
+          qrPayload: qrData,
+          hasActiveOrderQr: hasActiveOrderQr,
+          inactiveQrLabel: inactiveQrLabel,
+          onTapQr: hasActiveOrderQr
+              ? () => _showZoomedQr(
+                    context,
+                    qrData,
+                    title,
+                    restaurantId: shortRestaurantId,
+                    badgeOverride: displayCodeOverride,
+                  )
+              : null,
+          onTapViewStatus: onViewStatus,
+        ),
+        if (mode == QrMode.plan &&
+            pass != null &&
+            menuAvail == MenuAvailabilityState.sinPublicar) ...[
+          const SizedBox(height: 12),
+          _MenuNotPublishedQrBlock(
+            restaurantId: pass.restaurantId,
+            onRefresh: () => controller.loadDashboard(silent: true),
           ),
-        ],
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Container(
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
-            decoration: BoxDecoration(gradient: b.heroGradient),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        title,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w900,
-                          height: 1.15,
-                          color: fg,
-                        ),
-                      ),
+        ] else if (mode == QrMode.plan &&
+            pass != null &&
+            menuAvail == MenuAvailabilityState.agotadoTotal) ...[
+          const SizedBox(height: 12),
+          _MenuSoldOutQrBlock(
+            restaurantId: pass.restaurantId,
+            hasReservedOrder: order != null &&
+                !order.isDelivered &&
+                order.restaurantId == pass.restaurantId,
+            onOpenOrderQr: order != null &&
+                    !order.isDelivered &&
+                    order.restaurantId == pass.restaurantId
+                ? () => controller.selectQrMode(QrMode.preorden)
+                : null,
+            onRefresh: () => controller.loadDashboard(silent: true),
+          ),
+        ] else if (isMesaCollecting) ...[
+          const SizedBox(height: 12),
+          _PendingGroupTableBlock(
+            confirmedCount: simSession.confirmedCount,
+            totalCount: simSession.totalParticipants,
+            restaurantName: simSession.restaurantName,
+            onOpenMesa: () => context.push(
+              '/customer/mesa?groupOrderId=${table.id}&restaurantId=${simSession.restaurantId}',
+            ),
+            onCancelMesa: () async {
+              final confirm = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('¿Cancelar pedido grupal?'),
+                  content: const Text(
+                    'Se cerrará esta mesa compartida sin costo alguno y tus amigos ya no podrán unirse.',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.of(ctx).pop(false),
+                      child: const Text('Seguir en la mesa'),
                     ),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 5,
-                      ),
-                      decoration: BoxDecoration(
-                        color: badgeBg,
-                        borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-                      ),
+                    TextButton(
+                      onPressed: () => Navigator.of(ctx).pop(true),
                       child: Text(
-                        badgeLabel,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w900,
-                          color: badgeFg,
-                        ),
+                        'Cancelar pedido',
+                        style: TextStyle(color: ctx.colorScheme.error),
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
-                if (mode == QrMode.preorden && order != null) ...[
-                  Text(
-                    order.detail.isNotEmpty
-                        ? order.detail
-                        : 'Preorden #${order.orderNumber}',
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                      color: fg.withValues(alpha: 0.94),
-                    ),
+              );
+              if (confirm != true || !context.mounted) return;
+              final ok = await controller.cancelSharedTable(table.id);
+              if (!context.mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  behavior: SnackBarBehavior.floating,
+                  content: Text(
+                    ok
+                        ? 'Pedido grupal cancelado'
+                        : (controller.lastActionError ??
+                            'No se pudo cancelar el pedido grupal'),
                   ),
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 6,
-                    children: [
-                      if (order.estimatedArrivalLabel != null)
-                        _HeroChip(
-                          icon: Icons.schedule_rounded,
-                          label: 'Hora: ${order.estimatedArrivalLabel!}',
-                          fg: fg,
-                        ),
-                      _HeroChip(
-                        icon: order.hasPlan
-                            ? Icons.confirmation_number_outlined
-                            : Icons.payments_outlined,
-                        label: order.hasPlan
-                            ? 'Cubierto por plan'
-                            : 'Total: ${formatCents(order.effectiveTotalCents)}',
-                        fg: fg,
-                      ),
-                    ],
-                  ),
-                  if (order.cashToCollectCents > 0) ...[
-                    const SizedBox(height: 10),
-                    _CashPendingBadge(cents: order.cashToCollectCents),
-                  ],
-                ] else if (mode == QrMode.mesa && table != null) ...[
-                  Text(
-                    '${table.membersCount} en la mesa · Llegada ${table.time}',
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w800,
-                      color: fg,
-                    ),
-                  ),
-                ] else if (pass != null) ...[
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.baseline,
-                    textBaseline: TextBaseline.alphabetic,
-                    children: [
-                      Text(
-                        '${pass.remainingLunches}',
-                        style: TextStyle(
-                          fontSize: 40,
-                          fontWeight: FontWeight.w900,
-                          height: 1,
-                          color: fg,
-                          fontFeatures: const [FontFeature.tabularFigures()],
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'de ${pass.totalLunches} disponibles',
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                            color: fg.withValues(alpha: 0.9),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${pass.planName} · Vence ${formatShortDate(pass.expiresAt)}',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: fg.withValues(alpha: 0.85),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
-            child: Builder(
-              builder: (context) {
-                final menuAvail = mode == QrMode.plan && pass != null
-                    ? state.menuAvailabilityFor(pass.restaurantId)
-                    : MenuAvailabilityState.disponible;
-                if (menuAvail == MenuAvailabilityState.sinPublicar &&
-                    pass != null) {
-                  return _MenuNotPublishedQrBlock(
-                    restaurantId: pass.restaurantId,
-                    onRefresh: () => controller.loadDashboard(silent: true),
-                  );
-                }
-                if (menuAvail == MenuAvailabilityState.agotadoTotal &&
-                    pass != null) {
-                  final hasReservedOrderHere = order != null &&
-                      !order.isDelivered &&
-                      order.restaurantId == pass.restaurantId;
-                  return _MenuSoldOutQrBlock(
-                    restaurantId: pass.restaurantId,
-                    hasReservedOrder: hasReservedOrderHere,
-                    onOpenOrderQr: hasReservedOrderHere
-                        ? () => controller.selectQrMode(QrMode.preorden)
-                        : null,
-                    onRefresh: () => controller.loadDashboard(silent: true),
-                  );
-                }
-
-                if (isMesaCollecting) {
-                  return _PendingGroupTableBlock(
-                    confirmedCount: simSession.confirmedCount,
-                    totalCount: simSession.totalParticipants,
-                    restaurantName: simSession.restaurantName,
-                    onOpenMesa: () => context.push(
-                      '/customer/mesa?groupOrderId=${table.id}&restaurantId=${simSession.restaurantId}',
-                    ),
-                    onCancelMesa: () async {
-                      final confirm = await showDialog<bool>(
-                        context: context,
-                        builder: (ctx) => AlertDialog(
-                          title: const Text('¿Cancelar pedido grupal?'),
-                          content: const Text(
-                            'Se cerrará esta mesa compartida sin costo alguno y tus amigos ya no podrán unirse.',
-                          ),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.of(ctx).pop(false),
-                              child: const Text('Seguir en la mesa'),
-                            ),
-                            TextButton(
-                              onPressed: () => Navigator.of(ctx).pop(true),
-                              child: Text(
-                                'Cancelar pedido',
-                                style: TextStyle(color: ctx.colorScheme.error),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                      if (confirm != true || !context.mounted) return;
-                      final ok = await controller.cancelSharedTable(table.id);
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          behavior: SnackBarBehavior.floating,
-                          content: Text(
-                            ok
-                                ? 'Pedido grupal cancelado'
-                                : (controller.lastActionError ??
-                                    'No se pudo cancelar el pedido grupal'),
-                          ),
-                        ),
-                      );
-                    },
-                  );
-                }
-
-                if (mode == QrMode.plan && pass != null) {
-                  return _ReserveForQrBlock(
-                    restaurantId: pass.restaurantId,
-                    remainingLunches: pass.remainingLunches,
-                    onOpenOrderQr: order != null
-                        ? () => controller.selectQrMode(QrMode.preorden)
-                        : null,
-                  );
-                }
-
-                final qrData = isMesaConfirmed
-                    ? simSession.qrPayload
-                    : (AppMode.useMock ? shortCode : state.qrValue);
-                final waitingFreshQr = !AppMode.useMock && qrData.isEmpty;
-                final displayCode = isMesaConfirmed
-                    ? 'Mesa #${simSession.shortCode}'
-                    : ((!AppMode.useMock &&
-                            mode == QrMode.preorden &&
-                            order != null)
-                        ? '#${order.orderNumber}'
-                        : shortCode);
-                return Column(
-                  children: [
-                    GestureDetector(
-                      onTap: waitingFreshQr
-                          ? null
-                          : () => _showZoomedQr(
-                                context,
-                                qrData,
-                                title,
-                                restaurantId: shortRestaurantId,
-                                badgeOverride: displayCode,
-                              ),
-                      child: Container(
-                        width: 212,
-                        height: 212,
-                        padding: const EdgeInsets.all(14),
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: b.qrBackground,
-                          borderRadius: BorderRadius.circular(24),
-                          border: Border.all(color: colors.outlineVariant),
-                        ),
-                        child: waitingFreshQr
-                            ? const SizedBox(
-                                width: 32,
-                                height: 32,
-                                child: CircularProgressIndicator(),
-                              )
-                            : Stack(
-                                clipBehavior: Clip.none,
-                                children: [
-                                  _Qr(value: qrData, size: 176),
-                                  Positioned(
-                                    right: -14,
-                                    bottom: -14,
-                                    child: Container(
-                                      padding: const EdgeInsets.all(5),
-                                      decoration: BoxDecoration(
-                                        color: colors.primary,
-                                        shape: BoxShape.circle,
-                                      ),
-                                      child: Icon(
-                                        Icons.open_in_full_rounded,
-                                        size: 14,
-                                        color: colors.onPrimary,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 18,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: colors.primaryContainer,
-                        borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-                      ),
-                      child: Text(
-                        displayCode,
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 2.5,
-                          color: colors.onPrimaryContainer,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      mode == QrMode.preorden
-                          ? (order?.hasPlan == true
-                              ? 'Presenta este QR en caja para descontar de tu plan'
-                              : 'Presenta este QR en caja para confirmar y pagar')
-                          : 'Muestra este QR en caja para validar tu almuerzo',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: colors.onSurfaceVariant,
-                      ),
-                    ),
-                    if (mode == QrMode.plan && pass != null) ...[
-                      const SizedBox(height: 4),
-                      TextButton(
-                        onPressed: () => context
-                            .push('/customer/restaurants/${pass.restaurantId}'),
-                        child: const Text('Ver menú de hoy y elegir platos'),
-                      ),
-                    ],
-                    if (mode == QrMode.preorden && order != null) ...[
-                      const SizedBox(height: 4),
-                      TextButton(
-                        onPressed: () =>
-                            context.push('/customer/pedido/${order.orderNumber}'),
-                        child: const Text('Ver estado del pedido'),
-                      ),
-                    ],
-                    if (mode == QrMode.mesa && table != null) ...[
-                      const SizedBox(height: 4),
-                      TextButton(
-                        onPressed: () => context.push(
-                          '/customer/mesa?groupOrderId=${table.id}${simSession != null ? '&restaurantId=${simSession.restaurantId}' : ''}',
-                        ),
-                        child: const Text('Ver mesa y compartir'),
-                      ),
-                    ],
-                  ],
-                );
-              },
-            ),
+                ),
+              );
+            },
           ),
         ],
-      ),
+      ],
     );
   }
 }
@@ -1499,44 +1296,6 @@ class _MenuSoldOutQrBlock extends StatelessWidget {
                 ),
               ),
             ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _HeroChip extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final Color fg;
-
-  const _HeroChip({
-    required this.icon,
-    required this.label,
-    required this.fg,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: fg.withValues(alpha: 0.16),
-        borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 13, color: fg),
-          const SizedBox(width: 5),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w800,
-              color: fg,
-            ),
           ),
         ],
       ),
@@ -2025,89 +1784,3 @@ class _PaseSkeleton extends StatelessWidget {
   }
 }
 
-
-/// Orden híbrida: recuerda el saldo de carta / extras que se paga en el local.
-class _CashPendingBadge extends StatelessWidget {
-  const _CashPendingBadge({required this.cents});
-
-  final int cents;
-
-  @override
-  Widget build(BuildContext context) {
-    final b = context.bocadooColors;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: b.walletAccent,
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(Icons.payments_outlined, size: 18, color: b.onWalletAccent),
-        const SizedBox(width: 8),
-        Flexible(
-          child: Text(
-            'Saldo pendiente a pagar en local: ${formatCents(cents)}',
-            style: TextStyle(
-              fontSize: 13,
-              height: 1.2,
-              fontWeight: FontWeight.w800,
-              color: b.onWalletAccent,
-            ),
-          ),
-        ),
-      ]),
-    );
-  }
-}
-
-class _ReserveForQrBlock extends StatelessWidget {
-  const _ReserveForQrBlock({
-    required this.restaurantId,
-    required this.remainingLunches,
-    this.onOpenOrderQr,
-  });
-
-  final String restaurantId;
-  final int remainingLunches;
-  final VoidCallback? onOpenOrderQr;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colorScheme;
-    final hasOrder = onOpenOrderQr != null;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: Theme.of(context).scaffoldBackgroundColor,
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: colors.outlineVariant),
-      ),
-      child: Column(children: [
-        Icon(Icons.qr_code_2_rounded, size: 40, color: colors.primary),
-        const SizedBox(height: 10),
-        Text(
-          hasOrder
-              ? 'Tu pedido ya tiene QR'
-              : 'Reserva tu almuerzo para generar tu QR',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: colors.onSurface),
-        ),
-        const SizedBox(height: 6),
-        Text(
-          hasOrder
-              ? 'Muéstralo en caja para validar tu almuerzo.'
-              : 'Te quedan $remainingLunches almuerzos. El QR se crea al hacer tu pedido y solo se muestra mientras esté activo.',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant),
-        ),
-        const SizedBox(height: 14),
-        FilledButton(
-          onPressed: onOpenOrderQr ??
-              () => context.push('/customer/restaurants/$restaurantId'),
-          child: Text(hasOrder ? 'Ver QR de mi pedido' : 'Ver menú de hoy y elegir platos'),
-        ),
-      ]),
-    );
-  }
-}

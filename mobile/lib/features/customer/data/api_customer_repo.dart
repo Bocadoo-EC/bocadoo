@@ -49,6 +49,15 @@ class ApiCustomerRepository implements ICustomerRepository {
   final Map<String, String> _orderIdByNumber = {};
   final Map<String, String> _estimatedArrivalByOrderNumber = {};
   final Map<String, ({int partySize, bool takeaway})> _tablePrefsById = {};
+  final Map<String, int> _tableTotalCentsById = {};
+  final Set<String> _flashOrderNumbers = {};
+
+  /// Último total cotizado conocido para una mesa grupal (`cotizacion.saldoPorCobrarCentavos`).
+  int? cachedTableTotalCents(String tableId) => _tableTotalCentsById[tableId];
+
+  /// `true` si el pedido contiene una oferta flash (`almuerzo.ofertaId` / `ofertas[]`).
+  bool isFlashOfferOrder(String orderNumber) =>
+      _flashOrderNumbers.contains(orderNumber);
 
   /// Último estado conocido de publicación del menú de hoy por `restaurantId`.
   bool? cachedTodayMenuPublished(String restaurantId) =>
@@ -302,6 +311,13 @@ class ApiCustomerRepository implements ICustomerRepository {
       final rest = _asMap(item['restaurante']);
       final miembros = _asListOfMaps(item['miembros']);
       final hora = DateTime.tryParse((item['horaLlegada'] ?? '').toString());
+      final cot = _parseCotizacion(item['cotizacion']);
+      if (cot != null && id.isNotEmpty) {
+        _tableTotalCentsById[id] = cot.saldoPorCobrarCentavos;
+      } else if (id.isNotEmpty && item['totalCentavos'] != null) {
+        final rawTotal = _asInt(item['totalCentavos']);
+        if (rawTotal != null) _tableTotalCentsById[id] = rawTotal;
+      }
       return ActiveTable(
         id: id,
         restaurantName: (rest['nombre'] ?? '').toString(),
@@ -1347,6 +1363,13 @@ class ApiCustomerRepository implements ICustomerRepository {
     final hora = DateTime.tryParse((json['horaLlegada'] ?? '').toString());
     final modoRaw = (json['modo'] ?? 'CADA_UNO').toString().toUpperCase();
     final estado = (json['estado'] ?? 'ABIERTA').toString().toUpperCase();
+    final cot = _parseCotizacion(json['cotizacion']);
+    if (cot != null && id.isNotEmpty) {
+      _tableTotalCentsById[id] = cot.saldoPorCobrarCentavos;
+    } else if (id.isNotEmpty && json['totalCentavos'] != null) {
+      final rawTotal = _asInt(json['totalCentavos']);
+      if (rawTotal != null) _tableTotalCentsById[id] = rawTotal;
+    }
 
     final members = <TableMember>[];
     for (final raw in _asListOfMaps(json['miembros'])) {
@@ -1498,6 +1521,13 @@ class ApiCustomerRepository implements ICustomerRepository {
     final hora = DateTime.tryParse((json['horaLlegada'] ?? '').toString());
     final modoRaw = (json['modo'] ?? 'CADA_UNO').toString().toUpperCase();
     final estado = (json['estado'] ?? 'ABIERTA').toString().toUpperCase();
+    final cot = _parseCotizacion(json['cotizacion']);
+    if (cot != null && id.isNotEmpty) {
+      _tableTotalCentsById[id] = cot.saldoPorCobrarCentavos;
+    } else if (id.isNotEmpty && json['totalCentavos'] != null) {
+      final rawTotal = _asInt(json['totalCentavos']);
+      if (rawTotal != null) _tableTotalCentsById[id] = rawTotal;
+    }
     final count = (_asInt(json['personas']) ?? 1).clamp(1, 50);
 
     final members = <TableMember>[
@@ -1973,6 +2003,16 @@ class ApiCustomerRepository implements ICustomerRepository {
             (hasPlan ? 0 : baseCents + (takeaway ? recargoCents : 0)));
 
     final orderNum = numero.isEmpty ? id : numero;
+    final hasOffer = almuerzo?['ofertaId'] != null ||
+        (json['ofertas'] is List && (json['ofertas'] as List).isNotEmpty) ||
+        (cotizacion?.lineas.any((l) => l.tipo == 'OFERTA') ?? false);
+    if (orderNum.isNotEmpty) {
+      if (hasOffer) {
+        _flashOrderNumbers.add(orderNum);
+      } else {
+        _flashOrderNumbers.remove(orderNum);
+      }
+    }
     final rawEta = json['horaEstimada'] ?? json['horaLlegada'];
     final etaDt = rawEta != null ? DateTime.tryParse(rawEta.toString()) : null;
     final createdDt = DateTime.tryParse((json['creadoEn'] ?? '').toString());
