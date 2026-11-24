@@ -14,12 +14,14 @@ class AuthResult {
   const AuthResult._({
     required this.ok,
     this.errorMessage,
+    this.errorCode,
     this.hasRestaurant = false,
     this.fieldErrors = const {},
   });
 
   final bool ok;
   final String? errorMessage;
+  final String? errorCode;
   final bool hasRestaurant;
   final Map<String, String> fieldErrors;
 
@@ -30,11 +32,13 @@ class AuthResult {
 
   factory AuthResult.failure(
     String message, {
+    String? errorCode,
     Map<String, String> fieldErrors = const {},
   }) =>
       AuthResult._(
         ok: false,
         errorMessage: message,
+        errorCode: errorCode,
         fieldErrors: fieldErrors,
       );
 }
@@ -465,29 +469,38 @@ class ApiAuthRepository implements IAuthRepository {
       return AuthResult.success(hasRestaurant: true);
     } on ApiException catch (e) {
       final codeUpper = e.code.toUpperCase();
-      final detailLower = e.detail.toLowerCase();
+      final titleUpper = e.title.toUpperCase();
+      final detailUpper = e.detail.toUpperCase();
+      final combinedUpper = '$codeUpper $titleUpper $detailUpper';
       final isDuplicateEmail = e.status == 409 ||
           codeUpper == 'CONFLICT' ||
-          codeUpper == 'EMAIL_YA_EXISTE' ||
-          codeUpper == 'CORREO_YA_EXISTE' ||
-          codeUpper == 'CORREO_DUPLICADO' ||
-          ((detailLower.contains('correo') || detailLower.contains('email')) &&
-              (detailLower.contains('existe') ||
-                  detailLower.contains('registrad') ||
-                  detailLower.contains('duplicad')));
+          combinedUpper.contains('EMAIL_YA_EXISTE') ||
+          combinedUpper.contains('CORREO_YA_EXISTE') ||
+          combinedUpper.contains('CORREO_DUPLICADO') ||
+          ((combinedUpper.contains('EMAIL') ||
+                  combinedUpper.contains('CORREO')) &&
+              (combinedUpper.contains('EXISTE') ||
+                  combinedUpper.contains('REGISTRAD') ||
+                  combinedUpper.contains('DUPLICAD') ||
+                  combinedUpper.contains('CONFLICT') ||
+                  combinedUpper.contains('EN USO')));
       if (isDuplicateEmail) {
         const duplicateMsg =
             'Este correo ya está registrado. Utiliza otro correo para crear tu cuenta.';
         return AuthResult.failure(
           duplicateMsg,
+          errorCode: e.code,
           fieldErrors: {
             ...e.fieldErrors,
             'correo': duplicateMsg,
           },
         );
       }
+      final detail = e.detail.trim();
+      final msg = detail.isNotEmpty ? detail : e.userMessage;
       return AuthResult.failure(
-        e.userMessage,
+        msg,
+        errorCode: e.code,
         fieldErrors: e.fieldErrors,
       );
     }

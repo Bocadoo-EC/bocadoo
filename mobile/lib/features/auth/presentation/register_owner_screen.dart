@@ -636,36 +636,43 @@ class _RegisterOwnerScreenState extends ConsumerState<RegisterOwnerScreen> {
           password: _passCtrl.text,
         );
     if (!mounted) return;
-    var hasEmailError = false;
+    var isDuplicateEmail = false;
     setState(() {
       _loading = false;
       if (!result.ok) {
         if (result.fieldErrors.isNotEmpty) {
           _applyServerFieldErrors(result.fieldErrors);
         }
-        final errLower = (result.errorMessage ?? '').toLowerCase();
-        final isDupEmail = errLower.contains('ya existe') ||
-            errLower.contains('ya está registrado') ||
-            errLower.contains('email_ya_existe') ||
-            _errors.containsKey('email');
-        if (isDupEmail) {
+        final codeUpper = (result.errorCode ?? '').toUpperCase();
+        final errUpper = (result.errorMessage ?? '').toUpperCase();
+        final combinedUpper = '$codeUpper $errUpper';
+        isDuplicateEmail = codeUpper == 'CONFLICT' ||
+            combinedUpper.contains('EMAIL_YA_EXISTE') ||
+            combinedUpper.contains('CORREO_YA_EXISTE') ||
+            combinedUpper.contains('CORREO_DUPLICADO') ||
+            combinedUpper.contains('YA ESTÁ REGISTRADO') ||
+            combinedUpper.contains('YA EXISTE UNA CUENTA CON ESE CORREO') ||
+            ((combinedUpper.contains('EMAIL') ||
+                    combinedUpper.contains('CORREO')) &&
+                (combinedUpper.contains('EXISTE') ||
+                    combinedUpper.contains('DUPLICAD') ||
+                    combinedUpper.contains('CONFLICT') ||
+                    combinedUpper.contains('REGISTRAD'))) ||
+            _errors['email'] != null;
+        if (isDuplicateEmail) {
           const dupMsg =
               'Este correo ya está registrado. Utiliza otro correo para crear tu cuenta.';
           _duplicateEmailValue = _emailCtrl.text.trim().toLowerCase();
-          _errors['email'] =
-              (_errors['email']?.isNotEmpty ?? false) &&
-                      !errLower.contains('ya existe')
-                  ? _errors['email']
-                  : dupMsg;
+          _errors['email'] = dupMsg;
         }
-        hasEmailError = _errors['email'] != null;
       }
     });
     if (!result.ok) {
-      if (hasEmailError) {
+      if (isDuplicateEmail) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
           final ctx = _emailFieldKey.currentContext;
-          if (ctx != null && mounted) {
+          if (ctx != null) {
             Scrollable.ensureVisible(
               ctx,
               duration: const Duration(milliseconds: 300),
@@ -673,24 +680,18 @@ class _RegisterOwnerScreenState extends ConsumerState<RegisterOwnerScreen> {
               alignment: 0.25,
             );
           }
+          _emailFocus.requestFocus();
         });
+        return;
       }
-      final activeErrorCount =
-          _errors.values.where((v) => v != null && v.isNotEmpty).length;
-      final onlyDuplicateEmailError =
-          _duplicateEmailValue != null &&
-          activeErrorCount == 1 &&
-          _errors['email'] != null;
-      if (!onlyDuplicateEmailError) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              result.errorMessage ??
-                  'No pudimos registrar tu restaurante. Inténtalo de nuevo.',
-            ),
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result.errorMessage ??
+                'No pudimos registrar tu restaurante. Inténtalo de nuevo.',
           ),
-        );
-      }
+        ),
+      );
       return;
     }
     // D4: pasar precio a A7 para calcular planes
@@ -736,11 +737,15 @@ class _RegisterOwnerScreenState extends ConsumerState<RegisterOwnerScreen> {
 
     return Scaffold(
       body: SafeArea(
+        bottom: false,
         child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
+          child: SafeArea(
+            top: false,
+            minimum: const EdgeInsets.only(bottom: 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
               Row(
                 children: [
                   IconButton(
@@ -1409,7 +1414,8 @@ class _RegisterOwnerScreenState extends ConsumerState<RegisterOwnerScreen> {
           ),
         ),
       ),
-    );
+    ),
+  );
   }
 }
 

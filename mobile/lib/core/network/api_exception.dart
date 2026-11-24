@@ -5,6 +5,7 @@ class ApiException implements Exception {
   ApiException({
     this.status,
     required this.code,
+    this.title = '',
     this.detail = '',
     this.requestId,
     this.isNetwork = false,
@@ -14,8 +15,9 @@ class ApiException implements Exception {
 
   final int? status;
   final String code;
+  final String title;
 
-  /// Detalle interno del backend: solo para depuración, nunca mostrar directo al usuario.
+  /// Detalle devuelto en RFC 9457 (`detail` o `message`).
   final String detail;
   final String? requestId;
   final bool isNetwork;
@@ -24,10 +26,8 @@ class ApiException implements Exception {
   final Map<String, String> fieldErrors;
   final String? _overrideMessage;
 
-  factory ApiException.network() => ApiException(
-        code: 'SIN_CONEXION',
-        isNetwork: true,
-      );
+  factory ApiException.network() =>
+      ApiException(code: 'SIN_CONEXION', isNetwork: true);
 
   static Map<String, String> _parseFieldErrors(Map<dynamic, dynamic> data) {
     final out = <String, String>{};
@@ -52,12 +52,14 @@ class ApiException implements Exception {
       } else if (raw is List) {
         for (final item in raw) {
           if (item is Map) {
-            final field = item['field'] ??
+            final field =
+                item['field'] ??
                 item['campo'] ??
                 item['name'] ??
                 item['property'] ??
                 item['path'];
-            final message = item['message'] ??
+            final message =
+                item['message'] ??
                 item['mensaje'] ??
                 item['reason'] ??
                 item['detail'] ??
@@ -76,12 +78,24 @@ class ApiException implements Exception {
     return out;
   }
 
+  static String _extractDetail(Map<dynamic, dynamic> data) {
+    final raw = data['detail'] ?? data['message'];
+    if (raw is List) {
+      return raw
+          .map((e) => e.toString().trim())
+          .where((s) => s.isNotEmpty)
+          .join('\n');
+    }
+    return (raw ?? '').toString().trim();
+  }
+
   factory ApiException.fromResponse(Response<dynamic> response) {
     final data = response.data is Map ? response.data as Map : const {};
     return ApiException(
       status: response.statusCode,
       code: (data['code'] ?? 'ERROR_INTERNO').toString(),
-      detail: (data['detail'] ?? '').toString(),
+      title: (data['title'] ?? data['error'] ?? '').toString().trim(),
+      detail: _extractDetail(data),
       requestId: data['requestId']?.toString(),
       fieldErrors: _parseFieldErrors(data),
     );
@@ -106,23 +120,25 @@ class ErrorMessages {
   }
 
   static String _byStatus(int? status) => switch (status) {
-        400 => 'Revisa los datos e inténtalo de nuevo.',
-        401 => 'Tu sesión venció. Entra de nuevo.',
-        403 => 'No tienes permiso para hacer esto.',
-        404 => 'No encontramos lo que buscabas.',
-        409 => 'Esto cambió mientras lo hacías. Actualizamos los datos.',
-        422 => 'No pudimos completar esto. Revisa los datos.',
-        429 => 'Demasiados intentos. Espera un momento.',
-        502 || 503 || 504 =>
-          'No pudimos conectar con el servidor. Inténtalo en un momento.',
-        _ => 'Algo salió mal de nuestro lado. Inténtalo en un momento.',
-      };
+    400 => 'Revisa los datos e inténtalo de nuevo.',
+    401 => 'Tu sesión venció. Entra de nuevo.',
+    403 => 'No tienes permiso para hacer esto.',
+    404 => 'No encontramos lo que buscabas.',
+    409 => 'Esto cambió mientras lo hacías. Actualizamos los datos.',
+    422 => 'No pudimos completar esto. Revisa los datos.',
+    429 => 'Demasiados intentos. Espera un momento.',
+    502 ||
+    503 ||
+    504 => 'No pudimos conectar con el servidor. Inténtalo en un momento.',
+    _ => 'Algo salió mal de nuestro lado. Inténtalo en un momento.',
+  };
 
   static const _byCode = <String, String>{
     // Sesión y registro
     'UNAUTHORIZED': 'Tu sesión venció. Entra de nuevo.',
     'FORBIDDEN': 'No tienes permiso para hacer esto.',
     'CONFLICT': 'Ya existe un registro con esos datos.',
+    'REGISTRO_CERRADO': 'El registro de dueños está cerrado por ahora.',
     'TOO_MANY_REQUESTS': 'Demasiados intentos. Espera un momento.',
     'ERROR_INTERNO': 'Algo salió mal de nuestro lado. Inténtalo en un momento.',
     'SERVICE_UNAVAILABLE':
@@ -131,8 +147,7 @@ class ErrorMessages {
         'No tienes conexión. Revisa tu internet e inténtalo de nuevo.',
     'SIN_RESTAURANTE': 'Esta cuenta no tiene un restaurante.',
     // Genéricos de datos
-    'CURSOR_INVALIDO':
-        'No pudimos cargar más resultados. Actualiza la lista.',
+    'CURSOR_INVALIDO': 'No pudimos cargar más resultados. Actualiza la lista.',
     'FECHA_INVALIDA': 'La fecha no es válida.',
     'RANGO_INVALIDO': 'El rango de fechas no es válido.',
     'RANGO_MUY_LARGO': 'Elige un rango de fechas más corto.',
@@ -143,12 +158,13 @@ class ErrorMessages {
     'RESTAURANTE_NO_ENCONTRADO': 'No encontramos ese restaurante.',
     'RESTAURANTE_NO_DISPONIBLE': 'Este restaurante no está disponible ahora.',
     'RESTAURANTE_PAUSADO': 'Este restaurante está pausado por ahora.',
-    'LOCAL_LLENO_SOLO_LLEVAR':
-        'El salón está lleno ahora. Activa "Para llevar" para continuar con tu pedido.',
+    'LOCAL_LLENO_SOLO_LLEVAR': 'El salón está lleno ahora. Activa "Para llevar" para continuar con tu pedido.',
     // Pase y almuerzos
-    'CAJERO_SOLO_HOY': 'Solo el dueño puede consultar movimientos de otras fechas.',
+    'CAJERO_SOLO_HOY':
+        'Solo el dueño puede consultar movimientos de otras fechas.',
     'QR_EXPIRADO': 'El código venció. Pide al comensal que genere y muestre su código actual.',
-    'QR_INVALIDO': 'Este código no pertenece a Bocadoo o no corresponde a este local.',
+    'QR_INVALIDO':
+        'Este código no pertenece a Bocadoo o no corresponde a este local.',
     'CONSUMO_NO_ENCONTRADO': 'No encontramos ese almuerzo.',
     'CONSUMO_REVERTIDO': 'Ese almuerzo ya se devolvió a tu plan.',
     'EVENTOS_SATURADO':
