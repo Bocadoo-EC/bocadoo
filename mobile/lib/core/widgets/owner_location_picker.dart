@@ -1,0 +1,497 @@
+import 'dart:async';
+
+import 'package:dio/dio.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:material_ui/material_ui.dart';
+
+import '../location/location_service.dart';
+import '../theme/app_theme.dart';
+
+/// Geocodificación directa e inversa vía Nominatim (OpenStreetMap) usando `dio`.
+class OwnerGeocoder {
+  OwnerGeocoder._();
+
+  static final Dio _dio = Dio(
+    BaseOptions(
+      connectTimeout: const Duration(seconds: 6),
+      receiveTimeout: const Duration(seconds: 6),
+      headers: const {
+        'User-Agent': 'BocadooApp/1.0 (ec.bocadoo.app)',
+        'Accept-Language': 'es',
+      },
+    ),
+  );
+
+  static String fallbackAddressFor(LatLng point) =>
+      'Ubicación GPS (${point.latitude.toStringAsFixed(4)}, ${point.longitude.toStringAsFixed(4)})';
+
+  static Future<LatLng?> searchAddress(String query) async {
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) return null;
+    final res = await _dio.get<List<dynamic>>(
+      'https://nominatim.openstreetmap.org/search',
+      queryParameters: {
+        'q': trimmed,
+        'format': 'jsonv2',
+        'limit': 1,
+        'countrycodes': 'ec',
+      },
+    );
+    final items = res.data ?? const [];
+    if (items.isEmpty || items.first is! Map) return null;
+    final first = items.first as Map;
+    final lat = double.tryParse((first['lat'] ?? '').toString());
+    final lon = double.tryParse((first['lon'] ?? '').toString());
+    if (!LocationService.isValidCoordinate(lat, lon)) return null;
+    return LatLng(lat!, lon!);
+  }
+
+  /// Devuelve calle y sector legibles para [point] o un respaldo con coordenadas.
+  static Future<String> reverseGeocode(LatLng point) async {
+    try {
+      final res = await _dio.get<Map<String, dynamic>>(
+        'https://nominatim.openstreetmap.org/reverse',
+        queryParameters: {
+          'lat': point.latitude,
+          'lon': point.longitude,
+          'format': 'jsonv2',
+          'addressdetails': 1,
+          'zoom': 18,
+        },
+      );
+      final data = res.data;
+      if (data == null) return fallbackAddressFor(point);
+
+      final addr = data['address'] is Map
+          ? Map<String, dynamic>.from(data['address'] as Map)
+          : const <String, dynamic>{};
+
+      String pick(List<String> keys) {
+        for (final k in keys) {
+          final v = (addr[k] ?? '').toString().trim();
+          if (v.isNotEmpty) return v;
+        }
+        return '';
+      }
+
+      final street = pick(['road', 'pedestrian', 'footway', 'street', 'residential']);
+      final houseNumber = pick(['house_number']);
+      final sector = pick([
+        'neighbourhood',
+        'suburb',
+        'quarter',
+        'city_district',
+        'village',
+        'town',
+        'city',
+      ]);
+
+      final streetFull = [
+        if (street.isNotEmpty) street,
+        if (street.isNotEmpty && houseNumber.isNotEmpty) houseNumber,
+      ].join(' ');
+
+      final parts = [
+        if (streetFull.isNotEmpty) streetFull,
+        if (sector.isNotEmpty && sector != streetFull) sector,
+      ];
+      if (parts.isNotEmpty) {
+        return parts.join(', ');
+      }
+
+      final display = (data['display_name'] ?? '').toString().trim();
+      if (display.isNotEmpty) {
+        final shortParts = display
+            .split(',')
+            .map((p) => p.trim())
+            .where((p) => p.isNotEmpty)
+            .take(2)
+            .toList();
+        if (shortParts.isNotEmpty) return shortParts.join(', ');
+      }
+      return fallbackAddressFor(point);
+    } catch (_) {
+      return fallbackAddressFor(point);
+    }
+  }
+}
+
+/// Selector de ubicación de restaurante sin zonas fijas:
+/// buscador con flecha, mapa con pin fijo centrado, geocodificación inversa y botón Mi GPS.
+class OwnerLocationPicker extends StatefulWidget {
+  const OwnerLocationPicker({
+    super.key,
+    required this.addressController,
+    this.addressFocusNode,
+    required this.mapController,
+    required this.center,
+    required this.locationConfirmed,
+    required this.onLocationChanged,
+    this.onAddressChanged,
+    this.errorText,
+    this.isValidVisual = false,
+    this.hintText = 'Buscar dirección (ej. Av. 12 de Octubre y Patria)',
+  });
+
+  final TextEditingController addressController;
+  final FocusNode? addressFocusNode;
+  final MapController mapController;
+  final LatLng center;
+  final bool locationConfirmed;
+  final void Function(LatLng center, {required bool confirmed}) onLocationChanged;
+  final ValueChanged<String>? onAddressChanged;
+  final String? errorText;
+  final bool isValidVisual;
+  final String hintText;
+
+  @override
+  State<OwnerLocationPicker> createState() => _OwnerLocationPickerState();
+}
+
+class _OwnerLocationPickerState extends State<OwnerLocationPicker> {
+  bool _locating = false;
+  bool _searchingAddress = false;
+  bool _resolvingAddress = false;
+  bool _addressAutoGenerated = false;
+  Timer? _reverseDebounce;
+
+  @override
+  void dispose() {
+    _reverseDebounce?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _fillReverseAddress(LatLng point, {bool force = false}) async {
+    final currentText = widget.addressController.text.trim();
+    if (!force && currentText.isNotEmpty && !_addressAutoGenerated) {
+      return;
+    }
+    if (mounted) setState(() => _resolvingAddress = true);
+    final resolved = await OwnerGeocoder.reverseGeocode(point);
+    if (!mounted) return;
+    setState(() => _resolvingAddress = false);
+    if (force || widget.addressController.text.trim().isEmpty || _addressAutoGenerated) {
+      _addressAutoGenerated = true;
+      widget.addressController.text = resolved;
+      widget.onAddressChanged?.call(resolved);
+    }
+  }
+
+  void _scheduleReverseAddress(LatLng point) {
+    _reverseDebounce?.cancel();
+    _reverseDebounce = Timer(const Duration(milliseconds: 550), () {
+      if (mounted) _fillReverseAddress(point);
+    });
+  }
+
+  Future<void> _searchAddress() async {
+    final query = widget.addressController.text.trim();
+    FocusScope.of(context).unfocus();
+    final messenger = ScaffoldMessenger.of(context);
+    if (query.isEmpty) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Escribe una dirección o sector para buscar en el mapa.'),
+        ),
+      );
+      return;
+    }
+
+    setState(() => _searchingAddress = true);
+    try {
+      final target = await OwnerGeocoder.searchAddress(query);
+      if (!mounted) return;
+      if (target == null) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'No encontramos esa dirección. Mueve el mapa para ubicar el pin.',
+            ),
+          ),
+        );
+        return;
+      }
+      _addressAutoGenerated = false;
+      widget.onLocationChanged(target, confirmed: true);
+      widget.mapController.move(target, 16.5);
+    } catch (_) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No pudimos buscar la dirección. Verifica tu conexión o mueve el mapa.',
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _searchingAddress = false);
+    }
+  }
+
+  Future<void> _useGps() async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _locating = true);
+    try {
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!mounted) return;
+      if (!serviceEnabled) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Activa el servicio de ubicación (GPS) del dispositivo.',
+            ),
+          ),
+        );
+        return;
+      }
+
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (!mounted) return;
+
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Debes habilitar el permiso de ubicación para usar Mi GPS.',
+            ),
+          ),
+        );
+        return;
+      }
+
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 10),
+        ),
+      );
+      if (!mounted) return;
+      if (!LocationService.isValidCoordinate(pos.latitude, pos.longitude)) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'No pudimos obtener tus coordenadas GPS. Mueve el mapa manualmente.',
+            ),
+          ),
+        );
+        return;
+      }
+
+      final target = LatLng(pos.latitude, pos.longitude);
+      widget.onLocationChanged(target, confirmed: true);
+      widget.mapController.move(target, 16.5);
+      await _fillReverseAddress(target, force: true);
+      if (!mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Mapa centrado en tu ubicación GPS.')),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No pudimos obtener tu ubicación GPS. Mueve el mapa para fijar el pin.',
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _locating = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = context.colorScheme;
+    final b = context.bocadooColors;
+    final hasError = widget.errorText != null && widget.errorText!.isNotEmpty;
+    final validBorder = widget.isValidVisual && !hasError
+        ? OutlineInputBorder(
+            borderRadius: BorderRadius.circular(AppTheme.inputRadius),
+            borderSide: BorderSide(color: b.success, width: 1.5),
+          )
+        : null;
+    final validFocusBorder = widget.isValidVisual && !hasError
+        ? OutlineInputBorder(
+            borderRadius: BorderRadius.circular(AppTheme.inputRadius),
+            borderSide: BorderSide(color: b.success, width: 2),
+          )
+        : null;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TextField(
+          controller: widget.addressController,
+          focusNode: widget.addressFocusNode,
+          textInputAction: TextInputAction.search,
+          onChanged: (val) {
+            _addressAutoGenerated = false;
+            widget.onAddressChanged?.call(val);
+          },
+          onSubmitted: (_) => _searchAddress(),
+          decoration: InputDecoration(
+            prefixIcon: Icon(
+              Icons.search_rounded,
+              color: widget.isValidVisual && !hasError
+                  ? b.success
+                  : cs.onSurfaceVariant,
+            ),
+            hintText: widget.hintText,
+            errorMaxLines: 3,
+            error: hasError
+                ? Text(
+                    widget.errorText!,
+                    softWrap: true,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: cs.error,
+                    ),
+                  )
+                : null,
+            enabledBorder: validBorder,
+            focusedBorder: validFocusBorder,
+            suffixIcon: IconButton(
+              tooltip: 'Buscar dirección',
+              onPressed: _searchingAddress ? null : _searchAddress,
+              icon: _searchingAddress
+                  ? SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: cs.primary,
+                      ),
+                    )
+                  : Icon(Icons.arrow_forward_rounded, color: cs.primary),
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(AppTheme.inputRadius),
+          child: SizedBox(
+            height: 210,
+            child: Stack(
+              children: [
+                FlutterMap(
+                  mapController: widget.mapController,
+                  options: MapOptions(
+                    initialCenter: widget.center,
+                    initialZoom: 15.0,
+                    onTap: (_, point) {
+                      widget.mapController.move(
+                        point,
+                        widget.mapController.camera.zoom,
+                      );
+                      widget.onLocationChanged(point, confirmed: true);
+                      _scheduleReverseAddress(point);
+                    },
+                    onPositionChanged: (camera, hasGesture) {
+                      if (hasGesture) {
+                        widget.onLocationChanged(
+                          camera.center,
+                          confirmed: true,
+                        );
+                        _scheduleReverseAddress(camera.center);
+                      }
+                    },
+                  ),
+                  children: [
+                    TileLayer(
+                      urlTemplate:
+                          'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                      userAgentPackageName: 'ec.bocadoo.app',
+                    ),
+                    const RichAttributionWidget(
+                      alignment: AttributionAlignment.bottomLeft,
+                      attributions: [TextSourceAttribution('OpenStreetMap')],
+                    ),
+                  ],
+                ),
+                // Pin fijo centrado como referencia sobre el mapa.
+                IgnorePointer(
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Transform.translate(
+                          offset: const Offset(0, -14),
+                          child: Icon(
+                            Icons.location_on_rounded,
+                            size: 42,
+                            color: cs.primary,
+                          ),
+                        ),
+                        Transform.translate(
+                          offset: const Offset(0, -18),
+                          child: Container(
+                            width: 8,
+                            height: 4,
+                            decoration: BoxDecoration(
+                              color: cs.scrim.withValues(alpha: 0.3),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              widget.locationConfirmed
+                  ? Icons.check_circle_rounded
+                  : Icons.info_outline_rounded,
+              size: 16,
+              color: widget.locationConfirmed ? b.success : cs.error,
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                _resolvingAddress
+                    ? 'Detectando dirección de la ubicación...'
+                    : (widget.locationConfirmed
+                        ? 'Ubicación fijada (${widget.center.latitude.toStringAsFixed(4)}, ${widget.center.longitude.toStringAsFixed(4)}).'
+                        : 'Fija la ubicación de tu local en el mapa o usa Mi GPS.'),
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: widget.locationConfirmed ? b.success : cs.error,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        OutlinedButton.icon(
+          onPressed: _locating ? null : _useGps,
+          icon: _locating
+              ? SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: cs.primary,
+                  ),
+                )
+              : const Icon(Icons.gps_fixed_rounded, size: 18),
+          label: Text(_locating ? 'Obteniendo GPS...' : 'Mi GPS'),
+        ),
+      ],
+    );
+  }
+}

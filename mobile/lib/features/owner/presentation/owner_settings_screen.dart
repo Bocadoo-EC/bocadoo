@@ -1,3 +1,5 @@
+import 'package:flutter/services.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
@@ -8,13 +10,15 @@ import '../../../core/config/api_capabilities.dart';
 import '../../../core/config/app_mode.dart';
 import '../../../core/config/support_config.dart';
 import '../../../core/contracts/models.dart';
+import '../../../core/location/location_service.dart';
 import '../../../core/session/session_notifier.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/utils/ec_validators.dart';
 import '../../../core/utils/external_links.dart';
 import '../../../core/utils/formatters.dart';
 import '../../../core/widgets/appearance_selector.dart';
 import '../../../core/widgets/bocadoo_logo.dart';
-import '../../../core/widgets/location_picker_map.dart';
+import '../../../core/widgets/owner_location_picker.dart';
 import '../data/api_owner_repo.dart';
 import '../domain/models/extras_models.dart';
 import '../domain/models/metrics_models.dart';
@@ -526,7 +530,7 @@ class _IncompleteProfileBanner extends ConsumerWidget {
       'cedularuc' || 'cedula_ruc' || 'ruc' => 'Cédula o RUC',
       'telefono' || 'whatsapp' => 'Teléfono',
       'mesas' => 'Mesas',
-      'puestos' || 'sillas' => 'Sillas (puestos)',
+      'puestos' || 'sillas' => 'Sillas',
       'direccion' => 'Dirección',
       'ubicacion' || 'coordenadas' || 'latitud' || 'longitud' => 'Ubicación en mapa',
       'recargoparallevarcentavos' || 'recargo_para_llevar' => 'Recargo para llevar',
@@ -611,220 +615,20 @@ class _LocalCard extends ConsumerWidget {
     WidgetRef ref,
     LocalInfo? info,
   ) async {
-    const zones = <String, LatLng>{
-      'Frente a la PUCE': LatLng(-0.2093, -78.4910),
-      'La Floresta': LatLng(-0.2055, -78.4855),
-      'La Mariscal': LatLng(-0.2022, -78.4932),
-      'Centro Histórico': LatLng(-0.2201, -78.5123),
-      'Cumbayá': LatLng(-0.2025, -78.4310),
-      'UDLA Granados': LatLng(-0.1695, -78.4728),
-      'EPN / Salesiana': LatLng(-0.2116, -78.4900),
-      'Villaflora': LatLng(-0.2448, -78.5162),
-    };
-    final addrCtrl = TextEditingController(text: info?.address ?? '');
-    final phoneCtrl = TextEditingController(text: info?.phone ?? '');
-    final cedulaCtrl = TextEditingController();
-    final tablesCtrl = TextEditingController(
-      text: info?.tablesCount != null ? '${info!.tablesCount}' : '',
-    );
-    final seatsCtrl = TextEditingController(
-      text: (info != null && info.seats > 0) ? '${info.seats}' : '',
-    );
-    var selectedZone =
-        zones.containsKey(info?.zone) ? info!.zone : zones.keys.first;
-    var pin = (info?.latitude != null && info?.longitude != null)
-        ? LatLng(info!.latitude!, info.longitude!)
-        : zones[selectedZone]!;
-    final fieldErrors = <String, String>{};
-    var saving = false;
-
-    String? errorFor(List<String> keys) {
-      for (final e in fieldErrors.entries) {
-        final k = e.key.toLowerCase();
-        for (final needle in keys) {
-          if (k.contains(needle)) return e.value;
-        }
-      }
-      return null;
-    }
-
     final saved = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
+      useSafeArea: false,
       showDragHandle: true,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheetState) {
-          final colors = ctx.colorScheme;
-          return SafeArea(
-            child: Padding(
-              padding: EdgeInsets.fromLTRB(
-                20,
-                0,
-                20,
-                MediaQuery.viewInsetsOf(ctx).bottom + 20,
-              ),
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      'Datos y ubicación del local',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w900,
-                        color: colors.onSurface,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: phoneCtrl,
-                      keyboardType: TextInputType.phone,
-                      decoration: InputDecoration(
-                        labelText: 'Teléfono / WhatsApp',
-                        hintText: '0987654321',
-                        errorText: errorFor(['telefono', 'whatsapp']),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: cedulaCtrl,
-                      keyboardType: TextInputType.number,
-                      decoration: InputDecoration(
-                        labelText: 'Cédula o RUC',
-                        hintText: info?.maskedCedulaRuc != null
-                            ? 'Actual: ${info!.maskedCedulaRuc} (deja vacío para conservar)'
-                            : '1792345678001',
-                        errorText: errorFor(['cedularuc', 'cedula', 'ruc']),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: tablesCtrl,
-                            keyboardType: TextInputType.number,
-                            decoration: InputDecoration(
-                              labelText: 'Mesas',
-                              hintText: 'Ej. 10',
-                              errorText: errorFor(['mesas']),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: TextField(
-                            controller: seatsCtrl,
-                            keyboardType: TextInputType.number,
-                            decoration: InputDecoration(
-                              labelText: 'Sillas (puestos)',
-                              hintText: 'Ej. 40',
-                              errorText: errorFor(['puestos', 'sillas']),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: addrCtrl,
-                      decoration: InputDecoration(
-                        labelText: 'Dirección',
-                        hintText: 'Ej. Av. 12 de Octubre y Patria',
-                        errorText: errorFor(['direccion']),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Wrap(
-                      spacing: 6,
-                      runSpacing: 6,
-                      children: [
-                        for (final z in zones.keys)
-                          ChoiceChip(
-                            label: Text(z),
-                            selected: selectedZone == z,
-                            onSelected: (_) => setSheetState(() {
-                              selectedZone = z;
-                              pin = zones[z]!;
-                            }),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    LocationPickerMap(
-                      zones: zones,
-                      selectedZone: selectedZone,
-                      onZoneSelected: (z) =>
-                          setSheetState(() => selectedZone = z),
-                      onLocationChanged: (p) => pin = p,
-                      height: 210,
-                    ),
-                    const SizedBox(height: 16),
-                    ElevatedButton.icon(
-                      onPressed: saving
-                          ? null
-                          : () async {
-                              if (AppMode.useMock) {
-                                Navigator.of(ctx).pop(true);
-                                return;
-                              }
-                              setSheetState(() {
-                                saving = true;
-                                fieldErrors.clear();
-                              });
-                              final repo = ref.read(apiOwnerRepositoryProvider);
-                              final ok = await repo.updateRestaurantProfile(
-                                address: addrCtrl.text,
-                                zone: selectedZone,
-                                lat: pin.latitude,
-                                lng: pin.longitude,
-                                phone: phoneCtrl.text,
-                                cedulaRuc: cedulaCtrl.text.trim().isNotEmpty
-                                    ? cedulaCtrl.text.trim()
-                                    : null,
-                                tablesCount:
-                                    int.tryParse(tablesCtrl.text.trim()),
-                                seats: int.tryParse(seatsCtrl.text.trim()),
-                              );
-                              if (!ctx.mounted) return;
-                              if (ok) {
-                                Navigator.of(ctx).pop(true);
-                              } else {
-                                final errs = repo.consumeLastFieldErrors();
-                                final msg = repo.consumeLastError() ??
-                                    'No se pudieron guardar los datos del local.';
-                                setSheetState(() {
-                                  saving = false;
-                                  fieldErrors
-                                    ..clear()
-                                    ..addAll(errs);
-                                });
-                                if (errs.isEmpty && context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text(msg)),
-                                  );
-                                }
-                              }
-                            },
-                      icon: const Icon(Icons.check_rounded),
-                      label: Text(saving ? 'Guardando...' : 'Guardar datos'),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          );
-        },
+      backgroundColor: context.colorScheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
+      builder: (_) => _EditLocalSheet(info: info),
     );
-    addrCtrl.dispose();
-    phoneCtrl.dispose();
-    cedulaCtrl.dispose();
-    tablesCtrl.dispose();
-    seatsCtrl.dispose();
     if (saved == true && context.mounted) {
       ref.invalidate(localInfoProvider);
+      ref.invalidate(lunchPriceProvider);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Datos del local actualizados.')),
       );
@@ -1047,6 +851,14 @@ class _ExecutivePricesCardState extends ConsumerState<_ExecutivePricesCard> {
     final colors = context.colorScheme;
     final current = ref.watch(executivePricesProvider);
     final info = ref.watch(localInfoProvider).value;
+    ref.listen<ExecutivePrices>(executivePricesProvider, (prev, next) {
+      if (!_saving && prev != next && mounted) {
+        _lunchCtrl.text = next.lunch.toStringAsFixed(2);
+        _secondCtrl.text = next.soloSecond.toStringAsFixed(2);
+        _soupCtrl.text = next.soloSoup.toStringAsFixed(2);
+        _takeawayCtrl.text = next.takeawaySurcharge.toStringAsFixed(2);
+      }
+    });
     if (!_seeded) {
       _lunchCtrl.text = current.lunch.toStringAsFixed(2);
       _secondCtrl.text = current.soloSecond.toStringAsFixed(2);
@@ -1120,6 +932,658 @@ class _ExecutivePricesCardState extends ConsumerState<_ExecutivePricesCard> {
             child: Text(_saving ? 'Guardando...' : 'Guardar precios'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _EditLocalSheet extends ConsumerStatefulWidget {
+  const _EditLocalSheet({required this.info});
+
+  final LocalInfo? info;
+
+  @override
+  ConsumerState<_EditLocalSheet> createState() => _EditLocalSheetState();
+}
+
+class _EditLocalSheetState extends ConsumerState<_EditLocalSheet> {
+  late final TextEditingController _nameCtrl;
+  late final TextEditingController _phoneCtrl;
+  final TextEditingController _cedulaCtrl = TextEditingController();
+  late final TextEditingController _addrCtrl;
+  late final TextEditingController _priceCtrl;
+  late final TextEditingController _surchargeCtrl;
+  late final TextEditingController _tablesCtrl;
+  late final TextEditingController _seatsCtrl;
+
+  final _nameFocus = FocusNode();
+  final _phoneFocus = FocusNode();
+  final _cedulaFocus = FocusNode();
+  final _priceFocus = FocusNode();
+  final _surchargeFocus = FocusNode();
+  final _tablesFocus = FocusNode();
+  final _seatsFocus = FocusNode();
+  final _mapController = MapController();
+
+  late LatLng _mapCenter;
+  late bool _locationConfirmed;
+  bool _saving = false;
+  final _touched = <String>{};
+  final _errors = <String, String?>{};
+
+  @override
+  void initState() {
+    super.initState();
+    final info = widget.info;
+    final prices = ref.read(executivePricesProvider);
+    final initialName = (info?.name.trim().isNotEmpty ?? false)
+        ? info!.name.trim()
+        : ref.read(ownerRestaurantNameProvider);
+    final rawPhone = info?.phone.trim() ?? '';
+    final localPhone = rawPhone.isNotEmpty ? Phone.toLocal(rawPhone) : '';
+    final surcharge = info?.takeawaySurchargeCents != null
+        ? Money.fromCents(info!.takeawaySurchargeCents!)
+        : prices.takeawaySurcharge;
+
+    _nameCtrl = TextEditingController(text: initialName);
+    _phoneCtrl = TextEditingController(
+      text: localPhone.isNotEmpty ? localPhone : rawPhone,
+    );
+    _addrCtrl = TextEditingController(text: info?.address.trim() ?? '');
+    _priceCtrl = TextEditingController(text: prices.lunch.toStringAsFixed(2));
+    _surchargeCtrl = TextEditingController(text: surcharge.toStringAsFixed(2));
+    _tablesCtrl = TextEditingController(
+      text: (info?.tablesCount != null && info!.tablesCount! > 0)
+          ? '${info.tablesCount}'
+          : '',
+    );
+    _seatsCtrl = TextEditingController(
+      text: (info != null && info.seats > 0) ? '${info.seats}' : '',
+    );
+
+    if (info?.latitude != null &&
+        info?.longitude != null &&
+        LocationService.isValidCoordinate(info!.latitude, info.longitude)) {
+      _mapCenter = LatLng(info.latitude!, info.longitude!);
+      _locationConfirmed = true;
+    } else {
+      _mapCenter = LocationService.fallbackPuce;
+      _locationConfirmed = false;
+    }
+
+    _attachBlurValidation(_nameFocus, 'name');
+    _attachBlurValidation(_phoneFocus, 'phone');
+    _attachBlurValidation(_cedulaFocus, 'cedula');
+    _attachBlurValidation(_priceFocus, 'price');
+    _attachBlurValidation(_surchargeFocus, 'takeaway');
+    _attachBlurValidation(_tablesFocus, 'mesas');
+    _attachBlurValidation(_seatsFocus, 'puestos');
+  }
+
+  void _attachBlurValidation(FocusNode node, String key) {
+    node.addListener(() {
+      if (!node.hasFocus && mounted) {
+        _touched.add(key);
+        setState(() {
+          _errors[key] = _validateField(key);
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _phoneCtrl.dispose();
+    _cedulaCtrl.dispose();
+    _addrCtrl.dispose();
+    _priceCtrl.dispose();
+    _surchargeCtrl.dispose();
+    _tablesCtrl.dispose();
+    _seatsCtrl.dispose();
+
+    _nameFocus.dispose();
+    _phoneFocus.dispose();
+    _cedulaFocus.dispose();
+    _priceFocus.dispose();
+    _surchargeFocus.dispose();
+    _tablesFocus.dispose();
+    _seatsFocus.dispose();
+    super.dispose();
+  }
+
+  String? _validateField(String key) => switch (key) {
+        'name' => EcValidators.validateRestaurantName(_nameCtrl.text),
+        'phone' => EcValidators.validateEcuadorCellPhone(_phoneCtrl.text),
+        'cedula' => EcValidators.validateCedulaRuc(
+            _cedulaCtrl.text,
+            required: false,
+          ),
+        'price' => EcValidators.validateLunchPrice(_priceCtrl.text),
+        'takeaway' => EcValidators.validateTakeawaySurcharge(
+            _surchargeCtrl.text,
+          ),
+        'mesas' => EcValidators.validateOptionalPositiveInt(_tablesCtrl.text),
+        'puestos' => EcValidators.validateOptionalPositiveInt(_seatsCtrl.text),
+        _ => null,
+      };
+
+  void _onFieldChanged(String key) {
+    setState(() {
+      if (_touched.contains(key) || _errors[key] != null) {
+        _errors[key] = _validateField(key);
+      }
+    });
+  }
+
+  bool _isFieldValidVisual(String key, String raw) =>
+      raw.trim().isNotEmpty && _validateField(key) == null;
+
+  InputDecoration _fieldDecoration({
+    required String key,
+    required String rawValue,
+    required String hintText,
+    IconData? prefixIcon,
+    String? prefixText,
+  }) {
+    final cs = context.colorScheme;
+    final b = context.bocadooColors;
+    final error = _errors[key];
+    final valid = error == null && _isFieldValidVisual(key, rawValue);
+    final validBorder = valid
+        ? OutlineInputBorder(
+            borderRadius: BorderRadius.circular(AppTheme.inputRadius),
+            borderSide: BorderSide(color: b.success, width: 1.5),
+          )
+        : null;
+    final validFocusBorder = valid
+        ? OutlineInputBorder(
+            borderRadius: BorderRadius.circular(AppTheme.inputRadius),
+            borderSide: BorderSide(color: b.success, width: 2),
+          )
+        : null;
+
+    return InputDecoration(
+      prefixIcon: prefixIcon != null
+          ? Icon(prefixIcon, color: valid ? b.success : cs.onSurfaceVariant)
+          : null,
+      prefixText: prefixText,
+      hintText: hintText,
+      error: error == null
+          ? null
+          : Text(
+              error,
+              softWrap: true,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                color: cs.error,
+              ),
+            ),
+      errorMaxLines: 3,
+      enabledBorder: validBorder,
+      focusedBorder: validFocusBorder,
+      suffixIcon: valid
+          ? Icon(Icons.check_circle_rounded, color: b.success, size: 20)
+          : null,
+    );
+  }
+
+  bool _validateAll() {
+    const keys = [
+      'name',
+      'phone',
+      'cedula',
+      'price',
+      'takeaway',
+      'mesas',
+      'puestos',
+    ];
+    final errs = <String, String?>{};
+    for (final k in keys) {
+      final e = _validateField(k);
+      if (e != null) errs[k] = e;
+    }
+    setState(() {
+      _touched.addAll(keys);
+      _errors
+        ..clear()
+        ..addAll(errs);
+    });
+    return errs.isEmpty && _locationConfirmed;
+  }
+
+  void _applyServerFieldErrors(Map<String, String> fieldErrors) {
+    for (final entry in fieldErrors.entries) {
+      final k = entry.key.toLowerCase();
+      final msg = entry.value;
+      if (EcValidators.isTechnicalErrorMessage(msg)) continue;
+      if (k.contains('cedularuc') || k.contains('cedula') || k.contains('ruc')) {
+        _errors['cedula'] = msg;
+      } else if (k.contains('telefono') || k.contains('whatsapp')) {
+        _errors['phone'] = msg;
+      } else if (k.contains('nombre')) {
+        _errors['name'] = msg;
+      } else if (k.contains('direccion')) {
+        _errors['address'] = msg;
+      } else if (k.contains('mesas')) {
+        _errors['mesas'] = msg;
+      } else if (k.contains('puestos') || k.contains('sillas')) {
+        _errors['puestos'] = msg;
+      } else if (k.contains('preciosuelto') || k.contains('precio')) {
+        _errors['price'] = msg;
+      } else if (k.contains('recargoparallevar') || k.contains('recargo')) {
+        _errors['takeaway'] = msg;
+      }
+    }
+  }
+
+  Future<void> _submit() async {
+    FocusScope.of(context).unfocus();
+    if (!_validateAll()) {
+      if (!_locationConfirmed) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Fija la ubicación de tu local en el mapa o usa Mi GPS.',
+            ),
+          ),
+        );
+      }
+      return;
+    }
+
+    setState(() => _saving = true);
+
+    var center = _mapCenter;
+    try {
+      center = _mapController.camera.center;
+    } catch (_) {}
+
+    var resolvedAddress = _addrCtrl.text.trim();
+    if (resolvedAddress.isEmpty) {
+      resolvedAddress = await OwnerGeocoder.reverseGeocode(center);
+      if (!mounted) return;
+      _addrCtrl.text = resolvedAddress;
+    }
+
+    final lunch = double.parse(_priceCtrl.text.trim().replaceAll(',', '.'));
+    final surcharge =
+        double.parse(_surchargeCtrl.text.trim().replaceAll(',', '.'));
+    final currentPrices = ref.read(executivePricesProvider);
+    ref.read(executivePricesProvider.notifier).setPrices(
+          lunch: lunch,
+          soloSecond: currentPrices.soloSecond,
+          soloSoup: currentPrices.soloSoup,
+          takeawaySurcharge: surcharge,
+        );
+
+    if (AppMode.useMock) {
+      if (mounted) Navigator.of(context).pop(true);
+      return;
+    }
+
+    final repo = ref.read(apiOwnerRepositoryProvider);
+    final cedulaNew = _cedulaCtrl.text.trim();
+    final ok = await repo.updateRestaurantProfile(
+      name: _nameCtrl.text.trim(),
+      address: resolvedAddress,
+      lat: center.latitude,
+      lng: center.longitude,
+      phone: _phoneCtrl.text.replaceAll(RegExp(r'[\s\-()]'), '').trim(),
+      cedulaRuc: cedulaNew.isNotEmpty ? cedulaNew : null,
+      tablesCount: int.tryParse(_tablesCtrl.text.trim()),
+      seats: int.tryParse(_seatsCtrl.text.trim()),
+      singleLunchPriceCents: Money.toCents(lunch),
+      takeawaySurchargeCents: Money.toCents(surcharge),
+    );
+    if (!mounted) return;
+    if (ok) {
+      await repo.updateSingleLunchPriceAndActivate(lunch);
+      if (mounted) Navigator.of(context).pop(true);
+      return;
+    }
+
+    final serverFieldErrs = repo.consumeLastFieldErrors();
+    final rawMsg = repo.consumeLastError() ??
+        'No se pudieron actualizar los datos del local.';
+    setState(() {
+      _saving = false;
+      _applyServerFieldErrors(serverFieldErrs);
+    });
+    if (_errors.values.every((v) => v == null)) {
+      final friendly = EcValidators.isTechnicalErrorMessage(rawMsg)
+          ? 'No pudimos actualizar los datos por un problema técnico. Inténtalo de nuevo.'
+          : rawMsg;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(friendly)),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = context.colorScheme;
+    final info = widget.info;
+    final mq = MediaQuery.of(context);
+    final keyboard = mq.viewInsets.bottom;
+    final sysNav = mq.viewPadding.bottom;
+    final safeBottom = mq.padding.bottom;
+    final navClearance =
+        keyboard > 0 ? 0.0 : (sysNav - safeBottom).clamp(0.0, double.infinity);
+
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: mq.size.height * 0.92),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: EdgeInsets.only(bottom: keyboard),
+          child: SingleChildScrollView(
+            padding: EdgeInsets.fromLTRB(20, 0, 20, navClearance + 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Datos y ubicación del local',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w900,
+                          color: cs.onSurface,
+                        ),
+                      ),
+                    ),
+                    IconButton.filledTonal(
+                      tooltip: 'Cerrar',
+                      onPressed: () => Navigator.of(context).pop(false),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+
+                const _SettingFieldLabel(
+                  'NOMBRE DEL RESTAURANTE / LOCAL',
+                  required: true,
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _nameCtrl,
+                  focusNode: _nameFocus,
+                  textInputAction: TextInputAction.next,
+                  textCapitalization: TextCapitalization.words,
+                  onChanged: (_) => _onFieldChanged('name'),
+                  onEditingComplete: () => _phoneFocus.requestFocus(),
+                  decoration: _fieldDecoration(
+                    key: 'name',
+                    rawValue: _nameCtrl.text,
+                    prefixIcon: Icons.store_mall_directory_outlined,
+                    hintText: 'Ej. La Cuchara de San Blas',
+                  ),
+                ),
+
+                const SizedBox(height: 16),
+
+                const _SettingFieldLabel('NÚMERO DE CELULAR', required: true),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _phoneCtrl,
+                  focusNode: _phoneFocus,
+                  keyboardType: TextInputType.phone,
+                  textInputAction: TextInputAction.next,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(10),
+                  ],
+                  onChanged: (_) => _onFieldChanged('phone'),
+                  onEditingComplete: () => _cedulaFocus.requestFocus(),
+                  decoration: _fieldDecoration(
+                    key: 'phone',
+                    rawValue: _phoneCtrl.text,
+                    prefixIcon: Icons.phone_outlined,
+                    hintText: 'Ej. 0987654321',
+                  ),
+                ),
+
+                const SizedBox(height: 16),
+
+                const _SettingFieldLabel('CÉDULA O RUC'),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _cedulaCtrl,
+                  focusNode: _cedulaFocus,
+                  keyboardType: TextInputType.number,
+                  textInputAction: TextInputAction.next,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(13),
+                  ],
+                  onChanged: (_) => _onFieldChanged('cedula'),
+                  onEditingComplete: () => _priceFocus.requestFocus(),
+                  decoration: _fieldDecoration(
+                    key: 'cedula',
+                    rawValue: _cedulaCtrl.text,
+                    prefixIcon: Icons.badge_outlined,
+                    hintText: info?.maskedCedulaRuc != null
+                        ? 'Actual: ${info!.maskedCedulaRuc} (deja vacío para conservar)'
+                        : 'Ej. 1710034065001',
+                  ),
+                ),
+
+                const SizedBox(height: 20),
+
+                const _SettingFieldLabel(
+                  'UBICACIÓN DE TU RESTAURANTE',
+                  required: true,
+                ),
+                const SizedBox(height: 8),
+
+                OwnerLocationPicker(
+                  addressController: _addrCtrl,
+                  mapController: _mapController,
+                  center: _mapCenter,
+                  locationConfirmed: _locationConfirmed,
+                  errorText: _errors['address'],
+                  onAddressChanged: (_) {
+                    if (_errors['address'] != null) {
+                      setState(() => _errors.remove('address'));
+                    }
+                  },
+                  onLocationChanged: (point, {required bool confirmed}) {
+                    final needsUpdate =
+                        (!_locationConfirmed && confirmed) ||
+                        point.latitude != _mapCenter.latitude ||
+                        point.longitude != _mapCenter.longitude;
+                    _mapCenter = point;
+                    if (!_locationConfirmed && confirmed) {
+                      setState(() => _locationConfirmed = true);
+                    } else if (needsUpdate && mounted) {
+                      setState(() {});
+                    }
+                  },
+                ),
+
+                const SizedBox(height: 20),
+
+                const Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Expanded(
+                      child: _SettingFieldLabel(
+                        'ALMUERZO EJECUTIVO (\$)',
+                        required: true,
+                      ),
+                    ),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: _SettingFieldLabel(
+                        'RECARGO LLEVAR (\$)',
+                        required: true,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _priceCtrl,
+                        focusNode: _priceFocus,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        textInputAction: TextInputAction.next,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+                        ],
+                        onChanged: (_) => _onFieldChanged('price'),
+                        onEditingComplete: () => _surchargeFocus.requestFocus(),
+                        decoration: _fieldDecoration(
+                          key: 'price',
+                          rawValue: _priceCtrl.text,
+                          prefixText: '\$ ',
+                          hintText: 'Ej. 3.50',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextField(
+                        controller: _surchargeCtrl,
+                        focusNode: _surchargeFocus,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        textInputAction: TextInputAction.next,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+                        ],
+                        onChanged: (_) => _onFieldChanged('takeaway'),
+                        onEditingComplete: () => _tablesFocus.requestFocus(),
+                        decoration: _fieldDecoration(
+                          key: 'takeaway',
+                          rawValue: _surchargeCtrl.text,
+                          prefixText: '\$ ',
+                          hintText: 'Ej. 0.25',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 16),
+
+                const Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Expanded(child: _SettingFieldLabel('MESAS (OPCIONAL)')),
+                    SizedBox(width: 12),
+                    Expanded(child: _SettingFieldLabel('SILLAS (OPCIONAL)')),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _tablesCtrl,
+                        focusNode: _tablesFocus,
+                        keyboardType: TextInputType.number,
+                        textInputAction: TextInputAction.next,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                        ],
+                        onChanged: (_) => _onFieldChanged('mesas'),
+                        onEditingComplete: () => _seatsFocus.requestFocus(),
+                        decoration: _fieldDecoration(
+                          key: 'mesas',
+                          rawValue: _tablesCtrl.text,
+                          prefixIcon: Icons.table_restaurant_outlined,
+                          hintText: 'Ej. 10',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextField(
+                        controller: _seatsCtrl,
+                        focusNode: _seatsFocus,
+                        keyboardType: TextInputType.number,
+                        textInputAction: TextInputAction.done,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                        ],
+                        onChanged: (_) => _onFieldChanged('puestos'),
+                        onEditingComplete: () => FocusScope.of(context).unfocus(),
+                        decoration: _fieldDecoration(
+                          key: 'puestos',
+                          rawValue: _seatsCtrl.text,
+                          prefixIcon: Icons.chair_alt_outlined,
+                          hintText: 'Ej. 40',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 24),
+
+                ElevatedButton.icon(
+                  onPressed: _saving ? null : _submit,
+                  icon: _saving
+                      ? SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: cs.primary,
+                          ),
+                        )
+                      : const Icon(Icons.check_circle_outline_rounded),
+                  label: Text(_saving ? 'Actualizando...' : 'Actualizar datos'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SettingFieldLabel extends StatelessWidget {
+  const _SettingFieldLabel(this.text, {this.required = false});
+
+  final String text;
+  final bool required;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = context.colorScheme;
+    return Text.rich(
+      TextSpan(
+        children: [
+          TextSpan(text: text),
+          if (required)
+            TextSpan(
+              text: ' *',
+              style: TextStyle(color: cs.error, fontWeight: FontWeight.w800),
+            ),
+        ],
+      ),
+      style: TextStyle(
+        fontSize: 11,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 0.6,
+        color: cs.onSurfaceVariant,
       ),
     );
   }
