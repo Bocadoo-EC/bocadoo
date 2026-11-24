@@ -77,7 +77,9 @@ class CustomerUiState {
   final ActiveTable? activeTable;
   final ActiveOrder? activeOrder;
   final PendingFeedback? pendingFeedback;
-  final PendingPlanRequest? pendingPlanRequest;
+  final List<PendingPlanRequest> pendingPlanRequests;
+  final String? focusedWalletCardKey;
+  final int walletFocusTick;
   final List<ActivityItem> recentActivity;
   final List<Restaurant> restaurants;
   final String searchQuery;
@@ -108,7 +110,9 @@ class CustomerUiState {
     this.activeTable,
     this.activeOrder,
     this.pendingFeedback,
-    this.pendingPlanRequest,
+    this.pendingPlanRequests = const [],
+    this.focusedWalletCardKey,
+    this.walletFocusTick = 0,
     this.recentActivity = const [],
     this.restaurants = const [],
     this.searchQuery = '',
@@ -351,8 +355,9 @@ class CustomerUiState {
     ActiveOrder? activeOrder,
     bool clearActiveOrder = false,
     bool clearPendingFeedback = false,
-    PendingPlanRequest? pendingPlanRequest,
-    bool clearPendingPlanRequest = false,
+    List<PendingPlanRequest>? pendingPlanRequests,
+    String? focusedWalletCardKey,
+    int? walletFocusTick,
     List<ActivityItem>? recentActivity,
     List<Restaurant>? restaurants,
     String? searchQuery,
@@ -387,9 +392,9 @@ class CustomerUiState {
       activeTable: clearActiveTable ? null : activeTable ?? this.activeTable,
       activeOrder: clearActiveOrder ? null : activeOrder ?? this.activeOrder,
       pendingFeedback: clearPendingFeedback ? null : pendingFeedback,
-      pendingPlanRequest: clearPendingPlanRequest
-          ? null
-          : pendingPlanRequest ?? this.pendingPlanRequest,
+      pendingPlanRequests: pendingPlanRequests ?? this.pendingPlanRequests,
+      focusedWalletCardKey: focusedWalletCardKey ?? this.focusedWalletCardKey,
+      walletFocusTick: walletFocusTick ?? this.walletFocusTick,
       recentActivity: recentActivity ?? this.recentActivity,
       restaurants: restaurants ?? this.restaurants,
       searchQuery: searchQuery ?? this.searchQuery,
@@ -451,6 +456,34 @@ class CustomerController extends ChangeNotifier {
 
   void setLocationPromptOpen(bool open) {
     _isLocationPromptOpen = open;
+  }
+
+  ({List<PendingPlanRequest> remaining, List<CustomerPass> newlyActivated})
+      _reconcilePendingPlanRequests(
+    List<PendingPlanRequest> requests,
+    List<CustomerPass> passes,
+  ) {
+    if (requests.isEmpty) {
+      return (remaining: const [], newlyActivated: const []);
+    }
+    final remaining = <PendingPlanRequest>[];
+    final newlyActivated = <CustomerPass>[];
+    for (final req in requests) {
+      final activePass = passes
+          .where(
+            (p) =>
+                p.restaurantId == req.plan.restaurantId &&
+                p.remainingLunches > 0 &&
+                !p.isExpired,
+          )
+          .firstOrNull;
+      if (activePass != null) {
+        newlyActivated.add(activePass);
+      } else {
+        remaining.add(req);
+      }
+    }
+    return (remaining: remaining, newlyActivated: newlyActivated);
   }
 
   /// Etiquetas reales de qué incluye el plan (`incluye[]` de backend o menú del local).
@@ -878,33 +911,32 @@ class CustomerController extends ChangeNotifier {
       ]);
       final menuStates = await menuStatesFuture;
 
-      final pending = _state.pendingPlanRequest;
-      final pendingActivated = pending != null &&
-          passes.any(
-            (p) =>
-                p.restaurantId == pending.plan.restaurantId &&
-                p.remainingLunches > 0 &&
-                !p.isExpired,
-          );
-      final resolvedPassIndex = pendingActivated
-          ? passes.indexWhere(
-              (p) =>
-                  p.restaurantId == pending.plan.restaurantId &&
-                  p.remainingLunches > 0 &&
-                  !p.isExpired,
-            )
+      final reconciled = _reconcilePendingPlanRequests(
+        _state.pendingPlanRequests,
+        passes,
+      );
+      final firstActivated = reconciled.newlyActivated.firstOrNull;
+      final resolvedPassIndex = firstActivated != null
+          ? passes.indexWhere((p) => p.id == firstActivated.id)
           : _state.passIndex.clamp(0, passes.isEmpty ? 0 : passes.length - 1);
 
       _emit(CustomerUiState(
         status: CustomerStatus.success,
         passes: passes,
         passIndex: resolvedPassIndex,
-        selectedQrMode: pendingActivated ? QrMode.plan : _state.selectedQrMode,
+        selectedQrMode:
+            firstActivated != null ? QrMode.plan : _state.selectedQrMode,
         stampCards: stamps,
         activeTable: effectiveTable,
         activeOrder: order,
         pendingFeedback: feedback,
-        pendingPlanRequest: pendingActivated ? null : pending,
+        pendingPlanRequests: reconciled.remaining,
+        focusedWalletCardKey: firstActivated != null
+            ? 'pass:${firstActivated.id}'
+            : _state.focusedWalletCardKey,
+        walletFocusTick: firstActivated != null
+            ? _state.walletFocusTick + 1
+            : _state.walletFocusTick,
         recentActivity: activity,
         restaurants: restaurants,
         searchQuery: _state.searchQuery,
@@ -931,6 +963,7 @@ class CustomerController extends ChangeNotifier {
         table: table,
         passes: passes,
         menuPublishedByRest: menuStates.published,
+        pendingPlanRequests: reconciled.remaining,
       );
       unawaited(_hydrateRestaurants(restaurants, force: silent));
     } catch (e) {
@@ -966,8 +999,8 @@ class CustomerController extends ChangeNotifier {
 
       List<CustomerPass>? updatedPasses;
       List<ActivityItem>? updatedActivity;
-      final pending = _state.pendingPlanRequest;
-      if (orderJustFinished || tableJustFinished || pending != null) {
+      final pendingList = _state.pendingPlanRequests;
+      if (orderJustFinished || tableJustFinished || pendingList.isNotEmpty) {
         try {
           updatedPasses = await _repository.getActivePasses();
           updatedActivity = await _repository.getRecentActivity();
@@ -975,20 +1008,13 @@ class CustomerController extends ChangeNotifier {
       }
 
       final activePasses = updatedPasses ?? _state.passes;
-      final pendingActivated = pending != null &&
-          activePasses.any(
-            (p) =>
-                p.restaurantId == pending.plan.restaurantId &&
-                p.remainingLunches > 0 &&
-                !p.isExpired,
-          );
-      final activatedPassIdx = pendingActivated
-          ? activePasses.indexWhere(
-              (p) =>
-                  p.restaurantId == pending.plan.restaurantId &&
-                  p.remainingLunches > 0 &&
-                  !p.isExpired,
-            )
+      final reconciled = _reconcilePendingPlanRequests(
+        pendingList,
+        activePasses,
+      );
+      final firstActivated = reconciled.newlyActivated.firstOrNull;
+      final activatedPassIdx = firstActivated != null
+          ? activePasses.indexWhere((p) => p.id == firstActivated.id)
           : _state.passIndex;
 
       final nextMenuStates = await _resolveMenuStatesForPasses(
@@ -1016,18 +1042,24 @@ class CustomerController extends ChangeNotifier {
                 ? '${previousOrder.restaurantName} · -1 cupo de tu plan + adicionales confirmados'
                 : '${previousOrder.restaurantName} · Descontado 1 almuerzo de tu plan')
             : '${previousOrder.restaurantName} · Pedido #${previousOrder.orderNumber} confirmado';
-      } else if (pendingActivated) {
-        final activated = activePasses[activatedPassIdx];
+      } else if (firstActivated != null) {
         notice =
-            '¡Tu plan ${activated.planName} ya está activo! (${activated.remainingLunches} almuerzos disponibles).';
+            '¡Tu plan ${firstActivated.planName} ya está activo! (${firstActivated.remainingLunches} almuerzos disponibles).';
       }
 
       final effectiveTable = _pruneExpiredCollectingTable(table);
       _emit(_state.copyWith(
         passes: activePasses,
         passIndex: activatedPassIdx,
-        selectedQrMode: pendingActivated ? QrMode.plan : _state.selectedQrMode,
-        clearPendingPlanRequest: pendingActivated,
+        selectedQrMode:
+            firstActivated != null ? QrMode.plan : _state.selectedQrMode,
+        pendingPlanRequests: reconciled.remaining,
+        focusedWalletCardKey: firstActivated != null
+            ? 'pass:${firstActivated.id}'
+            : _state.focusedWalletCardKey,
+        walletFocusTick: firstActivated != null
+            ? _state.walletFocusTick + 1
+            : _state.walletFocusTick,
         recentActivity: updatedActivity,
         activeOrder: order,
         clearActiveOrder: order == null,
@@ -1045,7 +1077,7 @@ class CustomerController extends ChangeNotifier {
         table: table,
         passes: activePasses,
         menuPublishedByRest: nextMenuStates.published,
-        pendingPlanRequest: pendingActivated ? null : pending,
+        pendingPlanRequests: reconciled.remaining,
       );
     } catch (_) {
       // Se conserva lo que ya se mostraba.
@@ -1092,7 +1124,7 @@ class CustomerController extends ChangeNotifier {
     if (_disposed || _state.status == CustomerStatus.initial) return;
     try {
       final previousPasses = _state.passes;
-      final pending = _state.pendingPlanRequest;
+      final pendingList = _state.pendingPlanRequests;
       final results = await Future.wait([
         _repository.getActivePasses(),
         _repository.getRecentActivity(),
@@ -1105,20 +1137,10 @@ class CustomerController extends ChangeNotifier {
         _state.restaurants,
       );
 
-      final pendingActivated = pending != null &&
-          passes.any(
-            (p) =>
-                p.restaurantId == pending.plan.restaurantId &&
-                p.remainingLunches > 0 &&
-                !p.isExpired,
-          );
-      final activatedIdx = pendingActivated
-          ? passes.indexWhere(
-              (p) =>
-                  p.restaurantId == pending.plan.restaurantId &&
-                  p.remainingLunches > 0 &&
-                  !p.isExpired,
-            )
+      final reconciled = _reconcilePendingPlanRequests(pendingList, passes);
+      final firstActivated = reconciled.newlyActivated.firstOrNull;
+      final activatedIdx = firstActivated != null
+          ? passes.indexWhere((p) => p.id == firstActivated.id)
           : _state.passIndex;
 
       String? notice;
@@ -1128,10 +1150,9 @@ class CustomerController extends ChangeNotifier {
       final recentSse = _lastSseRedemptionAt != null &&
           DateTime.now().difference(_lastSseRedemptionAt!) <
               const Duration(seconds: 6);
-      if (pendingActivated) {
-        final activated = passes[activatedIdx];
+      if (firstActivated != null) {
         notice =
-            '¡Tu plan ${activated.planName} ya está activo! (${activated.remainingLunches} almuerzos disponibles).';
+            '¡Tu plan ${firstActivated.planName} ya está activo! (${firstActivated.remainingLunches} almuerzos disponibles).';
       } else if (!recentSse) {
         for (final np in passes) {
           final prev =
@@ -1151,8 +1172,15 @@ class CustomerController extends ChangeNotifier {
       _emit(_state.copyWith(
         passes: passes,
         passIndex: activatedIdx,
-        selectedQrMode: pendingActivated ? QrMode.plan : _state.selectedQrMode,
-        clearPendingPlanRequest: pendingActivated,
+        selectedQrMode:
+            firstActivated != null ? QrMode.plan : _state.selectedQrMode,
+        pendingPlanRequests: reconciled.remaining,
+        focusedWalletCardKey: firstActivated != null
+            ? 'pass:${firstActivated.id}'
+            : _state.focusedWalletCardKey,
+        walletFocusTick: firstActivated != null
+            ? _state.walletFocusTick + 1
+            : _state.walletFocusTick,
         recentActivity: activity,
         consumptionNotice: notice,
         redemptionCelebrationTick: celebrationTick,
@@ -1584,6 +1612,8 @@ class CustomerController extends ChangeNotifier {
         activeOrder: order,
         selectedQrMode: QrMode.preorden,
         passIndex: matchingPassIdx >= 0 ? matchingPassIdx : _state.passIndex,
+        focusedWalletCardKey: 'order:${order.orderNumber}',
+        walletFocusTick: _state.walletFocusTick + 1,
       ));
       _syncOrderPolling(order);
       if (order.hasPlan) {
@@ -1679,21 +1709,30 @@ class CustomerController extends ChangeNotifier {
         _state.restaurants,
       );
       final rest = restaurant ?? _state.restaurantById(plan.restaurantId);
-      final pendingReq = matchedIdx >= 0 || rest == null
-          ? null
-          : PendingPlanRequest(
-              plan: plan,
-              restaurant: rest,
-              requestedAt: DateTime.now(),
-            );
+      final rawPending = (matchedIdx < 0 && rest != null)
+          ? [
+              ..._state.pendingPlanRequests
+                  .where((r) => r.plan.restaurantId != plan.restaurantId),
+              PendingPlanRequest(
+                plan: plan,
+                restaurant: rest,
+                requestedAt: DateTime.now(),
+              ),
+            ]
+          : _state.pendingPlanRequests;
+      final reconciled = _reconcilePendingPlanRequests(rawPending, passes);
+      final nextFocusedKey = matchedIdx >= 0
+          ? 'pass:${passes[matchedIdx].id}'
+          : 'pending:${plan.restaurantId}';
 
       _emit(_state.copyWith(
         passes: passes,
         passIndex: matchedIdx >= 0 ? matchedIdx : _state.passIndex,
         selectedQrMode: QrMode.plan,
         recentActivity: activity,
-        pendingPlanRequest: pendingReq,
-        clearPendingPlanRequest: matchedIdx >= 0,
+        pendingPlanRequests: reconciled.remaining,
+        focusedWalletCardKey: nextFocusedKey,
+        walletFocusTick: _state.walletFocusTick + 1,
         todayMenuPublishedByRest: menuStates.published,
         todayMenuAvailabilityByRest: menuStates.availability,
         consumptionNotice: matchedIdx >= 0
@@ -1705,7 +1744,7 @@ class CustomerController extends ChangeNotifier {
         table: _state.activeTable,
         passes: passes,
         menuPublishedByRest: menuStates.published,
-        pendingPlanRequest: pendingReq,
+        pendingPlanRequests: reconciled.remaining,
       );
       return true;
     } on ApiException catch (e) {
@@ -1726,7 +1765,11 @@ class CustomerController extends ChangeNotifier {
       membersCount: table.members.length,
       url: table.qrPayload,
     );
-    _emit(_state.copyWith(activeTable: activeTable));
+    _emit(_state.copyWith(
+      activeTable: activeTable,
+      focusedWalletCardKey: 'table:${activeTable.id}',
+      walletFocusTick: _state.walletFocusTick + 1,
+    ));
     _syncOrderPolling(_state.activeOrder, table: activeTable);
   }
 
@@ -1844,11 +1887,11 @@ class CustomerController extends ChangeNotifier {
     ActiveTable? table,
     List<CustomerPass>? passes,
     Map<String, bool>? menuPublishedByRest,
-    PendingPlanRequest? pendingPlanRequest,
+    List<PendingPlanRequest>? pendingPlanRequests,
   }) {
     final activePasses = passes ?? _state.passes;
     final menuMap = menuPublishedByRest ?? _state.todayMenuPublishedByRest;
-    final pendingPlan = pendingPlanRequest ?? _state.pendingPlanRequest;
+    final pendingList = pendingPlanRequests ?? _state.pendingPlanRequests;
     final hasUnpublishedPass = !AppMode.useMock &&
         activePasses.any(
           (p) => p.remainingLunches > 0 && !(menuMap[p.restaurantId] ?? false),
@@ -1856,7 +1899,7 @@ class CustomerController extends ChangeNotifier {
     final shouldPoll = (order != null && !order.isDelivered) ||
         table != null ||
         hasUnpublishedPass ||
-        pendingPlan != null;
+        pendingList.isNotEmpty;
     if (shouldPoll) {
       _orderPoller ??= LifecyclePollingController(
         interval: const Duration(seconds: 8),

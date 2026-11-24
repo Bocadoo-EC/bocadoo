@@ -32,6 +32,8 @@ class BocadooOrderCard extends StatelessWidget {
     this.onTapInactiveQr,
     required this.onTapViewStatus,
     this.actionLabel = 'VER ESTADO',
+    this.gradientColors,
+    this.boxShadow,
   });
 
   final String restaurantName;
@@ -48,6 +50,8 @@ class BocadooOrderCard extends StatelessWidget {
   final VoidCallback? onTapInactiveQr;
   final VoidCallback onTapViewStatus;
   final String actionLabel;
+  final List<Color>? gradientColors;
+  final List<BoxShadow>? boxShadow;
 
   bool get _isPlanType => orderType == BocadooOrderCardType.preorderWithPlan;
 
@@ -63,29 +67,34 @@ class BocadooOrderCard extends StatelessWidget {
         : formatCents(totalCents ?? 0);
     final hasTime = scheduledTime != null && scheduledTime!.trim().isNotEmpty;
 
+    final colors = gradientColors != null && gradientColors!.length >= 2
+        ? gradientColors!
+        : const [
+            Color(0xFFBFBBF5),
+            Color(0xFF7B2CBF),
+          ];
+
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF7B2CBF).withValues(alpha: 0.24),
-            blurRadius: 24,
-            offset: const Offset(0, 10),
-          ),
-        ],
+        boxShadow: boxShadow ??
+            [
+              BoxShadow(
+                color: const Color(0xFF7B2CBF).withValues(alpha: 0.24),
+                blurRadius: 24,
+                offset: const Offset(0, 10),
+              ),
+            ],
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(24),
         child: Container(
           constraints: const BoxConstraints(minHeight: 204),
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             gradient: LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
-              colors: [
-                Color(0xFFBFBBF5),
-                Color(0xFF7B2CBF),
-              ],
+              colors: colors,
             ),
           ),
           child: Stack(
@@ -108,7 +117,7 @@ class BocadooOrderCard extends StatelessWidget {
               ),
 
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 18, 18, 16),
+                padding: const EdgeInsets.fromLTRB(20, 13, 18, 16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   mainAxisSize: MainAxisSize.min,

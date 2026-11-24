@@ -174,7 +174,7 @@ class _PaseScreenState extends ConsumerState<PaseScreen>
         final hasAnyPassOrLive = s.passes.isNotEmpty ||
             hasActiveOrder ||
             s.activeTable != null ||
-            s.pendingPlanRequest != null;
+            s.pendingPlanRequests.isNotEmpty;
         if (!hasAnyPassOrLive &&
             (s.isLoading || s.status == CustomerStatus.initial)) {
           return const _PaseSkeleton();
@@ -458,6 +458,50 @@ class _ConsumptionConfirmedBanner extends StatelessWidget {
   }
 }
 
+class _WalletCardData {
+  const _WalletCardData({
+    required this.keyId,
+    required this.chipLabel,
+    required this.chipIcon,
+    required this.title,
+    required this.orderType,
+    this.totalCents,
+    this.availableLunches,
+    this.scheduledTime,
+    this.extraCashCents = 0,
+    this.qrData = '',
+    this.hasActiveOrderQr = false,
+    this.inactiveQrLabel = 'Se activará al pedir',
+    this.statusBadgeLabel,
+    this.actionLabel = 'VER ESTADO',
+    this.shortRestaurantId,
+    this.displayCodeOverride,
+    required this.onViewStatus,
+    this.onTapInactiveQr,
+    this.contextualFooter,
+  });
+
+  final String keyId;
+  final String chipLabel;
+  final IconData chipIcon;
+  final String title;
+  final BocadooOrderCardType orderType;
+  final int? totalCents;
+  final int? availableLunches;
+  final String? scheduledTime;
+  final int extraCashCents;
+  final String qrData;
+  final bool hasActiveOrderQr;
+  final String inactiveQrLabel;
+  final String? statusBadgeLabel;
+  final String actionLabel;
+  final String? shortRestaurantId;
+  final String? displayCodeOverride;
+  final VoidCallback onViewStatus;
+  final VoidCallback? onTapInactiveQr;
+  final Widget? contextualFooter;
+}
+
 class _WalletDeck extends StatelessWidget {
   final CustomerUiState state;
   final CustomerController controller;
@@ -471,74 +515,587 @@ class _WalletDeck extends StatelessWidget {
     required this.showYellowDiscover,
   });
 
+  List<_WalletCardData> _buildCards(BuildContext context) {
+    final cards = <_WalletCardData>[];
+    final order = state.activeOrder;
+    final table = state.activeTable;
+    final frontPasses = activePasses.isNotEmpty
+        ? activePasses
+        : state.passes
+            .where((p) => p.remainingLunches > 0 && !p.isExpired)
+            .toList();
+
+    // 1. Preorden activa (Individual, con Plan u Oferta Flash)
+    if (order != null && !order.isDelivered) {
+      final isFlash = controller.isFlashOfferOrder(order);
+      final matchingPass = order.restaurantId != null
+          ? state.passFor(order.restaurantId!)
+          : null;
+      final orderType = isFlash
+          ? BocadooOrderCardType.flashOffer
+          : (order.hasPlan
+              ? BocadooOrderCardType.preorderWithPlan
+              : BocadooOrderCardType.preorderWithoutPlan);
+      final shortCode = BocadooQrParser.toShortCode(
+        order.qrPayload,
+        restaurantId: order.restaurantId,
+      );
+      final qrData = AppMode.useMock ? shortCode : order.qrPayload;
+      final hasQr = qrData.isNotEmpty;
+      final chipLabel = isFlash
+          ? 'Flash · ${order.restaurantName}'
+          : (order.hasPlan
+              ? 'Orden c/Plan #${order.orderNumber}'
+              : 'Preorden #${order.orderNumber}');
+      final chipIcon = isFlash
+          ? Icons.bolt_rounded
+          : (order.hasPlan
+              ? Icons.confirmation_number_rounded
+              : Icons.receipt_long_rounded);
+
+      cards.add(
+        _WalletCardData(
+          keyId: 'order:${order.orderNumber}',
+          chipLabel: chipLabel,
+          chipIcon: chipIcon,
+          title: order.restaurantName,
+          orderType: orderType,
+          totalCents: order.hasPlan
+              ? null
+              : (order.cashToCollectCents > 0
+                  ? order.cashToCollectCents
+                  : order.effectiveTotalCents),
+          availableLunches: order.hasPlan
+              ? (matchingPass?.remainingLunches ?? order.planCreditsUsed)
+              : null,
+          scheduledTime: order.estimatedArrivalLabel,
+          extraCashCents: order.hasPlan ? order.cashToCollectCents : 0,
+          qrData: qrData,
+          hasActiveOrderQr: hasQr,
+          inactiveQrLabel: 'Generando QR...',
+          statusBadgeLabel: order.hasPlan ? 'Plan Activo' : null,
+          actionLabel: 'VER ESTADO',
+          shortRestaurantId: order.restaurantId,
+          displayCodeOverride: !AppMode.useMock ? '#${order.orderNumber}' : null,
+          onViewStatus: () => context.push('/customer/pedido/${order.orderNumber}'),
+        ),
+      );
+    }
+
+    // 2. Orden grupal activa
+    if (table != null) {
+      final simSession = GroupOrderSimulationStore.instance.sessionById(table.id) ??
+          GroupOrderSimulationStore.instance.activeSession;
+      final isMesaCollecting = simSession != null &&
+          simSession.status == GroupOrderStatus.collecting;
+      final isMesaConfirmed = simSession != null &&
+          simSession.status == GroupOrderStatus.confirmed;
+      final shortCode = BocadooQrParser.toShortCode(table.url);
+      final qrData = isMesaConfirmed
+          ? simSession.qrPayload
+          : (AppMode.useMock ? shortCode : table.url);
+      final title = simSession != null
+          ? 'Mesa de ${simSession.hostName}'
+          : table.restaurantName;
+
+      cards.add(
+        _WalletCardData(
+          keyId: 'table:${table.id}',
+          chipLabel: 'Mesa grupal',
+          chipIcon: Icons.groups_rounded,
+          title: title,
+          orderType: BocadooOrderCardType.groupOrder,
+          totalCents: controller.tableTotalCentsFor(table, state),
+          scheduledTime: simSession?.timeHhmm ?? table.time,
+          qrData: qrData,
+          hasActiveOrderQr: !isMesaCollecting && qrData.isNotEmpty,
+          inactiveQrLabel: isMesaCollecting
+              ? 'Esperando (${simSession.confirmedCount}/${simSession.totalParticipants})'
+              : 'QR pendiente',
+          actionLabel: 'VER ESTADO',
+          displayCodeOverride:
+              isMesaConfirmed ? 'Mesa #${simSession.shortCode}' : null,
+          onViewStatus: () => context.push(
+            '/customer/mesa?groupOrderId=${table.id}${simSession != null ? '&restaurantId=${simSession.restaurantId}' : ''}',
+          ),
+          contextualFooter: isMesaCollecting
+              ? _PendingGroupTableBlock(
+                  confirmedCount: simSession.confirmedCount,
+                  totalCount: simSession.totalParticipants,
+                  restaurantName: simSession.restaurantName,
+                  onOpenMesa: () => context.push(
+                    '/customer/mesa?groupOrderId=${table.id}&restaurantId=${simSession.restaurantId}',
+                  ),
+                  onCancelMesa: () =>
+                      _confirmCancelGroupTable(context, controller, table.id),
+                )
+              : null,
+        ),
+      );
+    }
+
+    // 3. Planes activos (con QR dormido si aún no tienen orden con plan hoy)
+    for (final pass in frontPasses) {
+      final alreadyShownWithPlanOrder = order != null &&
+          !order.isDelivered &&
+          order.hasPlan &&
+          order.restaurantId == pass.restaurantId;
+      if (alreadyShownWithPlanOrder) continue;
+
+      final menuAvail = state.menuAvailabilityFor(pass.restaurantId);
+      final inactiveLabel = switch (menuAvail) {
+        MenuAvailabilityState.sinPublicar => 'Menú sin publicar',
+        MenuAvailabilityState.agotadoTotal => 'Menú agotado hoy',
+        MenuAvailabilityState.disponible => 'Se activará al pedir',
+      };
+      void openRest() => context.push('/customer/restaurants/${pass.restaurantId}');
+
+      cards.add(
+        _WalletCardData(
+          keyId: 'pass:${pass.id}',
+          chipLabel: 'Plan · ${pass.restaurantName}',
+          chipIcon: Icons.confirmation_number_rounded,
+          title: pass.restaurantName,
+          orderType: BocadooOrderCardType.preorderWithPlan,
+          availableLunches: pass.remainingLunches,
+          hasActiveOrderQr: false,
+          inactiveQrLabel: inactiveLabel,
+          statusBadgeLabel: 'Plan Activo',
+          actionLabel: 'PEDIR HOY',
+          shortRestaurantId: pass.restaurantId,
+          onViewStatus: openRest,
+          onTapInactiveQr: openRest,
+          contextualFooter: switch (menuAvail) {
+            MenuAvailabilityState.sinPublicar => _MenuNotPublishedQrBlock(
+                restaurantId: pass.restaurantId,
+                onRefresh: () => controller.loadDashboard(silent: true),
+              ),
+            MenuAvailabilityState.agotadoTotal => _MenuSoldOutQrBlock(
+                restaurantId: pass.restaurantId,
+                hasReservedOrder: false,
+                onOpenOrderQr: null,
+                onRefresh: () => controller.loadDashboard(silent: true),
+              ),
+            MenuAvailabilityState.disponible => null,
+          },
+        ),
+      );
+    }
+
+    // 4. Solicitudes de plan pendientes de pago/activación en caja
+    for (final pending in state.pendingPlanRequests) {
+      final hasActiveHere = frontPasses.any(
+        (p) => p.restaurantId == pending.plan.restaurantId,
+      );
+      if (hasActiveHere) continue;
+      void openRest() =>
+          context.push('/customer/restaurants/${pending.restaurant.id}');
+
+      cards.add(
+        _WalletCardData(
+          keyId: 'pending:${pending.plan.restaurantId}',
+          chipLabel: 'Por activar · ${pending.restaurant.name}',
+          chipIcon: Icons.storefront_rounded,
+          title: pending.restaurant.name,
+          orderType: BocadooOrderCardType.preorderWithPlan,
+          availableLunches: pending.plan.lunches,
+          extraCashCents: pending.plan.priceCents,
+          hasActiveOrderQr: false,
+          inactiveQrLabel: 'Activa en caja',
+          statusBadgeLabel: 'Por activar',
+          actionLabel: 'VER LOCAL',
+          shortRestaurantId: pending.restaurant.id,
+          onViewStatus: openRest,
+          onTapInactiveQr: openRest,
+          contextualFooter: _PendingPlanActivationBanner(
+            pending: pending,
+            onRefresh: () => controller.refreshLive(),
+          ),
+        ),
+      );
+    }
+
+    return cards;
+  }
+
+  Future<void> _confirmCancelGroupTable(
+    BuildContext context,
+    CustomerController controller,
+    String tableId,
+  ) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('¿Cancelar pedido grupal?'),
+        content: const Text(
+          'Se cerrará esta mesa compartida sin costo alguno y tus amigos ya no podrán unirse.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Seguir en la mesa'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text(
+              'Cancelar pedido',
+              style: TextStyle(color: ctx.colorScheme.error),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !context.mounted) return;
+    final ok = await controller.cancelSharedTable(tableId);
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text(
+          ok
+              ? 'Pedido grupal cancelado'
+              : (controller.lastActionError ??
+                  'No se pudo cancelar el pedido grupal'),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final mode = state.qrMode;
-    final frontPasses = activePasses.isNotEmpty ? activePasses : state.passes;
-    final hasAnyCard = frontPasses.isNotEmpty ||
-        state.activeOrder != null ||
-        state.activeTable != null ||
-        state.pendingPlanRequest != null;
-
-    final backCards = <Widget>[];
-    if (showYellowDiscover) {
-      backCards.add(
-        _DiscoverWalletTab(
-          onTap: () => context.go('/customer/restaurants'),
-        ),
-      );
-    }
-
-    if (state.activeOrder != null && mode != QrMode.preorden) {
-      final ord = state.activeOrder!;
-      backCards.add(
-        _StackedOrderTab(
-          order: ord,
-          onTap: () => controller.selectQrMode(QrMode.preorden),
-        ),
-      );
-    }
-
-    if (state.activeTable != null && mode != QrMode.mesa) {
-      backCards.add(
-        _StackedTableTab(
-          table: state.activeTable!,
-          onTap: () => controller.selectQrMode(QrMode.mesa),
-        ),
-      );
-    }
-
-    for (final (i, pass) in state.passes.indexed) {
-      if (pass.remainingLunches <= 0) continue;
-      if (mode == QrMode.plan && i == state.passIndex) continue;
-      backCards.add(
-        _StackedPlanTab(
-          pass: pass,
-          tintIndex: i,
-          onTap: () => controller.selectPass(i),
-        ),
-      );
-    }
+    final cards = _buildCards(context);
+    final hasAnyCard = cards.isNotEmpty;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (backCards.isNotEmpty)
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+        if (showYellowDiscover)
+          Align(
+            alignment: Alignment.topCenter,
+            heightFactor: hasAnyCard ? 0.78 : 1.0,
+            child: _DiscoverWalletTab(
+              onTap: () => context.go('/customer/restaurants'),
+            ),
+          ),
+        if (hasAnyCard)
+          _WalletCardStack(
+            cards: cards,
+            focusedCardKey: state.focusedWalletCardKey,
+            focusTick: state.walletFocusTick,
+          )
+        else
+          const _EmptyPlanPrompt(),
+      ],
+    );
+  }
+}
+
+/// Mazo interactivo tipo Apple Wallet con apilamiento vertical escalonado,
+/// toque directo en pestañas traseras y swipe horizontal cíclico sin conflicto con scroll vertical.
+class _WalletCardStack extends StatefulWidget {
+  const _WalletCardStack({
+    required this.cards,
+    required this.focusedCardKey,
+    required this.focusTick,
+  });
+
+  final List<_WalletCardData> cards;
+  final String? focusedCardKey;
+  final int focusTick;
+
+  @override
+  State<_WalletCardStack> createState() => _WalletCardStackState();
+}
+
+class _WalletCardStackState extends State<_WalletCardStack>
+    with SingleTickerProviderStateMixin {
+  static const double _peekOffset = 46.0;
+  static const double _cardHeight = 232.0;
+  static const int _maxVisibleLayers = 4;
+
+  late final AnimationController _swipeAnim = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 200),
+  );
+  Animation<double>? _offsetTween;
+
+  List<String> _orderedKeys = [];
+  int _lastHandledTick = -1;
+  double _dragOffsetX = 0.0;
+  bool _pendingRotate = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _swipeAnim.addListener(() {
+      if (!mounted || _offsetTween == null) return;
+      setState(() => _dragOffsetX = _offsetTween!.value);
+    });
+    _swipeAnim.addStatusListener((status) {
+      if (status == AnimationStatus.completed && _pendingRotate) {
+        _pendingRotate = false;
+        if (mounted) {
+          setState(() {
+            if (_orderedKeys.length > 1) {
+              final first = _orderedKeys.removeAt(0);
+              _orderedKeys.add(first);
+            }
+            _dragOffsetX = 0.0;
+          });
+        }
+      }
+    });
+    _syncOrder(initial: true);
+  }
+
+  @override
+  void didUpdateWidget(covariant _WalletCardStack oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncOrder(initial: false);
+  }
+
+  @override
+  void dispose() {
+    _swipeAnim.dispose();
+    super.dispose();
+  }
+
+  void _syncOrder({required bool initial}) {
+    final incomingKeys = [for (final c in widget.cards) c.keyId];
+    final next = [for (final k in _orderedKeys) if (incomingKeys.contains(k)) k];
+    for (final k in incomingKeys) {
+      if (!next.contains(k)) {
+        if (k == widget.focusedCardKey) {
+          next.insert(0, k);
+        } else {
+          next.add(k);
+        }
+      }
+    }
+
+    if (widget.focusTick != _lastHandledTick || initial) {
+      _lastHandledTick = widget.focusTick;
+      final fk = widget.focusedCardKey;
+      if (fk != null && next.contains(fk)) {
+        next.remove(fk);
+        next.insert(0, fk);
+      }
+    }
+
+    _orderedKeys = next;
+  }
+
+  void _bringToFront(String keyId) {
+    if (_orderedKeys.isEmpty || _orderedKeys.first == keyId) return;
+    _swipeAnim.stop();
+    _pendingRotate = false;
+    setState(() {
+      _dragOffsetX = 0.0;
+      _orderedKeys.remove(keyId);
+      _orderedKeys.insert(0, keyId);
+    });
+  }
+
+  void _onHorizontalDragUpdate(DragUpdateDetails details) {
+    if (_orderedKeys.length < 2 || _pendingRotate) return;
+    setState(() {
+      _dragOffsetX = (_dragOffsetX + details.delta.dx).clamp(-260.0, 260.0);
+    });
+  }
+
+  void _onHorizontalDragEnd(DragEndDetails details) {
+    if (_orderedKeys.length < 2 || _pendingRotate) return;
+    final vx = details.velocity.pixelsPerSecond.dx;
+    final shouldRotate = _dragOffsetX.abs() > 72 || vx.abs() > 420;
+    if (shouldRotate) {
+      final dir = _dragOffsetX == 0 ? (vx >= 0 ? 1.0 : -1.0) : _dragOffsetX.sign;
+      final width = MediaQuery.sizeOf(context).width;
+      _pendingRotate = true;
+      _offsetTween = Tween<double>(
+        begin: _dragOffsetX,
+        end: dir * width,
+      ).animate(
+        CurvedAnimation(parent: _swipeAnim, curve: Curves.easeOutCubic),
+      );
+      _swipeAnim.forward(from: 0);
+    } else {
+      _pendingRotate = false;
+      _offsetTween = Tween<double>(
+        begin: _dragOffsetX,
+        end: 0.0,
+      ).animate(
+        CurvedAnimation(parent: _swipeAnim, curve: Curves.easeOutCubic),
+      );
+      _swipeAnim.forward(from: 0);
+    }
+  }
+
+  void _onHorizontalDragCancel() {
+    if (_pendingRotate || _dragOffsetX == 0) return;
+    _offsetTween = Tween<double>(
+      begin: _dragOffsetX,
+      end: 0.0,
+    ).animate(
+      CurvedAnimation(parent: _swipeAnim, curve: Curves.easeOutCubic),
+    );
+    _swipeAnim.forward(from: 0);
+  }
+
+  List<Color> _gradientForDepth(int depth) => switch (depth) {
+        0 => const [Color(0xFFBFBBF5), Color(0xFF7B2CBF)],
+        1 => const [Color(0xFF9E82DC), Color(0xFF61209E)],
+        2 => const [Color(0xFF7C5BC2), Color(0xFF4A148C)],
+        _ => const [Color(0xFF6342A8), Color(0xFF380D6E)],
+      };
+
+  List<BoxShadow> _shadowForDepth(int depth) => [
+        BoxShadow(
+          color: const Color(0xFF1F063D).withValues(alpha: depth == 0 ? 0.28 : 0.18),
+          blurRadius: depth == 0 ? 22 : 10,
+          offset: Offset(0, depth == 0 ? -4 : -2),
+        ),
+        if (depth == 0)
+          BoxShadow(
+            color: const Color(0xFF7B2CBF).withValues(alpha: 0.24),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
+      ];
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    final byKey = {for (final c in widget.cards) c.keyId: c};
+    final orderedCards = [
+      for (final k in _orderedKeys)
+        if (byKey[k] != null) byKey[k]!,
+    ];
+    if (orderedCards.isEmpty) return const SizedBox.shrink();
+
+    final frontCard = orderedCards.first;
+    final visibleCount = orderedCards.length.clamp(1, _maxVisibleLayers);
+    final stackHeight = _cardHeight + (visibleCount - 1) * _peekOffset;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          height: stackHeight,
+          child: Stack(
+            clipBehavior: Clip.none,
             children: [
-              for (var i = 0; i < backCards.length; i++)
-                Align(
-                  alignment: Alignment.topCenter,
-                  heightFactor: (hasAnyCard || i < backCards.length - 1) ? 0.78 : 1.0,
-                  child: backCards[i],
+              // Pintamos desde la capa más trasera (depth = visibleCount - 1) hasta el frente (depth = 0).
+              for (var depth = visibleCount - 1; depth >= 0; depth--)
+                () {
+                  final card = orderedCards[depth];
+                  final topOffset = (visibleCount - 1 - depth) * _peekOffset;
+                  final scale = (1.0 - depth * 0.025).clamp(0.90, 1.0);
+                  final isFront = depth == 0;
+
+                  Widget cardWidget = SizedBox(
+                    height: _cardHeight,
+                    child: BocadooOrderCard(
+                      restaurantName: card.title,
+                      orderType: card.orderType,
+                      totalCents: card.totalCents,
+                      availableLunches: card.availableLunches,
+                      scheduledTime: card.scheduledTime,
+                      extraCashCents: card.extraCashCents,
+                      qrPayload: card.qrData,
+                      hasActiveOrderQr: card.hasActiveOrderQr,
+                      inactiveQrLabel: card.inactiveQrLabel,
+                      statusBadgeLabel: card.statusBadgeLabel,
+                      actionLabel: card.actionLabel,
+                      gradientColors: _gradientForDepth(depth),
+                      boxShadow: _shadowForDepth(depth),
+                      onTapQr: isFront && card.hasActiveOrderQr
+                          ? () => _showZoomedQr(
+                                context,
+                                card.qrData,
+                                card.title,
+                                restaurantId: card.shortRestaurantId,
+                                badgeOverride: card.displayCodeOverride,
+                              )
+                          : null,
+                      onTapInactiveQr: isFront ? card.onTapInactiveQr : null,
+                      onTapViewStatus:
+                          isFront ? card.onViewStatus : () => _bringToFront(card.keyId),
+                    ),
+                  );
+
+                  if (isFront) {
+                    final screenW = MediaQuery.sizeOf(context).width;
+                    final opacity =
+                        (1.0 - (_dragOffsetX.abs() / screenW) * 0.45).clamp(0.55, 1.0);
+                    cardWidget = GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onHorizontalDragUpdate: _onHorizontalDragUpdate,
+                      onHorizontalDragEnd: _onHorizontalDragEnd,
+                      onHorizontalDragCancel: _onHorizontalDragCancel,
+                      child: Transform.translate(
+                        offset: Offset(_dragOffsetX, 0),
+                        child: Transform.rotate(
+                          angle: _dragOffsetX * 0.0005,
+                          child: Opacity(opacity: opacity, child: cardWidget),
+                        ),
+                      ),
+                    );
+                  } else {
+                    cardWidget = GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => _bringToFront(card.keyId),
+                      child: AbsorbPointer(child: cardWidget),
+                    );
+                  }
+
+                  return AnimatedPositioned(
+                    key: ValueKey('wallet_layer_${card.keyId}'),
+                    duration: const Duration(milliseconds: 280),
+                    curve: Curves.easeOutCubic,
+                    top: topOffset,
+                    left: 0,
+                    right: 0,
+                    child: AnimatedScale(
+                      scale: scale,
+                      alignment: Alignment.topCenter,
+                      duration: const Duration(milliseconds: 280),
+                      curve: Curves.easeOutCubic,
+                      child: cardWidget,
+                    ),
+                  );
+                }(),
+            ],
+          ),
+        ),
+        if (widget.cards.length >= 2) ...[
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              for (final card in widget.cards)
+                GestureDetector(
+                  onTap: () => _bringToFront(card.keyId),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 220),
+                    curve: Curves.easeOutCubic,
+                    width: card.keyId == frontCard.keyId ? 24 : 10,
+                    height: 5,
+                    margin: const EdgeInsets.symmetric(horizontal: 3),
+                    decoration: BoxDecoration(
+                      color: card.keyId == frontCard.keyId
+                          ? colors.primary
+                          : colors.outlineVariant,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                  ),
                 ),
             ],
           ),
-        if (hasAnyCard)
-          _ActiveWalletCard(state: state, controller: controller)
-        else
-          const _EmptyPlanPrompt(),
+        ],
+        if (frontCard.contextualFooter != null) ...[
+          const SizedBox(height: 12),
+          frontCard.contextualFooter!,
+        ],
       ],
     );
   }
@@ -593,466 +1150,6 @@ class _DiscoverWalletTab extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-class _StackedPlanTab extends StatelessWidget {
-  final CustomerPass pass;
-  final int tintIndex;
-  final VoidCallback onTap;
-
-  const _StackedPlanTab({
-    required this.pass,
-    required this.tintIndex,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colorScheme;
-    final usePrimaryTint = tintIndex.isEven;
-    final bg = usePrimaryTint ? colors.primaryContainer : colors.secondaryContainer;
-    final fg = usePrimaryTint ? colors.onPrimaryContainer : colors.onSecondaryContainer;
-    return Material(
-      color: bg,
-      shape: RoundedRectangleBorder(
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        side: BorderSide(color: colors.outlineVariant.withValues(alpha: 0.7)),
-      ),
-      elevation: 2,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(18, 14, 18, 22),
-          child: Row(
-            children: [
-              Icon(Icons.confirmation_number_rounded, size: 18, color: fg),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      pass.restaurantName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w900,
-                        color: fg,
-                      ),
-                    ),
-                    Text(
-                      '${pass.remainingLunches} de ${pass.totalLunches} disponibles · Vence ${formatShortDate(pass.expiresAt)}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: fg.withValues(alpha: 0.82),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Icon(Icons.unfold_more_rounded, size: 18, color: fg),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _StackedOrderTab extends StatelessWidget {
-  final ActiveOrder order;
-  final VoidCallback onTap;
-
-  const _StackedOrderTab({required this.order, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colorScheme;
-    final b = context.bocadooColors;
-    return Material(
-      color: b.successContainer,
-      shape: RoundedRectangleBorder(
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        side: BorderSide(color: b.success.withValues(alpha: 0.35)),
-      ),
-      elevation: 2,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(18, 14, 18, 22),
-          child: Row(
-            children: [
-              Icon(Icons.receipt_long_rounded, size: 18, color: b.success),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  'Preorden #${order.orderNumber} · ${order.restaurantName}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w900,
-                    color: b.onSuccessContainer,
-                  ),
-                ),
-              ),
-              Icon(Icons.qr_code_2_rounded, size: 18, color: colors.primary),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _StackedTableTab extends StatelessWidget {
-  final ActiveTable table;
-  final VoidCallback onTap;
-
-  const _StackedTableTab({required this.table, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colorScheme;
-    return Material(
-      color: colors.surface,
-      shape: RoundedRectangleBorder(
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        side: BorderSide(color: colors.outlineVariant),
-      ),
-      elevation: 2,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(18, 14, 18, 22),
-          child: Row(
-            children: [
-              Icon(Icons.groups_rounded, size: 18, color: colors.primary),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  'Mesa ${table.time} · ${table.restaurantName} (${table.membersCount})',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w900,
-                    color: colors.onSurface,
-                  ),
-                ),
-              ),
-              Icon(Icons.qr_code_2_rounded, size: 18, color: colors.primary),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ActiveWalletCard extends StatelessWidget {
-  final CustomerUiState state;
-  final CustomerController controller;
-
-  const _ActiveWalletCard({
-    required this.state,
-    required this.controller,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final mode = state.qrMode;
-    final pass = state.currentPass;
-    final order = state.activeOrder;
-    final table = state.activeTable;
-    final simSession = table != null
-        ? (GroupOrderSimulationStore.instance.sessionById(table.id) ??
-            GroupOrderSimulationStore.instance.activeSession)
-        : null;
-    final isMesaCollecting = mode == QrMode.mesa &&
-        table != null &&
-        simSession != null &&
-        simSession.status == GroupOrderStatus.collecting;
-    final isMesaConfirmed = mode == QrMode.mesa &&
-        table != null &&
-        simSession != null &&
-        simSession.status == GroupOrderStatus.confirmed;
-
-    final menuAvail = mode == QrMode.plan && pass != null
-        ? state.menuAvailabilityFor(pass.restaurantId)
-        : MenuAvailabilityState.disponible;
-
-    final String title;
-    final BocadooOrderCardType orderType;
-    final int? totalCents;
-    final int? availableLunches;
-    final String? scheduledTime;
-    final int extraCashCents;
-    final String qrData;
-    final bool hasActiveOrderQr;
-    final String inactiveQrLabel;
-    final String? statusBadgeLabel;
-    final String actionLabel;
-    final String? shortRestaurantId;
-    final String? displayCodeOverride;
-    final VoidCallback onViewStatus;
-    final VoidCallback? onTapInactiveQr;
-
-    if (mode == QrMode.preorden && order != null) {
-      title = order.restaurantName;
-      final isFlash = controller.isFlashOfferOrder(order);
-      orderType = isFlash
-          ? BocadooOrderCardType.flashOffer
-          : (order.hasPlan
-              ? BocadooOrderCardType.preorderWithPlan
-              : BocadooOrderCardType.preorderWithoutPlan);
-      final matchingPass = order.restaurantId != null
-          ? state.passFor(order.restaurantId!)
-          : null;
-      availableLunches = order.hasPlan
-          ? (matchingPass?.remainingLunches ?? order.planCreditsUsed)
-          : null;
-      totalCents = order.hasPlan
-          ? null
-          : (order.cashToCollectCents > 0
-              ? order.cashToCollectCents
-              : order.effectiveTotalCents);
-      extraCashCents = order.hasPlan ? order.cashToCollectCents : 0;
-      scheduledTime = order.estimatedArrivalLabel;
-      shortRestaurantId = order.restaurantId;
-      final shortCode = BocadooQrParser.toShortCode(
-        state.qrValue,
-        restaurantId: shortRestaurantId,
-      );
-      qrData = AppMode.useMock ? shortCode : state.qrValue;
-      hasActiveOrderQr = AppMode.useMock ? qrData.isNotEmpty : state.qrValue.isNotEmpty;
-      inactiveQrLabel = 'Generando QR...';
-      statusBadgeLabel = null;
-      actionLabel = 'VER ESTADO';
-      displayCodeOverride = !AppMode.useMock ? '#${order.orderNumber}' : null;
-      onViewStatus = () => context.push('/customer/pedido/${order.orderNumber}');
-      onTapInactiveQr = null;
-    } else if (mode == QrMode.mesa && table != null) {
-      title = simSession != null
-          ? 'Mesa de ${simSession.hostName}'
-          : table.restaurantName;
-      orderType = BocadooOrderCardType.groupOrder;
-      availableLunches = null;
-      totalCents = controller.tableTotalCentsFor(table, state);
-      extraCashCents = 0;
-      scheduledTime = simSession?.timeHhmm ?? table.time;
-      shortRestaurantId = null;
-      final shortCode = BocadooQrParser.toShortCode(state.qrValue);
-      qrData = isMesaConfirmed
-          ? simSession.qrPayload
-          : (AppMode.useMock ? shortCode : state.qrValue);
-      hasActiveOrderQr = !isMesaCollecting && qrData.isNotEmpty;
-      inactiveQrLabel = isMesaCollecting
-          ? 'Esperando (${simSession.confirmedCount}/${simSession.totalParticipants})'
-          : 'QR pendiente';
-      statusBadgeLabel = null;
-      actionLabel = 'VER ESTADO';
-      displayCodeOverride = isMesaConfirmed ? 'Mesa #${simSession.shortCode}' : null;
-      onViewStatus = () => context.push(
-            '/customer/mesa?groupOrderId=${table.id}${simSession != null ? '&restaurantId=${simSession.restaurantId}' : ''}',
-          );
-      onTapInactiveQr = null;
-    } else if (pass != null) {
-      title = pass.restaurantName;
-      orderType = BocadooOrderCardType.preorderWithPlan;
-      availableLunches = pass.remainingLunches;
-      totalCents = null;
-      final activeOrderHere = order != null &&
-          !order.isDelivered &&
-          order.restaurantId == pass.restaurantId
-          ? order
-          : null;
-      extraCashCents = activeOrderHere?.cashToCollectCents ?? 0;
-      scheduledTime = activeOrderHere?.estimatedArrivalLabel;
-      shortRestaurantId = pass.restaurantId;
-      if (activeOrderHere != null) {
-        final orderCode = BocadooQrParser.toShortCode(
-          activeOrderHere.qrPayload,
-          restaurantId: shortRestaurantId,
-        );
-        qrData = AppMode.useMock ? orderCode : activeOrderHere.qrPayload;
-        hasActiveOrderQr = qrData.isNotEmpty;
-        displayCodeOverride =
-            !AppMode.useMock ? '#${activeOrderHere.orderNumber}' : null;
-        inactiveQrLabel = 'Generando QR...';
-        statusBadgeLabel = 'Plan Activo';
-        actionLabel = 'VER ESTADO';
-        onViewStatus =
-            () => context.push('/customer/pedido/${activeOrderHere.orderNumber}');
-        onTapInactiveQr = null;
-      } else {
-        qrData = '';
-        hasActiveOrderQr = false;
-        displayCodeOverride = null;
-        inactiveQrLabel = switch (menuAvail) {
-          MenuAvailabilityState.sinPublicar => 'Menú sin publicar',
-          MenuAvailabilityState.agotadoTotal => 'Menú agotado hoy',
-          MenuAvailabilityState.disponible => 'Se activará al pedir',
-        };
-        statusBadgeLabel = 'Plan Activo';
-        actionLabel = 'PEDIR HOY';
-        onViewStatus =
-            () => context.push('/customer/restaurants/${pass.restaurantId}');
-        onTapInactiveQr = onViewStatus;
-      }
-    } else if (state.pendingPlanRequest != null) {
-      final pending = state.pendingPlanRequest!;
-      title = pending.restaurant.name;
-      orderType = BocadooOrderCardType.preorderWithPlan;
-      availableLunches = pending.plan.lunches;
-      totalCents = null;
-      extraCashCents = pending.plan.priceCents;
-      scheduledTime = null;
-      shortRestaurantId = pending.restaurant.id;
-      qrData = '';
-      hasActiveOrderQr = false;
-      displayCodeOverride = null;
-      inactiveQrLabel = 'Activa en caja';
-      statusBadgeLabel = 'Por activar';
-      actionLabel = 'VER LOCAL';
-      onViewStatus =
-          () => context.push('/customer/restaurants/${pending.restaurant.id}');
-      onTapInactiveQr = onViewStatus;
-    } else {
-      title = 'Bocadoo';
-      orderType = BocadooOrderCardType.preorderWithoutPlan;
-      availableLunches = null;
-      totalCents = 0;
-      extraCashCents = 0;
-      scheduledTime = null;
-      shortRestaurantId = null;
-      qrData = '';
-      hasActiveOrderQr = false;
-      displayCodeOverride = null;
-      inactiveQrLabel = 'Se activará al pedir';
-      statusBadgeLabel = null;
-      actionLabel = 'VER ESTADO';
-      onViewStatus = () => context.go('/customer/restaurants');
-      onTapInactiveQr = null;
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        BocadooOrderCard(
-          restaurantName: title,
-          orderType: orderType,
-          totalCents: totalCents,
-          availableLunches: availableLunches,
-          scheduledTime: scheduledTime,
-          extraCashCents: extraCashCents,
-          qrPayload: qrData,
-          hasActiveOrderQr: hasActiveOrderQr,
-          inactiveQrLabel: inactiveQrLabel,
-          statusBadgeLabel: statusBadgeLabel,
-          actionLabel: actionLabel,
-          onTapQr: hasActiveOrderQr
-              ? () => _showZoomedQr(
-                    context,
-                    qrData,
-                    title,
-                    restaurantId: shortRestaurantId,
-                    badgeOverride: displayCodeOverride,
-                  )
-              : null,
-          onTapInactiveQr: onTapInactiveQr,
-          onTapViewStatus: onViewStatus,
-        ),
-        if (state.pendingPlanRequest != null) ...[
-          const SizedBox(height: 12),
-          _PendingPlanActivationBanner(
-            pending: state.pendingPlanRequest!,
-            onRefresh: () => controller.refreshLive(),
-          ),
-        ],
-        if (mode == QrMode.plan &&
-            pass != null &&
-            menuAvail == MenuAvailabilityState.sinPublicar) ...[
-          const SizedBox(height: 12),
-          _MenuNotPublishedQrBlock(
-            restaurantId: pass.restaurantId,
-            onRefresh: () => controller.loadDashboard(silent: true),
-          ),
-        ] else if (mode == QrMode.plan &&
-            pass != null &&
-            menuAvail == MenuAvailabilityState.agotadoTotal) ...[
-          const SizedBox(height: 12),
-          _MenuSoldOutQrBlock(
-            restaurantId: pass.restaurantId,
-            hasReservedOrder: order != null &&
-                !order.isDelivered &&
-                order.restaurantId == pass.restaurantId,
-            onOpenOrderQr: order != null &&
-                    !order.isDelivered &&
-                    order.restaurantId == pass.restaurantId
-                ? () => controller.selectQrMode(QrMode.preorden)
-                : null,
-            onRefresh: () => controller.loadDashboard(silent: true),
-          ),
-        ] else if (isMesaCollecting) ...[
-          const SizedBox(height: 12),
-          _PendingGroupTableBlock(
-            confirmedCount: simSession.confirmedCount,
-            totalCount: simSession.totalParticipants,
-            restaurantName: simSession.restaurantName,
-            onOpenMesa: () => context.push(
-              '/customer/mesa?groupOrderId=${table.id}&restaurantId=${simSession.restaurantId}',
-            ),
-            onCancelMesa: () async {
-              final confirm = await showDialog<bool>(
-                context: context,
-                builder: (ctx) => AlertDialog(
-                  title: const Text('¿Cancelar pedido grupal?'),
-                  content: const Text(
-                    'Se cerrará esta mesa compartida sin costo alguno y tus amigos ya no podrán unirse.',
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.of(ctx).pop(false),
-                      child: const Text('Seguir en la mesa'),
-                    ),
-                    TextButton(
-                      onPressed: () => Navigator.of(ctx).pop(true),
-                      child: Text(
-                        'Cancelar pedido',
-                        style: TextStyle(color: ctx.colorScheme.error),
-                      ),
-                    ),
-                  ],
-                ),
-              );
-              if (confirm != true || !context.mounted) return;
-              final ok = await controller.cancelSharedTable(table.id);
-              if (!context.mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  behavior: SnackBarBehavior.floating,
-                  content: Text(
-                    ok
-                        ? 'Pedido grupal cancelado'
-                        : (controller.lastActionError ??
-                            'No se pudo cancelar el pedido grupal'),
-                  ),
-                ),
-              );
-            },
-          ),
-        ],
-      ],
     );
   }
 }
