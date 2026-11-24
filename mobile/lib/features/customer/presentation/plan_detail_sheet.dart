@@ -1,14 +1,14 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../../core/contracts/models.dart';
 import '../../../core/theme/app_theme.dart';
 import 'customer_controller.dart';
 import 'customer_widgets.dart';
 
-/// C5 · Detalle del plan: desglose de ahorro, términos y solicitud.
+/// FASE 3 · Modal Emergente 2: Confirmación Express con Línea de Tiempo de 3 pasos,
+/// acordeón colapsado por defecto y redirección directa a `Mi Pase`.
 class PlanDetailSheet extends ConsumerStatefulWidget {
   final String planId;
 
@@ -19,24 +19,37 @@ class PlanDetailSheet extends ConsumerStatefulWidget {
 }
 
 class _PlanDetailSheetState extends ConsumerState<PlanDetailSheet> {
-  bool _showFullTerms = false;
+  bool _showMenuAndTerms = false;
   bool _sending = false;
-  bool _requested = false;
 
-  Future<void> _confirm(CustomerController controller, PlanTemplate plan) async {
+  Future<void> _confirm(
+    CustomerController controller,
+    PlanTemplate plan,
+    Restaurant restaurant,
+  ) async {
     final messenger = ScaffoldMessenger.of(context);
+    final rootNav = Navigator.of(context, rootNavigator: true);
+    final router = GoRouter.of(context);
+
     setState(() => _sending = true);
-    final ok = await controller.requestPlan(plan);
+    final ok = await controller.requestPlan(plan, restaurant: restaurant);
     if (!mounted) return;
     setState(() => _sending = false);
+
     if (!ok) {
       final error = controller.lastActionError;
       if (error != null && error.isNotEmpty) {
-        messenger.showSnackBar(SnackBar(content: Text(error)));
+        messenger.hideCurrentSnackBar();
+        messenger.showSnackBar(
+          SnackBar(behavior: SnackBarBehavior.floating, content: Text(error)),
+        );
       }
       return;
     }
-    setState(() => _requested = true);
+
+    // FASE 4.1 · Cerrar modales abiertos y navegar directo a `Mi Pase`.
+    rootNav.popUntil((route) => route.isFirst);
+    router.go('/customer/pase');
   }
 
   @override
@@ -45,518 +58,596 @@ class _PlanDetailSheetState extends ConsumerState<PlanDetailSheet> {
     final detail = ref.watch(planDetailProvider(widget.planId));
     final s = controller.state;
     final colors = context.colorScheme;
+    final textTheme = Theme.of(context).textTheme;
 
-    PlanTemplate? plan = s.planTemplates.where((p) => p.id == widget.planId).firstOrNull;
-    Restaurant? restaurant = plan == null ? null : s.restaurantById(plan.restaurantId);
+    PlanTemplate? plan =
+        s.planTemplates.where((p) => p.id == widget.planId).firstOrNull;
+    Restaurant? restaurant =
+        plan == null ? null : s.restaurantById(plan.restaurantId);
     if (plan == null || restaurant == null) {
       final loaded = detail.value;
-      plan = loaded?.$1;
-      restaurant = loaded?.$2;
+      plan ??= loaded?.$1;
+      restaurant ??= loaded?.$2;
     }
 
     return SizedBox(
-      height: MediaQuery.sizeOf(context).height * 0.88,
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-          child: Text('Detalle y Términos del Plan',
-              style: TextStyle(fontSize: 21, fontWeight: FontWeight.w900, color: colors.onSurface)),
-        ),
-        if (plan == null || restaurant == null)
-          Expanded(
-            child: detail.isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : CustomerErrorView(
-                    title: 'Error al cargar el plan',
-                    message: 'No pudimos cargar el detalle de este plan.',
-                    onRetry: () => ref.invalidate(planDetailProvider(widget.planId)),
+      height: MediaQuery.sizeOf(context).height * 0.84,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 16, 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Confirmar plan',
+                    style: (textTheme.headlineSmall ?? const TextStyle())
+                        .copyWith(
+                      fontSize: 21,
+                      fontWeight: FontWeight.w800,
+                      color: colors.onSurface,
+                    ),
                   ),
-          )
-        else if (_requested) ...[
-          Expanded(
-            child: _RequestQrView(
-              plan: plan,
-              restaurant: restaurant,
-              onDone: () => context.pop(),
+                ),
+                IconButton.filledTonal(
+                  tooltip: 'Cerrar',
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.close_rounded, size: 18),
+                ),
+              ],
             ),
           ),
-        ] else ...[
-          Expanded(child: _details(context, plan, restaurant)),
-          Builder(
-            builder: (context) {
-              final existingPass = s.passFor(restaurant!.id);
-              final hasActiveHere = existingPass != null &&
-                  existingPass.remainingLunches > 0 &&
-                  !existingPass.isExpired;
-              return Padding(
-                padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    if (hasActiveHere) ...[
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 10,
-                        ),
-                        margin: const EdgeInsets.only(bottom: 10),
-                        decoration: BoxDecoration(
-                          color: context.bocadooColors.successContainer,
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                            color: context.bocadooColors.success.withValues(
-                              alpha: 0.35,
+          if (plan == null || restaurant == null)
+            Expanded(
+              child: detail.isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : CustomerErrorView(
+                      title: 'Error al cargar el plan',
+                      message: 'No pudimos cargar el detalle de este plan.',
+                      onRetry: () =>
+                          ref.invalidate(planDetailProvider(widget.planId)),
+                    ),
+            )
+          else ...[
+            Expanded(
+              child: _buildExpressBody(
+                context,
+                controller: controller,
+                plan: plan,
+                restaurant: restaurant,
+              ),
+            ),
+            Builder(
+              builder: (context) {
+                final existingPass = s.passFor(restaurant!.id);
+                final hasActiveHere = existingPass != null &&
+                    existingPass.remainingLunches > 0 &&
+                    !existingPass.isExpired;
+                return SafeArea(
+                  top: false,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 6, 16, 16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (hasActiveHere) ...[
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 9,
+                            ),
+                            margin: const EdgeInsets.only(bottom: 10),
+                            decoration: BoxDecoration(
+                              color: context.bocadooColors.successContainer,
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(
+                                color: context.bocadooColors.success
+                                    .withValues(alpha: 0.35),
+                              ),
+                            ),
+                            child: Text(
+                              'Ya tienes un plan activo en este local (${existingPass.remainingLunches} almuerzos disponibles).',
+                              textAlign: TextAlign.center,
+                              style:
+                                  (textTheme.bodySmall ?? const TextStyle())
+                                      .copyWith(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: colors.onSurface,
+                              ),
                             ),
                           ),
+                        ],
+                        FilledButton(
+                          onPressed: (_sending || hasActiveHere)
+                              ? null
+                              : () =>
+                                  _confirm(controller, plan!, restaurant!),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: colors.primary,
+                            foregroundColor: colors.onPrimary,
+                            minimumSize: const Size.fromHeight(50),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(24),
+                            ),
+                          ),
+                          child: _sending
+                              ? SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.2,
+                                    color: colors.onPrimary,
+                                  ),
+                                )
+                              : Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Text(
+                                      'Confirmar y pedir plan',
+                                      style: (textTheme.labelLarge ??
+                                              const TextStyle())
+                                          .copyWith(
+                                        color: colors.onPrimary,
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    const Icon(Icons.check_rounded, size: 19),
+                                  ],
+                                ),
                         ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildExpressBody(
+    BuildContext context, {
+    required CustomerController controller,
+    required PlanTemplate plan,
+    required Restaurant restaurant,
+  }) {
+    final colors = context.colorScheme;
+    final b = context.bocadooColors;
+    final textTheme = Theme.of(context).textTheme;
+    final singleCents = (restaurant.singleLunchPrice * 100).round();
+    final totalSingle = singleCents * plan.lunches;
+    final saving = (totalSingle - plan.priceCents).clamp(0, totalSingle);
+    final includes = controller.planIncludesFor(restaurant, [plan]);
+    final unitLabel = switch (plan.category) {
+      'DESAYUNO' => 'desayunos',
+      'MIXTO' => 'combos',
+      _ => 'almuerzos',
+    };
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+      children: [
+        // 1. Tarjeta Resumen Superior
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: colors.primary.withValues(alpha: 0.24)),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                colors.primaryContainer.withValues(alpha: 0.45),
+                Theme.of(context).scaffoldBackgroundColor,
+              ],
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 42,
+                    height: 42,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      gradient: b.heroGradient,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      monogram(restaurant.name),
+                      style:
+                          (textTheme.titleSmall ?? const TextStyle()).copyWith(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                        color: b.imageForeground,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          restaurant.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: (textTheme.titleSmall ?? const TextStyle())
+                              .copyWith(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w800,
+                            color: colors.onSurface,
+                          ),
+                        ),
+                        Text(
+                          '${plan.name} · ${plan.lunches} $unitLabel',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style:
+                              (textTheme.bodySmall ?? const TextStyle()).copyWith(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w600,
+                            color: colors.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (saving > 0)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 9,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: b.successContainer,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        'Ahorras ${formatCents(saving)}',
+                        style:
+                            (textTheme.labelSmall ?? const TextStyle()).copyWith(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                          color: b.success,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
+                decoration: BoxDecoration(
+                  color: colors.surface,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: colors.outlineVariant),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Total a pagar en caja',
+                            style: (textTheme.bodySmall ?? const TextStyle())
+                                .copyWith(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: colors.onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Vigencia de ${plan.validityDays} días · ${formatCents(plan.perLunchCents)} c/u',
+                            style: (textTheme.bodySmall ?? const TextStyle())
+                                .copyWith(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w600,
+                              color: colors.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Text(
+                      formatCents(plan.priceCents),
+                      style: (textTheme.headlineMedium ?? const TextStyle())
+                          .copyWith(
+                        fontSize: 25,
+                        fontWeight: FontWeight.w800,
+                        color: colors.primary,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 14),
+
+        // 2. Línea de Tiempo Visual de 3 Pasos ("¿Cómo funciona?")
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Theme.of(context).scaffoldBackgroundColor,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: colors.outlineVariant),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '¿Cómo funciona?',
+                style: (textTheme.titleMedium ?? const TextStyle()).copyWith(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w800,
+                  color: colors.onSurface,
+                ),
+              ),
+              const SizedBox(height: 12),
+              const _TimelineStep(
+                step: '1',
+                icon: Icons.touch_app_rounded,
+                title: 'Solicita ahora (\$0 hoy)',
+                subtitle: 'Reservas tu plan desde la app sin pago anticipado.',
+              ),
+              const _TimelineStep(
+                step: '2',
+                icon: Icons.storefront_rounded,
+                title: 'Activa en caja',
+                subtitle:
+                    'Acércate al restaurante y cancela el valor en efectivo o transferencia para habilitar tus almuerzos.',
+              ),
+              const _TimelineStep(
+                step: '3',
+                icon: Icons.qr_code_2_rounded,
+                title: 'Ordena y usa tu QR',
+                subtitle:
+                    'Genera tu orden diaria y presenta tu QR en caja para descontar 1 almuerzo.',
+                isLast: true,
+              ),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 12),
+
+        // 3. Acordeón colapsado por defecto
+        Container(
+          decoration: BoxDecoration(
+            color: Theme.of(context).scaffoldBackgroundColor,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: colors.outlineVariant),
+          ),
+          child: Column(
+            children: [
+              InkWell(
+                borderRadius: BorderRadius.circular(18),
+                onTap: () =>
+                    setState(() => _showMenuAndTerms = !_showMenuAndTerms),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 13,
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.verified_user_outlined,
+                        size: 18,
+                        color: colors.primary,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
                         child: Text(
-                          'Ya cuentas con un plan activo en este restaurante (${existingPass.remainingLunches} almuerzos restantes)',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 12,
+                          'Ver qué incluye el menú y términos',
+                          style:
+                              (textTheme.bodyMedium ?? const TextStyle()).copyWith(
+                            fontSize: 13.5,
                             fontWeight: FontWeight.w700,
                             color: colors.onSurface,
                           ),
                         ),
                       ),
-                    ],
-                    ElevatedButton(
-                      onPressed: (_sending || hasActiveHere)
-                          ? null
-                          : () => _confirm(controller, plan!),
-                      child: const Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Flexible(
-                            child: Text(
-                              'Confirmar y solicitar plan',
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          SizedBox(width: 8),
-                          Icon(Icons.arrow_forward_rounded, size: 18),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      hasActiveHere
-                          ? 'Podrás solicitar otro plan cuando tu saldo llegue a 0 o venza.'
-                          : 'Solicitas sin pago inmediato · Pagas en caja en efectivo o transferencia al activar',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
+                      Icon(
+                        _showMenuAndTerms
+                            ? Icons.expand_less_rounded
+                            : Icons.expand_more_rounded,
+                        size: 20,
                         color: colors.onSurfaceVariant,
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              );
-            },
-          ),
-        ],
-      ]),
-    );
-  }
-
-  Widget _details(BuildContext context, PlanTemplate plan, Restaurant restaurant) {
-    final colors = context.colorScheme;
-    final b = context.bocadooColors;
-    final singleCents = (restaurant.singleLunchPrice * 100).round();
-    final totalSingle = singleCents * plan.lunches;
-    final saving = (totalSingle - plan.priceCents).clamp(0, totalSingle);
-    final discount = totalSingle > 0 ? (saving * 100 / totalSingle).round() : 0;
-    final soft = Theme.of(context).scaffoldBackgroundColor;
-    final muted = TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: colors.onSurfaceVariant);
-
-    BoxDecoration box() => BoxDecoration(
-          color: soft,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: colors.outlineVariant),
-        );
-
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-      children: [
-        Container(
-          padding: const EdgeInsets.all(14),
-          decoration: box(),
-          child: Row(children: [
-            Container(
-              width: 48,
-              height: 48,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(gradient: b.heroGradient, borderRadius: BorderRadius.circular(14)),
-              child: Text(monogram(restaurant.name),
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: b.imageForeground)),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(restaurant.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: colors.onSurface)),
-                const SizedBox(height: 2),
-                Row(children: [
-                  Icon(Icons.location_on_outlined, size: 14, color: colors.primary),
-                  const SizedBox(width: 3),
-                  Expanded(
-                    child: Text(restaurant.address.isEmpty ? restaurant.zone : restaurant.address,
-                        maxLines: 1, overflow: TextOverflow.ellipsis, style: muted),
-                  ),
-                ]),
-                Row(children: [
-                  Icon(Icons.schedule_rounded, size: 13, color: colors.onSurfaceVariant),
-                  const SizedBox(width: 3),
-                  Text('Horario: ${restaurant.schedule}', style: muted.copyWith(fontSize: 11)),
-                ]),
-              ]),
-            ),
-          ]),
-        ),
-        const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: colors.primary.withValues(alpha: 0.2)),
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [colors.primaryContainer.withValues(alpha: 0.4), soft],
-            ),
-          ),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: colors.primaryContainer,
-                      borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-                    ),
-                    child: Text('${plan.type} · ${plan.lunches} almuerzos',
-                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: colors.primary)),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(plan.name,
-                      style: TextStyle(fontSize: 19, fontWeight: FontWeight.w900, height: 1.15, color: colors.onSurface)),
-                  const SizedBox(height: 2),
-                  Text('Vigencia de ${plan.validityDays} días hábiles', style: muted),
-                ]),
               ),
-              Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                Text(formatCents(plan.priceCents),
-                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, height: 1, color: colors.primary)),
-                const SizedBox(height: 2),
-                Text('${formatCents(plan.perLunchCents)} / comida',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: colors.onSurfaceVariant)),
-              ]),
-            ]),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: colors.surface,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: colors.outlineVariant),
-              ),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                Row(children: [
-                  Expanded(
-                    child: Text(
-                      '${plan.lunches} almuerzos a precio regular (${formatCents(singleCents)} c/u):',
-                      style: muted.copyWith(fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                  Text(formatCents(totalSingle),
-                      style: muted.copyWith(fontWeight: FontWeight.w600, decoration: TextDecoration.lineThrough)),
-                ]),
-                const SizedBox(height: 6),
-                Row(children: [
-                  Expanded(
-                    child: Text('Precio especial prepago Bocadoo:',
-                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: colors.onSurface)),
-                  ),
-                  Text(formatCents(plan.priceCents),
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: colors.primary)),
-                ]),
-                if (saving > 0) ...[
-                  const SizedBox(height: 8),
-                  Divider(height: 1, color: colors.outlineVariant),
-                  const SizedBox(height: 8),
-                  Row(children: [
-                    Icon(Icons.percent_rounded, size: 16, color: b.success),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text('Tu descuento directo ($discount% OFF)',
-                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: b.success)),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: b.successContainer,
-                        borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+              if (_showMenuAndTerms)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Divider(height: 1, color: colors.outlineVariant),
+                      const SizedBox(height: 10),
+                      if (includes.isNotEmpty)
+                        _TermItem(
+                          label: 'Incluye:',
+                          text: includes.join(' + '),
+                        ),
+                      _TermItem(
+                        label: 'Horario:',
+                        text: 'Válido en horario de atención (${restaurant.schedule}).',
                       ),
-                      child: Text('Ahorras ${formatCents(saving)}',
-                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: b.success)),
-                    ),
-                  ]),
-                ],
-              ]),
-            ),
-          ]),
-        ),
-        const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.all(14),
-          decoration: box(),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            _BoxTitle(icon: Icons.restaurant_menu_rounded, text: '¿Qué incluye cada almuerzo?'),
-            const SizedBox(height: 6),
-            Text(
-              'Cada almuerzo incluye: sopa o crema casera del día, plato fuerte a tu elección (pollo, carne, pescado o plato vegetariano), jugo natural fresco de fruta y postre tradicional de la casa.',
-              style: muted.copyWith(height: 1.45),
-            ),
-            const SizedBox(height: 10),
-            const Wrap(spacing: 6, runSpacing: 6, children: [
-              _InfoChip(icon: Icons.restaurant_rounded, label: 'Para comer aquí'),
-              _InfoChip(icon: Icons.takeout_dining_outlined, label: 'Para llevar (aplica recargo tarrina)'),
-              _InfoChip(icon: Icons.bolt_rounded, label: 'Valida con QR sin efectivo'),
-            ]),
-          ]),
-        ),
-        const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.all(14),
-          decoration: box(),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            _BoxTitle(icon: Icons.auto_awesome_rounded, text: 'Sobre ${restaurant.name}'),
-            const SizedBox(height: 6),
-            Text(
-              restaurant.description.isEmpty
-                  ? 'Comida casera fresca preparada a diario con ingredientes locales de la mejor calidad.'
-                  : restaurant.description,
-              style: muted.copyWith(height: 1.45),
-            ),
-            if (restaurant.tags.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Wrap(spacing: 6, runSpacing: 6, children: [
-                for (final tag in restaurant.tags)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: colors.surface,
-                      borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-                      border: Border.all(color: colors.outlineVariant),
-                    ),
-                    child: Text(tag,
-                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: colors.onSurfaceVariant)),
+                      _TermItem(
+                        label: 'Vigencia:',
+                        text: '${plan.validityDays} días desde la activación en caja.',
+                      ),
+                      const _TermItem(
+                        label: 'Consumo:',
+                        text:
+                            'Cada almuerzo se descuenta al escanear el QR de tu orden diaria en caja. Los cupos no usados al vencer no son reembolsables.',
+                      ),
+                    ],
                   ),
-              ]),
-            ],
-          ]),
-        ),
-        const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.all(14),
-          decoration: box(),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            InkWell(
-              borderRadius: BorderRadius.circular(12),
-              onTap: () => setState(() => _showFullTerms = !_showFullTerms),
-              child: Row(children: [
-                Expanded(
-                  child: _BoxTitle(icon: Icons.verified_user_outlined, text: 'Términos y condiciones del plan'),
                 ),
-                Icon(
-                  _showFullTerms ? Icons.expand_less_rounded : Icons.expand_more_rounded,
-                  size: 20,
-                  color: colors.onSurfaceVariant,
-                ),
-              ]),
-            ),
-            const SizedBox(height: 4),
-            _Term(label: 'Vigencia:', text: 'Válido por ${plan.validityDays} días desde el momento de activación.'),
-            const _Term(label: 'Validación segura:', text: 'Cada almuerzo se descuenta al escanear tu código QR en caja.'),
-            if (_showFullTerms) ...[
-              _Term(
-                label: 'Horario:',
-                text: 'Válido de lunes a viernes en horario de almuerzo (${restaurant.schedule}).',
-              ),
-              const _Term(
-                label: 'No acumulable:',
-                text:
-                    'Los consumos no utilizados dentro del período caducan automáticamente y no son reembolsables en efectivo.',
-              ),
-              const _Term(
-                label: 'Transferencia:',
-                text: 'Puedes utilizar tus almuerzos con amigos en tu misma mesa si vienes acompañado.',
-              ),
             ],
-          ]),
+          ),
         ),
       ],
     );
   }
 }
 
-class _BoxTitle extends StatelessWidget {
-  final IconData icon;
-  final String text;
-
-  const _BoxTitle({required this.icon, required this.text});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colorScheme;
-    return Row(children: [
-      Icon(icon, size: 16, color: colors.primary),
-      const SizedBox(width: 6),
-      Flexible(
-        child: Text(text, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: colors.onSurface)),
-      ),
-    ]);
-  }
-}
-
-class _InfoChip extends StatelessWidget {
-  final IconData icon;
-  final String label;
-
-  const _InfoChip({required this.icon, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-        border: Border.all(color: colors.outlineVariant),
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, size: 13, color: colors.primary),
-        const SizedBox(width: 4),
-        Flexible(
-          child: Text(label,
-              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: colors.onSurfaceVariant)),
-        ),
-      ]),
-    );
-  }
-}
-
-class _Term extends StatelessWidget {
-  final String label;
-  final String text;
-
-  const _Term({required this.label, required this.text});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colorScheme;
-    return Padding(
-      padding: const EdgeInsets.only(top: 6),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Padding(
-          padding: const EdgeInsets.only(top: 1),
-          child: Icon(Icons.check_circle_outline_rounded, size: 14, color: context.bocadooColors.success),
-        ),
-        const SizedBox(width: 6),
-        Expanded(
-          child: Text.rich(
-            TextSpan(children: [
-              TextSpan(text: '$label ', style: TextStyle(fontWeight: FontWeight.w800, color: colors.onSurface)),
-              TextSpan(text: text),
-            ]),
-            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: colors.onSurfaceVariant),
-          ),
-        ),
-      ]),
-    );
-  }
-}
-
-class _RequestQrView extends StatelessWidget {
-  const _RequestQrView({
-    required this.plan,
-    required this.restaurant,
-    required this.onDone,
+class _TimelineStep extends StatelessWidget {
+  const _TimelineStep({
+    required this.step,
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    this.isLast = false,
   });
 
-  final PlanTemplate plan;
-  final Restaurant restaurant;
-  final VoidCallback onDone;
+  final String step;
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final bool isLast;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
-    final b = context.bocadooColors;
-    final qrPayload = 'BCD-PLAN-REQ:${plan.id}';
+    final textTheme = Theme.of(context).textTheme;
 
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-      children: [
-        Center(
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: b.successContainer,
-              borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-            ),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(Icons.check_circle_rounded, size: 16, color: b.success),
-              const SizedBox(width: 6),
-              Text('Solicitud enviada a caja',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: b.success)),
-            ]),
-          ),
-        ),
-        const SizedBox(height: 16),
-        Center(
-          child: Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: b.qrBackground,
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(color: colors.outlineVariant),
-            ),
-            child: QrImageView(
-              data: qrPayload,
-              size: 180,
-              backgroundColor: b.qrBackground,
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(
+            width: 30,
+            child: Column(
+              children: [
+                Container(
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    color: colors.primaryContainer,
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: colors.primary.withValues(alpha: 0.4),
+                    ),
+                  ),
+                  child: Icon(icon, size: 15, color: colors.primary),
+                ),
+                if (!isLast)
+                  Expanded(
+                    child: Container(
+                      width: 2,
+                      margin: const EdgeInsets.symmetric(vertical: 3),
+                      color: colors.primary.withValues(alpha: 0.25),
+                    ),
+                  ),
+              ],
             ),
           ),
-        ),
-        const SizedBox(height: 16),
-        Text(
-          plan.name,
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: colors.onSurface),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          '${restaurant.name} · ${plan.lunches} almuerzos · ${formatMoney(plan.priceCents / 100)}',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: colors.onSurfaceVariant),
-        ),
-        const SizedBox(height: 12),
-        Text(
-          'Acércate a caja, indica tu nombre o muestra este QR para pagar y activar tu plan.',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant),
-        ),
-        const SizedBox(height: 24),
-        ElevatedButton(
-          onPressed: onDone,
-          child: const Text('Listo'),
-        ),
-      ],
+          const SizedBox(width: 10),
+          Expanded(
+            child: Padding(
+              padding: EdgeInsets.only(bottom: isLast ? 0 : 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '$step. $title',
+                    style: (textTheme.titleSmall ?? const TextStyle()).copyWith(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w800,
+                      color: colors.onSurface,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: (textTheme.bodySmall ?? const TextStyle()).copyWith(
+                      fontSize: 12.5,
+                      height: 1.35,
+                      fontWeight: FontWeight.w500,
+                      color: colors.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TermItem extends StatelessWidget {
+  const _TermItem({required this.label, required this.text});
+
+  final String label;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Icon(
+              Icons.check_circle_outline_rounded,
+              size: 14,
+              color: context.bocadooColors.success,
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text.rich(
+              TextSpan(
+                children: [
+                  TextSpan(
+                    text: '$label ',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: colors.onSurface,
+                    ),
+                  ),
+                  TextSpan(text: text),
+                ],
+              ),
+              style: (textTheme.bodySmall ?? const TextStyle()).copyWith(
+                fontSize: 12,
+                height: 1.35,
+                color: colors.onSurfaceVariant,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

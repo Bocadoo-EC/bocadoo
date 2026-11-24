@@ -290,12 +290,6 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
     }
   }
 
-  void _openTable() {
-    final router = GoRouter.of(context);
-    router.pop();
-    router.push('/customer/mesa?restaurantId=${widget.restaurantId}');
-  }
-
   @override
   Widget build(BuildContext context) {
     final controller = ref.watch(customerControllerProvider);
@@ -436,8 +430,6 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
                     notifier: notifier,
                     cartaAsync: cartaAsync,
                     cartaItems: cartaItems,
-                    publicStatus: publicStatus,
-                    hasPlanHere: hasPlanHere,
                     hasBreakfasts: hasBreakfasts,
                     breakfastMode: breakfastMode,
                     isClosed: isClosed,
@@ -481,8 +473,6 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
     required HybridOrderNotifier notifier,
     required AsyncValue<List<PublicCartaItem>> cartaAsync,
     required List<PublicCartaItem> cartaItems,
-    required RestaurantPublicStatus publicStatus,
-    required bool hasPlanHere,
     required bool hasBreakfasts,
     required bool breakfastMode,
     required bool isClosed,
@@ -492,7 +482,7 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
 
     return ListView(
       key: const ValueKey(1),
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
       children: [
         if (s.isOffline) ...[
           Center(
@@ -507,13 +497,6 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
           ),
           const SizedBox(height: 12),
         ],
-        CleanRestaurantPlanCard(
-          restaurant: r,
-          publicStatus: publicStatus,
-          hasPlanHere: hasPlanHere,
-          onTable: _openTable,
-        ),
-        const SizedBox(height: 12),
         OrderTypeSegmentedBar(
           activeTab: draft.activeTab,
           addonsCount: addonsCount,

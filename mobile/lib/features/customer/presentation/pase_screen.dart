@@ -171,8 +171,10 @@ class _PaseScreenState extends ConsumerState<PaseScreen>
             hasActiveOrder && !s.activeOrder!.hasPlan && !s.activeOrder!.isDelivered;
         final activePasses =
             s.passes.where((p) => p.remainingLunches > 0).toList();
-        final hasAnyPassOrLive =
-            s.passes.isNotEmpty || hasActiveOrder || s.activeTable != null;
+        final hasAnyPassOrLive = s.passes.isNotEmpty ||
+            hasActiveOrder ||
+            s.activeTable != null ||
+            s.pendingPlanRequest != null;
         if (!hasAnyPassOrLive &&
             (s.isLoading || s.status == CustomerStatus.initial)) {
           return const _PaseSkeleton();
@@ -473,8 +475,10 @@ class _WalletDeck extends StatelessWidget {
   Widget build(BuildContext context) {
     final mode = state.qrMode;
     final frontPasses = activePasses.isNotEmpty ? activePasses : state.passes;
-    final hasAnyCard =
-        frontPasses.isNotEmpty || state.activeOrder != null || state.activeTable != null;
+    final hasAnyCard = frontPasses.isNotEmpty ||
+        state.activeOrder != null ||
+        state.activeTable != null ||
+        state.pendingPlanRequest != null;
 
     final backCards = <Widget>[];
     if (showYellowDiscover) {
@@ -796,9 +800,12 @@ class _ActiveWalletCard extends StatelessWidget {
     final String qrData;
     final bool hasActiveOrderQr;
     final String inactiveQrLabel;
+    final String? statusBadgeLabel;
+    final String actionLabel;
     final String? shortRestaurantId;
     final String? displayCodeOverride;
     final VoidCallback onViewStatus;
+    final VoidCallback? onTapInactiveQr;
 
     if (mode == QrMode.preorden && order != null) {
       title = order.restaurantName;
@@ -829,8 +836,11 @@ class _ActiveWalletCard extends StatelessWidget {
       qrData = AppMode.useMock ? shortCode : state.qrValue;
       hasActiveOrderQr = AppMode.useMock ? qrData.isNotEmpty : state.qrValue.isNotEmpty;
       inactiveQrLabel = 'Generando QR...';
+      statusBadgeLabel = null;
+      actionLabel = 'VER ESTADO';
       displayCodeOverride = !AppMode.useMock ? '#${order.orderNumber}' : null;
       onViewStatus = () => context.push('/customer/pedido/${order.orderNumber}');
+      onTapInactiveQr = null;
     } else if (mode == QrMode.mesa && table != null) {
       title = simSession != null
           ? 'Mesa de ${simSession.hostName}'
@@ -849,10 +859,13 @@ class _ActiveWalletCard extends StatelessWidget {
       inactiveQrLabel = isMesaCollecting
           ? 'Esperando (${simSession.confirmedCount}/${simSession.totalParticipants})'
           : 'QR pendiente';
+      statusBadgeLabel = null;
+      actionLabel = 'VER ESTADO';
       displayCodeOverride = isMesaConfirmed ? 'Mesa #${simSession.shortCode}' : null;
       onViewStatus = () => context.push(
             '/customer/mesa?groupOrderId=${table.id}${simSession != null ? '&restaurantId=${simSession.restaurantId}' : ''}',
           );
+      onTapInactiveQr = null;
     } else if (pass != null) {
       title = pass.restaurantName;
       orderType = BocadooOrderCardType.preorderWithPlan;
@@ -876,8 +889,11 @@ class _ActiveWalletCard extends StatelessWidget {
         displayCodeOverride =
             !AppMode.useMock ? '#${activeOrderHere.orderNumber}' : null;
         inactiveQrLabel = 'Generando QR...';
+        statusBadgeLabel = 'Plan Activo';
+        actionLabel = 'VER ESTADO';
         onViewStatus =
             () => context.push('/customer/pedido/${activeOrderHere.orderNumber}');
+        onTapInactiveQr = null;
       } else {
         qrData = '';
         hasActiveOrderQr = false;
@@ -887,9 +903,30 @@ class _ActiveWalletCard extends StatelessWidget {
           MenuAvailabilityState.agotadoTotal => 'Menú agotado hoy',
           MenuAvailabilityState.disponible => 'Se activará al pedir',
         };
+        statusBadgeLabel = 'Plan Activo';
+        actionLabel = 'PEDIR HOY';
         onViewStatus =
             () => context.push('/customer/restaurants/${pass.restaurantId}');
+        onTapInactiveQr = onViewStatus;
       }
+    } else if (state.pendingPlanRequest != null) {
+      final pending = state.pendingPlanRequest!;
+      title = pending.restaurant.name;
+      orderType = BocadooOrderCardType.preorderWithPlan;
+      availableLunches = pending.plan.lunches;
+      totalCents = null;
+      extraCashCents = pending.plan.priceCents;
+      scheduledTime = null;
+      shortRestaurantId = pending.restaurant.id;
+      qrData = '';
+      hasActiveOrderQr = false;
+      displayCodeOverride = null;
+      inactiveQrLabel = 'Activa en caja';
+      statusBadgeLabel = 'Por activar';
+      actionLabel = 'VER LOCAL';
+      onViewStatus =
+          () => context.push('/customer/restaurants/${pending.restaurant.id}');
+      onTapInactiveQr = onViewStatus;
     } else {
       title = 'Bocadoo';
       orderType = BocadooOrderCardType.preorderWithoutPlan;
@@ -902,7 +939,10 @@ class _ActiveWalletCard extends StatelessWidget {
       hasActiveOrderQr = false;
       displayCodeOverride = null;
       inactiveQrLabel = 'Se activará al pedir';
+      statusBadgeLabel = null;
+      actionLabel = 'VER ESTADO';
       onViewStatus = () => context.go('/customer/restaurants');
+      onTapInactiveQr = null;
     }
 
     return Column(
@@ -918,6 +958,8 @@ class _ActiveWalletCard extends StatelessWidget {
           qrPayload: qrData,
           hasActiveOrderQr: hasActiveOrderQr,
           inactiveQrLabel: inactiveQrLabel,
+          statusBadgeLabel: statusBadgeLabel,
+          actionLabel: actionLabel,
           onTapQr: hasActiveOrderQr
               ? () => _showZoomedQr(
                     context,
@@ -927,8 +969,16 @@ class _ActiveWalletCard extends StatelessWidget {
                     badgeOverride: displayCodeOverride,
                   )
               : null,
+          onTapInactiveQr: onTapInactiveQr,
           onTapViewStatus: onViewStatus,
         ),
+        if (state.pendingPlanRequest != null) ...[
+          const SizedBox(height: 12),
+          _PendingPlanActivationBanner(
+            pending: state.pendingPlanRequest!,
+            onRefresh: () => controller.refreshLive(),
+          ),
+        ],
         if (mode == QrMode.plan &&
             pass != null &&
             menuAvail == MenuAvailabilityState.sinPublicar) ...[
@@ -1003,6 +1053,66 @@ class _ActiveWalletCard extends StatelessWidget {
           ),
         ],
       ],
+    );
+  }
+}
+
+class _PendingPlanActivationBanner extends StatelessWidget {
+  const _PendingPlanActivationBanner({
+    required this.pending,
+    required this.onRefresh,
+  });
+
+  final PendingPlanRequest pending;
+  final VoidCallback onRefresh;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: colors.primaryContainer.withValues(alpha: 0.42),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: colors.primary.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.storefront_rounded, size: 22, color: colors.primary),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Activa tu ${pending.plan.name} en caja',
+                  style: (textTheme.titleSmall ?? const TextStyle()).copyWith(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w800,
+                    color: colors.onSurface,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Cancela ${formatCents(pending.plan.priceCents)} en el local. Al aprobarse, tu saldo y QR aparecerán aquí automáticamente.',
+                  style: (textTheme.bodySmall ?? const TextStyle()).copyWith(
+                    fontSize: 12,
+                    height: 1.35,
+                    fontWeight: FontWeight.w500,
+                    color: colors.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            tooltip: 'Actualizar estado',
+            onPressed: onRefresh,
+            icon: Icon(Icons.refresh_rounded, color: colors.primary),
+          ),
+        ],
+      ),
     );
   }
 }

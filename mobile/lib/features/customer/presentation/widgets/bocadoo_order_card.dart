@@ -1,3 +1,5 @@
+import 'dart:ui' show ImageFilter;
+
 import 'package:material_ui/material_ui.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
@@ -25,7 +27,9 @@ class BocadooOrderCard extends StatelessWidget {
     this.qrPayload,
     this.hasActiveOrderQr = false,
     this.inactiveQrLabel = 'Se activará al pedir',
+    this.statusBadgeLabel,
     this.onTapQr,
+    this.onTapInactiveQr,
     required this.onTapViewStatus,
     this.actionLabel = 'VER ESTADO',
   });
@@ -39,7 +43,9 @@ class BocadooOrderCard extends StatelessWidget {
   final String? qrPayload;
   final bool hasActiveOrderQr;
   final String inactiveQrLabel;
+  final String? statusBadgeLabel;
   final VoidCallback? onTapQr;
+  final VoidCallback? onTapInactiveQr;
   final VoidCallback onTapViewStatus;
   final String actionLabel;
 
@@ -126,7 +132,10 @@ class BocadooOrderCard extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(width: 10),
-                        _OrderTypePill(orderType: orderType),
+                        _OrderTypePill(
+                          orderType: orderType,
+                          labelOverride: statusBadgeLabel,
+                        ),
                       ],
                     ),
 
@@ -204,6 +213,7 @@ class BocadooOrderCard extends StatelessWidget {
                               hasActiveOrderQr: hasActiveOrderQr,
                               inactiveQrLabel: inactiveQrLabel,
                               onTapQr: onTapQr,
+                              onTapInactiveQr: onTapInactiveQr,
                             ),
                             const SizedBox(height: 6),
                             Material(
@@ -246,14 +256,18 @@ class BocadooOrderCard extends StatelessWidget {
 }
 
 class _OrderTypePill extends StatelessWidget {
-  const _OrderTypePill({required this.orderType});
+  const _OrderTypePill({
+    required this.orderType,
+    this.labelOverride,
+  });
 
   final BocadooOrderCardType orderType;
+  final String? labelOverride;
 
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
-    final (label, icon, isHighlighted) = switch (orderType) {
+    final (defaultLabel, icon, isHighlighted) = switch (orderType) {
       BocadooOrderCardType.preorderWithoutPlan => (
           'Preorden',
           Icons.receipt_long_rounded,
@@ -275,6 +289,9 @@ class _OrderTypePill extends StatelessWidget {
           true,
         ),
     };
+    final label = (labelOverride != null && labelOverride!.trim().isNotEmpty)
+        ? labelOverride!.trim()
+        : defaultLabel;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -359,12 +376,14 @@ class _QrFocusFrame extends StatelessWidget {
     required this.hasActiveOrderQr,
     required this.inactiveQrLabel,
     this.onTapQr,
+    this.onTapInactiveQr,
   });
 
   final String? qrPayload;
   final bool hasActiveOrderQr;
   final String inactiveQrLabel;
   final VoidCallback? onTapQr;
+  final VoidCallback? onTapInactiveQr;
 
   @override
   Widget build(BuildContext context) {
@@ -375,7 +394,7 @@ class _QrFocusFrame extends StatelessWidget {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: canRenderQr ? onTapQr : null,
+        onTap: canRenderQr ? onTapQr : onTapInactiveQr,
         borderRadius: BorderRadius.circular(18),
         child: CustomPaint(
           painter: const _QrFocusCornersPainter(),
@@ -383,50 +402,98 @@ class _QrFocusFrame extends StatelessWidget {
             width: 112,
             height: 112,
             child: Center(
-              child: canRenderQr
-                  ? QrImageView(
-                      data: cleanPayload,
-                      version: QrVersions.auto,
-                      size: 88,
-                      padding: EdgeInsets.zero,
-                      backgroundColor: Colors.transparent,
-                      errorCorrectionLevel: QrErrorCorrectLevel.M,
-                      eyeStyle: QrEyeStyle(
-                        eyeShape: QrEyeShape.square,
-                        color: Colors.white.withValues(alpha: 0.92),
-                      ),
-                      dataModuleStyle: QrDataModuleStyle(
-                        dataModuleShape: QrDataModuleShape.square,
-                        color: Colors.white.withValues(alpha: 0.92),
-                      ),
-                    )
-                  : Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.qr_code_2_rounded,
-                          size: 48,
-                          color: Colors.white.withValues(alpha: 0.30),
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 280),
+                child: canRenderQr
+                    ? QrImageView(
+                        key: ValueKey('active_$cleanPayload'),
+                        data: cleanPayload,
+                        version: QrVersions.auto,
+                        size: 88,
+                        padding: EdgeInsets.zero,
+                        backgroundColor: Colors.transparent,
+                        errorCorrectionLevel: QrErrorCorrectLevel.M,
+                        eyeStyle: QrEyeStyle(
+                          eyeShape: QrEyeShape.square,
+                          color: Colors.white.withValues(alpha: 0.92),
                         ),
-                        const SizedBox(height: 3),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 10),
-                          child: Text(
-                            inactiveQrLabel,
-                            textAlign: TextAlign.center,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: (textTheme.bodySmall ?? const TextStyle())
-                                .copyWith(
-                              color: Colors.white.withValues(alpha: 0.78),
-                              fontSize: 9.5,
-                              height: 1.15,
-                              fontWeight: FontWeight.w500,
+                        dataModuleStyle: QrDataModuleStyle(
+                          dataModuleShape: QrDataModuleShape.square,
+                          color: Colors.white.withValues(alpha: 0.92),
+                        ),
+                      )
+                    : ClipRRect(
+                        key: ValueKey('dormant_$inactiveQrLabel'),
+                        borderRadius: BorderRadius.circular(12),
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            ImageFiltered(
+                              imageFilter: ImageFilter.blur(
+                                sigmaX: 2.0,
+                                sigmaY: 2.0,
+                              ),
+                              child: Opacity(
+                                opacity: 0.22,
+                                child: QrImageView(
+                                  data: 'BCD-QR-DORMIDO',
+                                  version: QrVersions.auto,
+                                  size: 82,
+                                  padding: EdgeInsets.zero,
+                                  backgroundColor: Colors.transparent,
+                                  eyeStyle: const QrEyeStyle(
+                                    eyeShape: QrEyeShape.square,
+                                    color: Colors.white,
+                                  ),
+                                  dataModuleStyle: const QrDataModuleStyle(
+                                    dataModuleShape: QrDataModuleShape.square,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
                             ),
-                          ),
+                            Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 8),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(5),
+                                    decoration: BoxDecoration(
+                                      color:
+                                          Colors.black.withValues(alpha: 0.22),
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: Icon(
+                                      Icons.bedtime_outlined,
+                                      size: 16,
+                                      color:
+                                          Colors.white.withValues(alpha: 0.94),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    inactiveQrLabel,
+                                    textAlign: TextAlign.center,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: (textTheme.bodySmall ??
+                                            const TextStyle())
+                                        .copyWith(
+                                      color: Colors.white,
+                                      fontSize: 9.5,
+                                      height: 1.15,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
                         ),
-                      ],
-                    ),
+                      ),
+              ),
             ),
           ),
         ),

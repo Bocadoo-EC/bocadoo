@@ -53,6 +53,20 @@ class UndoNotice {
   const UndoNotice(this.label, this.secondsLeft);
 }
 
+/// Solicitud de plan recién confirmada por el comensal, en espera de cobro/activación en caja.
+@immutable
+class PendingPlanRequest {
+  final PlanTemplate plan;
+  final Restaurant restaurant;
+  final DateTime requestedAt;
+
+  const PendingPlanRequest({
+    required this.plan,
+    required this.restaurant,
+    required this.requestedAt,
+  });
+}
+
 @immutable
 class CustomerUiState {
   final CustomerStatus status;
@@ -63,6 +77,7 @@ class CustomerUiState {
   final ActiveTable? activeTable;
   final ActiveOrder? activeOrder;
   final PendingFeedback? pendingFeedback;
+  final PendingPlanRequest? pendingPlanRequest;
   final List<ActivityItem> recentActivity;
   final List<Restaurant> restaurants;
   final String searchQuery;
@@ -92,6 +107,7 @@ class CustomerUiState {
     this.activeTable,
     this.activeOrder,
     this.pendingFeedback,
+    this.pendingPlanRequest,
     this.recentActivity = const [],
     this.restaurants = const [],
     this.searchQuery = '',
@@ -333,6 +349,8 @@ class CustomerUiState {
     ActiveOrder? activeOrder,
     bool clearActiveOrder = false,
     bool clearPendingFeedback = false,
+    PendingPlanRequest? pendingPlanRequest,
+    bool clearPendingPlanRequest = false,
     List<ActivityItem>? recentActivity,
     List<Restaurant>? restaurants,
     String? searchQuery,
@@ -365,6 +383,9 @@ class CustomerUiState {
       activeTable: clearActiveTable ? null : activeTable ?? this.activeTable,
       activeOrder: clearActiveOrder ? null : activeOrder ?? this.activeOrder,
       pendingFeedback: clearPendingFeedback ? null : pendingFeedback,
+      pendingPlanRequest: clearPendingPlanRequest
+          ? null
+          : pendingPlanRequest ?? this.pendingPlanRequest,
       recentActivity: recentActivity ?? this.recentActivity,
       restaurants: restaurants ?? this.restaurants,
       searchQuery: searchQuery ?? this.searchQuery,
@@ -415,7 +436,39 @@ class CustomerController extends ChangeNotifier {
   Timer? _sseReconnectTimer;
   Timer? _sseFallbackPoller;
   int _sseRetryAttempt = 0;
+  DateTime? _lastSseRedemptionAt;
   final Set<String> _flashOrderNumbers = {};
+
+  /// Etiquetas reales de qué incluye el plan (`incluye[]` de backend o menú del local).
+  List<String> planIncludesFor(
+    Restaurant restaurant, [
+    List<PlanTemplate> plans = const [],
+  ]) {
+    final repo = _repository;
+    if (repo is ApiCustomerRepository) {
+      for (final p in plans) {
+        final inc = repo.planIncludesFor(p.name);
+        if (inc.isNotEmpty) return inc;
+      }
+    }
+    final items = <String>[];
+    if (restaurant.soups.isNotEmpty || restaurant.todayMenu.isEmpty) {
+      items.add('Sopa');
+    }
+    if (restaurant.mains.isNotEmpty || restaurant.todayMenu.isEmpty) {
+      items.add('Segundo');
+    }
+    if (restaurant.juice.trim().isNotEmpty) {
+      items.add('Jugo');
+    }
+    if (restaurant.dessert.trim().isNotEmpty) {
+      items.add('Postre');
+    }
+    if (items.length <= 2) {
+      items.add('Jugo');
+    }
+    return items.take(4).toList();
+  }
 
   /// `true` si el pedido activo corresponde a una Oferta Flash real.
   bool isFlashOfferOrder(ActiveOrder order) {
@@ -811,15 +864,33 @@ class CustomerController extends ChangeNotifier {
       ]);
       final menuStates = await menuStatesFuture;
 
+      final pending = _state.pendingPlanRequest;
+      final pendingActivated = pending != null &&
+          passes.any(
+            (p) =>
+                p.restaurantId == pending.plan.restaurantId &&
+                p.remainingLunches > 0 &&
+                !p.isExpired,
+          );
+      final resolvedPassIndex = pendingActivated
+          ? passes.indexWhere(
+              (p) =>
+                  p.restaurantId == pending.plan.restaurantId &&
+                  p.remainingLunches > 0 &&
+                  !p.isExpired,
+            )
+          : _state.passIndex.clamp(0, passes.isEmpty ? 0 : passes.length - 1);
+
       _emit(CustomerUiState(
         status: CustomerStatus.success,
         passes: passes,
-        passIndex: _state.passIndex.clamp(0, passes.isEmpty ? 0 : passes.length - 1),
-        selectedQrMode: _state.selectedQrMode,
+        passIndex: resolvedPassIndex,
+        selectedQrMode: pendingActivated ? QrMode.plan : _state.selectedQrMode,
         stampCards: stamps,
         activeTable: effectiveTable,
         activeOrder: order,
         pendingFeedback: feedback,
+        pendingPlanRequest: pendingActivated ? null : pending,
         recentActivity: activity,
         restaurants: restaurants,
         searchQuery: _state.searchQuery,
@@ -880,7 +951,8 @@ class CustomerController extends ChangeNotifier {
 
       List<CustomerPass>? updatedPasses;
       List<ActivityItem>? updatedActivity;
-      if (orderJustFinished || tableJustFinished) {
+      final pending = _state.pendingPlanRequest;
+      if (orderJustFinished || tableJustFinished || pending != null) {
         try {
           updatedPasses = await _repository.getActivePasses();
           updatedActivity = await _repository.getRecentActivity();
@@ -888,6 +960,22 @@ class CustomerController extends ChangeNotifier {
       }
 
       final activePasses = updatedPasses ?? _state.passes;
+      final pendingActivated = pending != null &&
+          activePasses.any(
+            (p) =>
+                p.restaurantId == pending.plan.restaurantId &&
+                p.remainingLunches > 0 &&
+                !p.isExpired,
+          );
+      final activatedPassIdx = pendingActivated
+          ? activePasses.indexWhere(
+              (p) =>
+                  p.restaurantId == pending.plan.restaurantId &&
+                  p.remainingLunches > 0 &&
+                  !p.isExpired,
+            )
+          : _state.passIndex;
+
       final nextMenuStates = await _resolveMenuStatesForPasses(
         activePasses,
         _state.restaurants,
@@ -897,22 +985,34 @@ class CustomerController extends ChangeNotifier {
       String? celebrationTitle;
       String? celebrationSubtitle;
       var celebrationTick = _state.redemptionCelebrationTick;
-      if (orderJustFinished && previousOrder != null) {
+      final recentSse = _lastSseRedemptionAt != null &&
+          DateTime.now().difference(_lastSseRedemptionAt!) <
+              const Duration(seconds: 6);
+      if (orderJustFinished && previousOrder != null && !recentSse) {
         notice = previousOrder.hasPlan
             ? 'Almuerzo confirmado en ${previousOrder.restaurantName} (-1 de tu plan).'
             : 'Pedido #${previousOrder.orderNumber} confirmado en ${previousOrder.restaurantName}.';
         celebrationTick += 1;
-        celebrationTitle = '¡Orden aprobada!';
+        celebrationTitle = previousOrder.hasPlan
+            ? 'Almuerzo descontado'
+            : '¡Orden aprobada!';
         celebrationSubtitle = previousOrder.hasPlan
             ? (previousOrder.cashToCollectCents > 0
                 ? '${previousOrder.restaurantName} · -1 cupo de tu plan + adicionales confirmados'
                 : '${previousOrder.restaurantName} · Descontado 1 almuerzo de tu plan')
             : '${previousOrder.restaurantName} · Pedido #${previousOrder.orderNumber} confirmado';
+      } else if (pendingActivated) {
+        final activated = activePasses[activatedPassIdx];
+        notice =
+            '¡Tu plan ${activated.planName} ya está activo! (${activated.remainingLunches} almuerzos disponibles).';
       }
 
       final effectiveTable = _pruneExpiredCollectingTable(table);
       _emit(_state.copyWith(
         passes: activePasses,
+        passIndex: activatedPassIdx,
+        selectedQrMode: pendingActivated ? QrMode.plan : _state.selectedQrMode,
+        clearPendingPlanRequest: pendingActivated,
         recentActivity: updatedActivity,
         activeOrder: order,
         clearActiveOrder: order == null,
@@ -930,6 +1030,7 @@ class CustomerController extends ChangeNotifier {
         table: table,
         passes: activePasses,
         menuPublishedByRest: nextMenuStates.published,
+        pendingPlanRequest: pendingActivated ? null : pending,
       );
     } catch (_) {
       // Se conserva lo que ya se mostraba.
@@ -975,6 +1076,8 @@ class CustomerController extends ChangeNotifier {
   Future<void> _refreshBalanceOnce() async {
     if (_disposed || _state.status == CustomerStatus.initial) return;
     try {
+      final previousPasses = _state.passes;
+      final pending = _state.pendingPlanRequest;
       final results = await Future.wait([
         _repository.getActivePasses(),
         _repository.getRecentActivity(),
@@ -986,9 +1089,60 @@ class CustomerController extends ChangeNotifier {
         passes,
         _state.restaurants,
       );
+
+      final pendingActivated = pending != null &&
+          passes.any(
+            (p) =>
+                p.restaurantId == pending.plan.restaurantId &&
+                p.remainingLunches > 0 &&
+                !p.isExpired,
+          );
+      final activatedIdx = pendingActivated
+          ? passes.indexWhere(
+              (p) =>
+                  p.restaurantId == pending.plan.restaurantId &&
+                  p.remainingLunches > 0 &&
+                  !p.isExpired,
+            )
+          : _state.passIndex;
+
+      String? notice;
+      String? celebrationTitle;
+      String? celebrationSubtitle;
+      var celebrationTick = _state.redemptionCelebrationTick;
+      final recentSse = _lastSseRedemptionAt != null &&
+          DateTime.now().difference(_lastSseRedemptionAt!) <
+              const Duration(seconds: 6);
+      if (pendingActivated) {
+        final activated = passes[activatedIdx];
+        notice =
+            '¡Tu plan ${activated.planName} ya está activo! (${activated.remainingLunches} almuerzos disponibles).';
+      } else if (!recentSse) {
+        for (final np in passes) {
+          final prev =
+              previousPasses.where((p) => p.id == np.id).firstOrNull;
+          if (prev != null && np.remainingLunches < prev.remainingLunches) {
+            notice =
+                'Almuerzo canjeado · ${np.restaurantName} · Te quedan ${np.remainingLunches} almuerzos';
+            celebrationTick += 1;
+            celebrationTitle = 'Almuerzo canjeado';
+            celebrationSubtitle =
+                '${np.restaurantName} · Te quedan ${np.remainingLunches} almuerzos';
+            break;
+          }
+        }
+      }
+
       _emit(_state.copyWith(
         passes: passes,
+        passIndex: activatedIdx,
+        selectedQrMode: pendingActivated ? QrMode.plan : _state.selectedQrMode,
+        clearPendingPlanRequest: pendingActivated,
         recentActivity: activity,
+        consumptionNotice: notice,
+        redemptionCelebrationTick: celebrationTick,
+        redemptionCelebrationTitle: celebrationTitle,
+        redemptionCelebrationSubtitle: celebrationSubtitle,
         todayMenuPublishedByRest: nextMenuStates.published,
         todayMenuAvailabilityByRest: nextMenuStates.availability,
       ));
@@ -1079,6 +1233,7 @@ class CustomerController extends ChangeNotifier {
       case PaseEventType.latido:
         return;
       case PaseEventType.canjeRegistrado:
+        _lastSseRedemptionAt = DateTime.now();
         _applyBalanceFromEvent(
           restauranteNombre: event.restauranteNombre,
           saldoRestante: event.saldoRestante,
@@ -1469,14 +1624,65 @@ class CustomerController extends ChangeNotifier {
     }
   }
 
-  Future<bool> requestPlan(PlanTemplate plan) async {
+  Future<bool> requestPlan(
+    PlanTemplate plan, {
+    Restaurant? restaurant,
+  }) async {
     lastActionError = null;
     try {
       final ok = await _repository.requestPlan(plan.id);
       if (!ok) return false;
-      _startUndo('Plan solicitado · Deshacer', () async {
-        await _repository.cancelPlanRequest(plan.id);
-      });
+
+      List<CustomerPass> passes = _state.passes;
+      List<ActivityItem> activity = _state.recentActivity;
+      try {
+        final results = await Future.wait([
+          _repository.getActivePasses(),
+          _repository.getRecentActivity(),
+        ]);
+        passes = results[0] as List<CustomerPass>;
+        activity = results[1] as List<ActivityItem>;
+      } catch (_) {}
+
+      final matchedIdx = passes.indexWhere(
+        (p) =>
+            p.restaurantId == plan.restaurantId &&
+            p.remainingLunches > 0 &&
+            !p.isExpired,
+      );
+      final menuStates = await _resolveMenuStatesForPasses(
+        passes,
+        _state.restaurants,
+      );
+      final rest = restaurant ?? _state.restaurantById(plan.restaurantId);
+      final pendingReq = matchedIdx >= 0 || rest == null
+          ? null
+          : PendingPlanRequest(
+              plan: plan,
+              restaurant: rest,
+              requestedAt: DateTime.now(),
+            );
+
+      _emit(_state.copyWith(
+        passes: passes,
+        passIndex: matchedIdx >= 0 ? matchedIdx : _state.passIndex,
+        selectedQrMode: QrMode.plan,
+        recentActivity: activity,
+        pendingPlanRequest: pendingReq,
+        clearPendingPlanRequest: matchedIdx >= 0,
+        todayMenuPublishedByRest: menuStates.published,
+        todayMenuAvailabilityByRest: menuStates.availability,
+        consumptionNotice: matchedIdx >= 0
+            ? 'Plan ${plan.name} activo (${passes[matchedIdx].remainingLunches} almuerzos disponibles).'
+            : 'Solicitud de ${plan.name} enviada · Acércate a caja para activarlo.',
+      ));
+      _syncOrderPolling(
+        _state.activeOrder,
+        table: _state.activeTable,
+        passes: passes,
+        menuPublishedByRest: menuStates.published,
+        pendingPlanRequest: pendingReq,
+      );
       return true;
     } on ApiException catch (e) {
       lastActionError = e.userMessage;
@@ -1614,15 +1820,19 @@ class CustomerController extends ChangeNotifier {
     ActiveTable? table,
     List<CustomerPass>? passes,
     Map<String, bool>? menuPublishedByRest,
+    PendingPlanRequest? pendingPlanRequest,
   }) {
     final activePasses = passes ?? _state.passes;
     final menuMap = menuPublishedByRest ?? _state.todayMenuPublishedByRest;
+    final pendingPlan = pendingPlanRequest ?? _state.pendingPlanRequest;
     final hasUnpublishedPass = !AppMode.useMock &&
         activePasses.any(
           (p) => p.remainingLunches > 0 && !(menuMap[p.restaurantId] ?? false),
         );
-    final shouldPoll =
-        (order != null && !order.isDelivered) || table != null || hasUnpublishedPass;
+    final shouldPoll = (order != null && !order.isDelivered) ||
+        table != null ||
+        hasUnpublishedPass ||
+        pendingPlan != null;
     if (shouldPoll) {
       _orderPoller ??= LifecyclePollingController(
         interval: const Duration(seconds: 8),

@@ -10,11 +10,12 @@ import '../../../core/location/location_service.dart';
 import '../../../core/theme/app_theme.dart';
 import 'customer_controller.dart';
 import 'customer_widgets.dart';
-import 'widgets/plan_card.dart';
+import 'widgets/restaurant_plans_sheet.dart';
+import 'widgets/restaurant_plans_summary_card.dart';
 
-typedef _PlanFeedItem = ({
+typedef _RestaurantPlansGroup = ({
   Restaurant restaurant,
-  PlanTemplate plan,
+  List<PlanTemplate> plans,
   int? distanceMeters,
 });
 
@@ -151,7 +152,7 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
   Future<void> _loadMore() async {
     final s = ref.read(customerControllerProvider).state;
     final zoneRests = _zoneRestaurants(s);
-    final currentTotal = _filteredItems(s, zoneRests).length;
+    final currentTotal = _filteredGroups(s, zoneRests).length;
 
     if (_visibleLimit < currentTotal) {
       setState(() => _visibleLimit += _pageSize);
@@ -176,7 +177,9 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
     final repo = ref.read(customerRepositoryProvider);
     var collected = 0;
     for (var i = 0; i < _nextRestaurantIndex && i < zoneRests.length; i++) {
-      collected += (_plansByRestaurant[zoneRests[i].id] ?? const []).length;
+      if ((_plansByRestaurant[zoneRests[i].id] ?? const []).isNotEmpty) {
+        collected += 1;
+      }
     }
 
     const batchSize = 5;
@@ -186,7 +189,9 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
         final r = zoneRests[_nextRestaurantIndex];
         _nextRestaurantIndex++;
         if (_plansByRestaurant.containsKey(r.id)) {
-          collected += (_plansByRestaurant[r.id] ?? const []).length;
+          if ((_plansByRestaurant[r.id] ?? const []).isNotEmpty) {
+            collected += 1;
+          }
         } else {
           batch.add(r);
         }
@@ -196,7 +201,7 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
           for (final r in batch)
             repo.getPlanTemplates(r.id).then((plans) {
               _plansByRestaurant[r.id] = plans;
-              collected += plans.length;
+              if (plans.isNotEmpty) collected += 1;
             }, onError: (_) {
               _plansByRestaurant[r.id] = const [];
             }),
@@ -233,37 +238,35 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
     return withPlans.isNotEmpty ? withPlans : zoneRests;
   }
 
-  List<_PlanFeedItem> _filteredItems(
+  List<_RestaurantPlansGroup> _filteredGroups(
     CustomerUiState s,
     List<Restaurant> zoneRests,
   ) {
     final q = _query.toLowerCase();
-    final items = <_PlanFeedItem>[];
+    final groups = <_RestaurantPlansGroup>[];
 
     for (final r in zoneRests) {
       if (_selectedRestaurantId != null && r.id != _selectedRestaurantId) {
         continue;
       }
-      if (q.isNotEmpty &&
-          !r.name.toLowerCase().contains(q) &&
-          !r.zone.toLowerCase().contains(q)) {
-        final plans = _plansByRestaurant[r.id] ?? const <PlanTemplate>[];
-        final matchesPlan = plans.any((p) => p.name.toLowerCase().contains(q));
-        if (!matchesPlan) continue;
-      }
       final plans = _plansByRestaurant[r.id] ?? const <PlanTemplate>[];
-      final dist = _distanceMetersFor(s, r);
-      for (final p in plans) {
-        if (q.isNotEmpty &&
-            !r.name.toLowerCase().contains(q) &&
-            !r.zone.toLowerCase().contains(q) &&
-            !p.name.toLowerCase().contains(q)) {
-          continue;
-        }
-        items.add((restaurant: r, plan: p, distanceMeters: dist));
+      if (plans.isEmpty) continue;
+
+      if (q.isNotEmpty) {
+        final matchesRest = r.name.toLowerCase().contains(q) ||
+            r.zone.toLowerCase().contains(q) ||
+            r.address.toLowerCase().contains(q);
+        final matchesPlan = plans.any((p) => p.name.toLowerCase().contains(q));
+        if (!matchesRest && !matchesPlan) continue;
       }
+
+      groups.add((
+        restaurant: r,
+        plans: plans,
+        distanceMeters: _distanceMetersFor(s, r),
+      ));
     }
-    return items;
+    return groups;
   }
 
   @override
@@ -309,10 +312,10 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
 
           final zoneRests = _zoneRestaurants(s);
           final topRests = _topRestaurants(zoneRests);
-          final allItems = _filteredItems(s, zoneRests);
-          final visibleItems = allItems.take(_visibleLimit).toList();
+          final allGroups = _filteredGroups(s, zoneRests);
+          final visibleGroups = allGroups.take(_visibleLimit).toList();
           final hasMoreToFetch =
-              _visibleLimit < allItems.length ||
+              _visibleLimit < allGroups.length ||
               _nextRestaurantIndex < zoneRests.length;
 
           final selectedRest = _selectedRestaurantId == null
@@ -575,7 +578,7 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
                       ),
                     ),
                   )
-                else if (visibleItems.isEmpty && !_loadingBatch)
+                else if (visibleGroups.isEmpty && !_loadingBatch)
                   SliverToBoxAdapter(
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
@@ -586,26 +589,29 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
                   SliverPadding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     sliver: SliverList.builder(
-                      itemCount: visibleItems.length,
+                      itemCount: visibleGroups.length,
                       itemBuilder: (_, i) {
-                        final item = visibleItems[i];
-                        final singleCents =
-                            (item.restaurant.singleLunchPrice * 100).round();
-                        final activeHere = s.passFor(item.restaurant.id);
-                        final hasActive = activeHere != null &&
-                            activeHere.remainingLunches > 0 &&
-                            !activeHere.isExpired;
+                        final group = visibleGroups[i];
+                        final distanceText = _formatDistance(group.distanceMeters);
+                        final activeHere = s.passFor(group.restaurant.id);
+                        final includes = controller.planIncludesFor(
+                          group.restaurant,
+                          group.plans,
+                        );
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 12),
-                          child: PlanCard(
-                            plan: item.plan,
-                            singleLunchPriceCents: singleCents,
-                            enabled: !hasActive,
-                            showRestaurantHeader: true,
-                            restaurantName: item.restaurant.name,
-                            distanceLabel: _formatDistance(item.distanceMeters),
-                            onTap: () =>
-                                context.push('/customer/planes/${item.plan.id}'),
+                          child: RestaurantPlansSummaryCard(
+                            restaurant: group.restaurant,
+                            plans: group.plans,
+                            includes: includes,
+                            distanceLabel: distanceText,
+                            activePass: activeHere,
+                            onViewPlans: () => showRestaurantPlansSheet(
+                              context,
+                              restaurant: group.restaurant,
+                              plans: group.plans,
+                              distanceLabel: distanceText,
+                            ),
                           ),
                         );
                       },

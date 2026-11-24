@@ -29,6 +29,7 @@ class PlanCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     final b = context.bocadooColors;
+    final textTheme = Theme.of(context).textTheme;
     final savingCents = (singleLunchPriceCents * plan.lunches) - plan.priceCents;
     final unit = switch (plan.category) {
       'DESAYUNO' => 'desayunos',
@@ -55,7 +56,7 @@ class PlanCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         child: InkWell(
           borderRadius: BorderRadius.circular(16),
-          onTap: onTap,
+          onTap: enabled ? onTap : null,
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: Column(
@@ -116,7 +117,8 @@ class PlanCard extends StatelessWidget {
                             plan.name,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
+                            style: (textTheme.titleMedium ?? const TextStyle())
+                                .copyWith(
                               fontSize: 17,
                               fontWeight: FontWeight.w700,
                               color: colors.onSurface,

@@ -59,6 +59,10 @@ class ApiCustomerRepository implements ICustomerRepository {
   bool isFlashOfferOrder(String orderNumber) =>
       _flashOrderNumbers.contains(orderNumber);
 
+  /// Ítems reales incluidos en un plan (`incluye[]` de `/restaurantes/:slug`).
+  List<String> planIncludesFor(String planName) =>
+      _planIncludesByName[planName] ?? const [];
+
   /// Último estado conocido de publicación del menú de hoy por `restaurantId`.
   bool? cachedTodayMenuPublished(String restaurantId) =>
       _todayMenuPublishedByRest[restaurantId];
@@ -679,33 +683,27 @@ class ApiCustomerRepository implements ICustomerRepository {
       throw ApiException(status: 404, code: 'RESTAURANTE_NO_ENCONTRADO');
     }
 
-    if (_deferredCommit.isPending &&
-        _pendingPlanId != null &&
-        _pendingPlanId != planId) {
+    if (_deferredCommit.isPending) {
       await _deferredCommit.flush();
     }
 
     final targetSlug = slug;
     final intent = 'solicitud-plan:$targetSlug:$planId';
-    _pendingPlanId = planId;
-    _deferredCommit.schedule(() async {
-      _pendingPlanId = null;
-      final key = _idempotency.keyFor(intent);
-      await guard(
-        () => _api.send<Map<String, dynamic>>(
-          'POST',
-          '${ApiConfig.v1}/restaurantes/$targetSlug/solicitudes-plan',
-          body: {'planId': planId},
-          idempotencyKey: key,
-        ),
-      );
-      _idempotency.done(intent);
-      eventsService.track(
-        'comensal.plan_solicitado',
-        restaurantId: plan.restaurantId,
-        props: {'almuerzos': plan.lunches},
-      );
-    });
+    final key = _idempotency.keyFor(intent);
+    await guard(
+      () => _api.send<Map<String, dynamic>>(
+        'POST',
+        '${ApiConfig.v1}/restaurantes/$targetSlug/solicitudes-plan',
+        body: {'planId': planId},
+        idempotencyKey: key,
+      ),
+    );
+    _idempotency.done(intent);
+    eventsService.track(
+      'comensal.plan_solicitado',
+      restaurantId: plan.restaurantId,
+      props: {'almuerzos': plan.lunches},
+    );
     return true;
   }
 
