@@ -19,6 +19,7 @@ import '../../group_orders/presentation/group_order_simulation_provider.dart';
 import '../data/api_owner_repo.dart';
 import '../data/mock_owner_repo.dart';
 import '../data/repositories/owner_repository.dart';
+import '../data/resolved_orders_store.dart';
 import '../domain/models/cash_models.dart';
 import '../domain/models/daily_menu.dart';
 import '../domain/models/extras_models.dart';
@@ -107,11 +108,15 @@ void _scheduleOrdersPoll(Ref ref, {Duration interval = const Duration(seconds: 8
 }
 
 /// O12 · Preórdenes por cobrar y entregar.
-final activeOrdersProvider = FutureProvider.autoDispose<List<OwnerOrder>>((ref) {
+final activeOrdersProvider = FutureProvider.autoDispose<List<OwnerOrder>>((ref) async {
   _scheduleOrdersPoll(ref);
-  return ref
-      .read(ownerOrdersRepositoryProvider)
-      .getActiveOrders(ref.read(ownerRestaurantIdProvider));
+  final rid = ref.read(ownerRestaurantIdProvider);
+  final orders = await ref.read(ownerOrdersRepositoryProvider).getActiveOrders(rid);
+  final movements = ref.watch(cajaMovementsProvider).items;
+  return ResolvedOrdersStore.instance.filterAndReconcileOrders(
+    orders,
+    movements: movements,
+  );
 });
 
 /// Mesas con amigos por cobrar (banner de Caja / Pedidos en camino).
@@ -608,7 +613,13 @@ class CajaLiveSyncNotifier extends Notifier<CajaLiveSyncState> {
       ]);
       if (_disposed) return const [];
 
-      final orders = results[0] as List<OwnerOrder>;
+      final rawOrders = results[0] as List<OwnerOrder>;
+      final movements = ref.read(cajaMovementsProvider).items;
+      final orders = await ResolvedOrdersStore.instance.filterAndReconcileOrders(
+        rawOrders,
+        movements: movements,
+      );
+      if (_disposed) return const [];
       final tables = results[1] as List<PendingTable>;
       final payments = results[2] as List<PendingPaymentItem>;
 
@@ -1073,6 +1084,15 @@ class OwnerController extends Notifier<OwnerState> {
         return;
       }
       final ok = await _repo.confirmRedeem(passId);
+      if (ok) {
+        ref.invalidate(dailySummaryProvider);
+        ref.invalidate(activeOrdersProvider);
+        ref.invalidate(ordersOnTheWayProvider);
+        ref.invalidate(ownerClientsProvider);
+        unawaited(
+          ref.read(cajaLiveSyncProvider.notifier).syncNow(includeMovements: true),
+        );
+      }
       state = ok
           ? OwnerSuccess(result, redeemed: true)
           : OwnerError('No se pudo registrar el almuerzo.', result: result);

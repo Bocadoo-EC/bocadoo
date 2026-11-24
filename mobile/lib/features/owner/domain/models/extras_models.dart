@@ -85,13 +85,36 @@ class OwnerOrder {
   /// Con plan solo se cobra el saldo de carta / extras (`cashToCollectCents`).
   int get effectiveTotalCents => paidByPlan
       ? cashToCollectCents
-      : (totalCents ?? (amount * 100).round());
+      : (quoteBalanceToCollectCents ?? totalCents ?? (amount * 100).round());
 
   /// `BCD-ORD-42`: lo que lee el escáner de Caja.
   String get qrCode => 'BCD-ORD-$number';
 
   /// Se puede entregar: en efectivo se cobra al entregar; con plan, solo si ya se validó.
   bool get canDeliver => !paidByPlan || validated;
+}
+
+/// Conflicto `409 SALDO_CAMBIO` al canjear una preorden cuyo saldo recalculado
+/// en vivo cambió respecto al snapshot guardado al pedir.
+@immutable
+class SaldoCambioConflict {
+  const SaldoCambioConflict({
+    required this.orderId,
+    required this.orderNumber,
+    required this.dinerName,
+    required this.previousBalanceCents,
+    required this.newBalanceCents,
+    required this.coveredByPlan,
+    required this.paymentMethod,
+  });
+
+  final String orderId;
+  final String orderNumber;
+  final String dinerName;
+  final int previousBalanceCents;
+  final int newBalanceCents;
+  final bool coveredByPlan;
+  final dynamic paymentMethod;
 }
 
 /// Plato elegido por un integrante de una mesa grupal.

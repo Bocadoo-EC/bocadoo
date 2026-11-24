@@ -8,6 +8,7 @@ import 'package:material_ui/material_ui.dart';
 import '../../../core/config/app_mode.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatters.dart';
+import '../data/resolved_orders_store.dart';
 import '../domain/models/cash_models.dart';
 import '../domain/models/extras_models.dart';
 import 'owner_controller.dart';
@@ -45,6 +46,9 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
     ref.invalidate(dailySummaryProvider);
     ref.invalidate(ownerClientsProvider);
     unawaited(ref.read(cajaMovementsProvider.notifier).refresh());
+    unawaited(
+      ref.read(cajaLiveSyncProvider.notifier).syncNow(includeMovements: true),
+    );
   }
 
   OwnerClient? _resolveActivePlanClient(
@@ -136,6 +140,85 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
     );
   }
 
+  Future<void> _handleSaldoCambioDialog(
+    OwnerOrder order,
+    OwnerPayMethod paymentMethod,
+  ) async {
+    final apiRepo = ref.read(apiOwnerRepositoryProvider);
+    final conflict = apiRepo.consumeSaldoCambioConflict();
+    if (!mounted || conflict == null) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final restaurantId = ref.read(ownerRestaurantIdProvider);
+    final newSaldoFormatted =
+        OwnerFormat.money(Money.fromCents(conflict.newBalanceCents));
+
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('El saldo de #${order.number} cambió'),
+        content: Text(
+          conflict.coveredByPlan && conflict.newBalanceCents == 0
+              ? 'El comensal (${order.dinerName}) ya tiene un plan activo que cubre el almuerzo ($newSaldoFormatted por cobrar). ¿Deseas confirmar el canje con el nuevo saldo o marcarlo como ya cubierto hoy?'
+              : 'El saldo recalculado en caja ahora es $newSaldoFormatted. ¿Deseas confirmar con este nuevo saldo o marcar la preorden como ya cubierta hoy?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop('cancel'),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop('already_covered'),
+            child: const Text('Ya cobrado / cubierto'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop('confirm'),
+            child: Text(
+              conflict.newBalanceCents == 0
+                  ? 'Confirmar (\$0,00)'
+                  : 'Confirmar $newSaldoFormatted',
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted || choice == null || choice == 'cancel') return;
+
+    if (choice == 'already_covered') {
+      await ResolvedOrdersStore.instance.markResolved(
+        id: order.id,
+        number: order.number,
+      );
+      if (!mounted) return;
+      _refresh();
+      showInfoSnackBar(
+        messenger,
+        'Pedido #${order.number} marcado como resuelto hoy.',
+      );
+      return;
+    }
+
+    final retryRes = await apiRepo.confirmRedeemWithExpectedBalance(
+      conflict.orderId,
+      conflict.orderNumber,
+      restaurantId,
+      saldoEsperadoCentavos: conflict.newBalanceCents,
+      paymentMethod: paymentMethod,
+    );
+    if (!mounted) return;
+    _refresh();
+    if (retryRes.actionRequired == 'CONFIRM_SALDO_CAMBIO') {
+      await _handleSaldoCambioDialog(order, paymentMethod);
+      return;
+    }
+    showInfoSnackBar(
+      messenger,
+      retryRes.supportingLine.isNotEmpty
+          ? '${retryRes.title} · ${retryRes.supportingLine}'
+          : retryRes.title,
+    );
+  }
+
   Future<void> _confirmOrder(
     OwnerOrder order, {
     OwnerClient? planOverrideClient,
@@ -165,6 +248,17 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
           );
     if (!mounted) return;
     _refresh();
+    if (res.actionRequired == 'CONFIRM_SALDO_CAMBIO' && !AppMode.useMock) {
+      await _handleSaldoCambioDialog(order, paymentMethod);
+      return;
+    }
+    if (res.isValid && res.actionRequired == 'ALREADY_COVERED') {
+      showInfoSnackBar(
+        messenger,
+        'Pedido #${order.number} ya estaba cubierto hoy y salió de la lista.',
+      );
+      return;
+    }
     if (!res.isValid) {
       final apiErr = AppMode.useMock
           ? null
@@ -184,9 +278,7 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
     }
 
     final totalText = OwnerFormat.money(
-      Money.fromCents(
-        order.paidByPlan ? order.cashToCollectCents : order.effectiveTotalCents,
-      ),
+      Money.fromCents(order.effectiveBalanceToCollectCents),
     );
     final changeText = changeCents > 0
         ? ' · Cambio ${OwnerFormat.money(Money.fromCents(changeCents))}'
@@ -217,12 +309,19 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     final orders = ref.watch(activeOrdersProvider);
+    final movements = ref.watch(cajaMovementsProvider).items;
+    final visibleOrdersAsync = orders.whenData(
+      (list) => ResolvedOrdersStore.instance.filterOrdersSync(
+        list,
+        movements: movements,
+      ),
+    );
     final clients =
         ref.watch(ownerClientsProvider).value ?? const <OwnerClient>[];
     final tables = ref.watch(pendingTablesProvider).value ?? const <PendingTable>[];
     final lunchesToday =
         ref.watch(dailySummaryProvider).value?.lunchesRedeemedToday ?? 0;
-    final count = (orders.value?.length ?? 0) + tables.length;
+    final count = (visibleOrdersAsync.value?.length ?? 0) + tables.length;
 
     return Scaffold(
       backgroundColor: colors.surface,
@@ -243,7 +342,7 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
             ),
           ),
           Expanded(
-            child: orders.when(
+            child: visibleOrdersAsync.when(
               skipLoadingOnReload: true,
               loading: () => const OwnerLoadingView('Cargando pedidos'),
               error: (_, _) => OwnerErrorView(
@@ -484,7 +583,8 @@ class _OrderCard extends StatelessWidget {
     final colors = context.colorScheme;
     final b = context.bocadooColors;
     final arrival = _arrivalLabel(order);
-    final isPlan = order.paidByPlan ||
+    final isPlan = order.hasPlanLineInQuote ||
+        order.paidByPlan ||
         (planOverrideLunches != null && planOverrideLunches! > 0);
     TextSpan line(String label, String value) => TextSpan(children: [
           TextSpan(text: '$label: ', style: TextStyle(fontWeight: FontWeight.w800, color: colors.primary)),
@@ -582,7 +682,7 @@ class _OrderCard extends StatelessWidget {
                   const SizedBox(width: 6),
                   Flexible(
                     child: Text(
-                      'Por cobrar · ${OwnerFormat.money(Money.fromCents(order.effectiveTotalCents))}',
+                      'Por cobrar · ${OwnerFormat.money(Money.fromCents(order.effectiveBalanceToCollectCents))}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -623,9 +723,9 @@ class _OrderCard extends StatelessWidget {
           LayoutBuilder(
             builder: (context, constraints) {
               final badge = OwnerBadge(
-                label: planOverrideLunches != null
-                    ? '🎫 Plan activo ($planOverrideLunches disp.)'
-                    : '🎫 Plan activo · 1 almuerzo',
+                label: (planOverrideLunches != null && !order.hasPlanLineInQuote)
+                    ? 'Plan activo · Cubierto por plan ($planOverrideLunches disp.)'
+                    : 'Plan activo · Cubierto por plan',
                 background: b.successContainer,
                 foreground: b.onSuccessContainer,
               );
@@ -707,12 +807,13 @@ class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
     final order = widget.order;
     final hasPlanOverride =
         !order.paidByPlan &&
+        !order.hasPlanLineInQuote &&
         widget.planOverrideLunches != null &&
         widget.planOverrideLunches! > 0;
-    final isPlan = order.paidByPlan || hasPlanOverride;
+    final isPlan = order.hasPlanLineInQuote || order.paidByPlan || hasPlanOverride;
     final totalCents = hasPlanOverride
         ? 0
-        : (order.paidByPlan ? order.cashToCollectCents : order.effectiveTotalCents);
+        : order.effectiveBalanceToCollectCents;
     final hasCashToCollect = totalCents > 0;
     final arrival = _arrivalLabel(order);
     final dishesParts = [

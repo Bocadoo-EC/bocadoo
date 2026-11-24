@@ -1250,14 +1250,24 @@ class CustomerController extends ChangeNotifier {
     if (_disposed || _state.status == CustomerStatus.initial) return;
     try {
       final previousPasses = _state.passes;
+      final previousOrder = _state.activeOrder;
       final pendingList = _state.pendingPlanRequests;
       final results = await Future.wait([
         _repository.getActivePasses(),
         _repository.getRecentActivity(),
+        _repository.getActiveOrder(),
+        _repository.getActiveTable(),
       ]);
       if (_disposed || !_paseVisible) return;
       final passes = results[0] as List<CustomerPass>;
       final activity = results[1] as List<ActivityItem>;
+      final nextOrder = results[2] as ActiveOrder?;
+      final nextTable = _pruneExpiredCollectingTable(results[3] as ActiveTable?);
+      _syncOrderPolling(nextOrder);
+      final orderJustFinished = (previousOrder != null && nextOrder == null) ||
+          (nextOrder != null &&
+              nextOrder.isDelivered &&
+              !(previousOrder?.isDelivered ?? false));
       final nextMenuStates = await _resolveMenuStatesForPasses(
         passes,
         _state.restaurants,
@@ -1280,7 +1290,28 @@ class CustomerController extends ChangeNotifier {
       final recentSse = _lastSseRedemptionAt != null &&
           DateTime.now().difference(_lastSseRedemptionAt!) <
               const Duration(seconds: 6);
-      if (firstActivated != null) {
+      if (orderJustFinished && previousOrder != null && !recentSse) {
+        final effectivePlanOrder = previousOrder.hasPlan ||
+            (previousOrder.restaurantId != null &&
+                passes.any(
+                  (p) =>
+                      p.restaurantId == previousOrder.restaurantId &&
+                      p.remainingLunches > 0 &&
+                      !p.isExpired,
+                ));
+        notice = effectivePlanOrder
+            ? 'Descontado 1 almuerzo de tu plan en ${previousOrder.restaurantName}.'
+            : 'Pedido #${previousOrder.orderNumber} confirmado en ${previousOrder.restaurantName}.';
+        celebrationTick += 1;
+        celebrationTitle = effectivePlanOrder
+            ? '1 almuerzo descontado del plan'
+            : '¡Orden aprobada!';
+        celebrationSubtitle = effectivePlanOrder
+            ? (previousOrder.cashToCollectCents > 0
+                ? '${previousOrder.restaurantName} · Descontado 1 almuerzo del plan + extras'
+                : '${previousOrder.restaurantName} · Descontado 1 almuerzo de tu plan')
+            : '${previousOrder.restaurantName} · Pedido #${previousOrder.orderNumber} confirmado';
+      } else if (firstActivated != null) {
         notice =
             '¡Tu plan en ${firstActivated.restaurantName} fue aprobado y activado!';
       } else if (firstExpired != null) {
@@ -1315,6 +1346,10 @@ class CustomerController extends ChangeNotifier {
             ? _state.walletFocusTick + 1
             : _state.walletFocusTick,
         recentActivity: activity,
+        activeOrder: nextOrder,
+        clearActiveOrder: nextOrder == null,
+        activeTable: nextTable,
+        clearActiveTable: nextTable == null,
         consumptionNotice: notice,
         redemptionCelebrationTick: celebrationTick,
         redemptionCelebrationTitle: celebrationTitle,
@@ -1428,7 +1463,18 @@ class CustomerController extends ChangeNotifier {
           if (event.saldoRestante != null)
             'Te quedan ${event.saldoRestante} almuerzos',
         ];
+        final activeOrd = _state.activeOrder;
+        final matchesActiveOrder = activeOrd != null &&
+            (restName == null ||
+                restName.isEmpty ||
+                activeOrd.restaurantName.trim().toLowerCase() ==
+                    restName.toLowerCase());
+        if (matchesActiveOrder) {
+          _syncOrderPolling(null);
+        }
         _emit(_state.copyWith(
+          clearActiveOrder: matchesActiveOrder,
+          selectedQrMode: matchesActiveOrder ? QrMode.plan : _state.selectedQrMode,
           consumptionNotice: subtitleParts.isNotEmpty
               ? 'Almuerzo canjeado · ${subtitleParts.join(' · ')}'
               : 'Almuerzo canjeado',
@@ -1437,6 +1483,7 @@ class CustomerController extends ChangeNotifier {
           redemptionCelebrationSubtitle:
               subtitleParts.isNotEmpty ? subtitleParts.join(' · ') : null,
         ));
+        unawaited(refreshLive());
       case PaseEventType.canjeRevertido:
         _applyBalanceFromEvent(
           restauranteNombre: event.restauranteNombre,

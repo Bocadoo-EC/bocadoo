@@ -87,7 +87,15 @@ class _SellPlanSheetState extends ConsumerState<SellPlanSheet> {
     }
     container
       ..invalidate(dailySummaryProvider)
-      ..invalidate(ownerClientsProvider);
+      ..invalidate(ownerClientsProvider)
+      ..invalidate(activeOrdersProvider)
+      ..invalidate(ordersOnTheWayProvider)
+      ..invalidate(pendingTablesProvider);
+    unawaited(
+      container
+          .read(cajaLiveSyncProvider.notifier)
+          .syncNow(includeMovements: true),
+    );
     if (_deductToday) {
       unawaited(container.read(cajaMovementsProvider.notifier).refresh());
     }

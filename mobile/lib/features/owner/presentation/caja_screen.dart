@@ -1473,8 +1473,10 @@ class _PlanRequestsSectionState extends ConsumerState<_PlanRequestsSection> {
     ref.invalidate(planRequestsProvider);
     ref.invalidate(dailySummaryProvider);
     ref.invalidate(ownerClientsProvider);
+    ref.invalidate(activeOrdersProvider);
+    ref.invalidate(ordersOnTheWayProvider);
     unawaited(ref.read(cajaMovementsProvider.notifier).refresh());
-    unawaited(ref.read(cajaLiveSyncProvider.notifier).syncNow());
+    unawaited(ref.read(cajaLiveSyncProvider.notifier).syncNow(includeMovements: true));
     showInfoSnackBar(
       messenger,
       'Plan activado · ${OwnerFormat.money(req.price)} cobrados',
@@ -1687,7 +1689,10 @@ class _PendingPaymentDetailSheetState
       Navigator.of(context).pop();
       ref.invalidate(dailySummaryProvider);
       ref.invalidate(planRequestsProvider);
-      unawaited(ref.read(cajaLiveSyncProvider.notifier).syncNow());
+      ref.invalidate(activeOrdersProvider);
+      ref.invalidate(ordersOnTheWayProvider);
+      ref.invalidate(ownerClientsProvider);
+      unawaited(ref.read(cajaLiveSyncProvider.notifier).syncNow(includeMovements: true));
       showInfoSnackBar(
         messenger,
         confirm ? 'Pago de plan confirmado.' : 'Pago de plan rechazado.',
