@@ -335,16 +335,87 @@ class ApiCustomerRepository implements ICustomerRepository {
 
   @override
   Future<List<ActivityItem>> getRecentActivity() async {
-    final data = await guard(
-      () => _api.getMap(
-        '${ApiConfig.v1}/mis/consumos',
-        query: const {'limit': 20},
-      ),
-    );
-    final items = _asListOfMaps(data['items']);
-    return [
-      for (final item in items) _mapConsumoToActivity(item),
-    ];
+    final results = await Future.wait([
+      guard(
+        () => _api.getMap(
+          '${ApiConfig.v1}/mis/consumos',
+          query: const {'limit': 20},
+        ),
+      ).catchError((_) => <String, dynamic>{}),
+      guard(
+        () => _api.getMap(
+          '${ApiConfig.v1}/mis/pedidos',
+          query: const {'limit': 20},
+        ),
+      ).catchError((_) => <String, dynamic>{}),
+    ]);
+
+    final consumosRaw = _asListOfMaps(results[0]['items']);
+    final pedidosRaw = _asListOfMaps(results[1]['items']);
+
+    final merged = <({DateTime sortAt, ActivityItem item})>[];
+    final consumoAnchors = <({String restKey, DateTime at})>[];
+
+    for (final c in consumosRaw) {
+      final rest = _asMap(c['restaurante']);
+      final restKey = ((rest['id'] ?? rest['nombre']) ?? '')
+          .toString()
+          .trim()
+          .toLowerCase();
+      final dt = DateTime.tryParse(
+            (c['fecha'] ?? c['creadoEn'] ?? '').toString(),
+          )?.toUtc() ??
+          DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+      if (restKey.isNotEmpty) {
+        consumoAnchors.add((restKey: restKey, at: dt));
+      }
+      merged.add((sortAt: dt, item: _mapConsumoToActivity(c)));
+    }
+
+    for (final p in pedidosRaw) {
+      final estado = (p['estado'] ?? '').toString().toUpperCase();
+      final isCompleted = estado == 'CANJEADA' ||
+          estado == 'SERVIDA' ||
+          estado == 'ENTREGADA' ||
+          estado == 'FINALIZADA';
+      if (!isCompleted) continue;
+
+      final rest = _asMap(p['restaurante']);
+      final restId = (rest['id'] ?? '').toString().trim().toLowerCase();
+      final restName = (rest['nombre'] ?? '').toString().trim();
+      final restKey = restId.isNotEmpty ? restId : restName.toLowerCase();
+      final cotizacion = _parseCotizacion(p['cotizacion']);
+      final almuerzo = p['almuerzo'] is Map ? _asMap(p['almuerzo']) : null;
+      final planCreditsUsed = cotizacion != null
+          ? cotizacion.planCreditsUsed
+          : (almuerzo?['cubiertoPorPlan'] == true ? 1 : 0);
+      final paidCents = cotizacion != null
+          ? cotizacion.saldoPorCobrarCentavos
+          : (_asInt(p['totalCentavos']) ?? 0);
+
+      final rawTs = (p['canjeadoEn'] ??
+              p['servidoEn'] ??
+              p['creadoEn'] ??
+              '')
+          .toString();
+      final dt = DateTime.tryParse(rawTs)?.toUtc() ??
+          DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+
+      // Si el pedido fue 100% cubierto por plan y ya vino su consumo en /mis/consumos, no duplicar.
+      final hasMatchingConsumo = planCreditsUsed > 0 &&
+          paidCents <= 0 &&
+          consumoAnchors.any(
+            (a) =>
+                a.restKey == restKey &&
+                a.at.difference(dt).inMinutes.abs() <= 3,
+          );
+      if (hasMatchingConsumo) continue;
+
+      merged.add((sortAt: dt, item: _mapPedidoToActivity(p, dt)));
+    }
+
+    merged.sort((a, b) => b.sortAt.compareTo(a.sortAt));
+    return [for (final entry in merged.take(20)) entry.item];
   }
 
   @override
@@ -2057,13 +2128,17 @@ class ApiCustomerRepository implements ICustomerRepository {
     final plan = _asMap(item['plan']);
     final reverted = item['revertido'] == true;
     final takeaway = item['paraLlevar'] == true;
-    final dt = DateTime.tryParse((item['fecha'] ?? '').toString());
+    final dt = DateTime.tryParse(
+      (item['fecha'] ?? item['creadoEn'] ?? '').toString(),
+    );
     final when = _formatEcuadorDateShort(
       dt,
       fallbackDate: item['fechaLocal']?.toString(),
     );
     final planName = (plan['nombre'] ?? 'Almuerzo').toString();
-    final detail = '$when · $planName${takeaway ? ' · Para llevar' : ''}';
+    final stateLabel = reverted ? 'Anulado' : 'Completado';
+    final detail =
+        '$when · $planName${takeaway ? ' · Para llevar' : ''} · $stateLabel';
 
     return ActivityItem(
       id: (item['id'] ?? '').toString(),
@@ -2072,6 +2147,53 @@ class ApiCustomerRepository implements ICustomerRepository {
       value: reverted ? '+1 devuelto' : '-1 almuerzo',
       positive: reverted,
       kind: 'lunch',
+    );
+  }
+
+  ActivityItem _mapPedidoToActivity(
+    Map<String, dynamic> item,
+    DateTime utcTimestamp,
+  ) {
+    final id = (item['id'] ?? '').toString();
+    final numero = (item['numero'] ?? '').toString();
+    final rest = _asMap(item['restaurante']);
+    final takeaway = item['paraLlevar'] == true;
+    final cotizacion = _parseCotizacion(item['cotizacion']);
+    final almuerzo =
+        item['almuerzo'] is Map ? _asMap(item['almuerzo']) : null;
+    final planCreditsUsed = cotizacion != null
+        ? cotizacion.planCreditsUsed
+        : (almuerzo?['cubiertoPorPlan'] == true ? 1 : 0);
+    final paidCents = cotizacion != null
+        ? cotizacion.saldoPorCobrarCentavos
+        : (_asInt(item['totalCentavos']) ?? 0);
+
+    final when = _formatEcuadorDateShort(
+      utcTimestamp,
+      fallbackDate: item['fecha']?.toString(),
+    );
+    final orderLabel = numero.isNotEmpty ? 'Orden #$numero' : 'Orden';
+    final detail =
+        '$when · $orderLabel${takeaway ? ' · Para llevar' : ''} · Completado';
+
+    String formatMoneyCents(int cents) {
+      final dollars = (cents / 100.0).toStringAsFixed(2).replaceAll('.', ',');
+      return '\$$dollars';
+    }
+
+    final valueLabel = planCreditsUsed > 0 && paidCents > 0
+        ? '-1 plan · ${formatMoneyCents(paidCents)}'
+        : (planCreditsUsed > 0
+            ? '-1 almuerzo'
+            : formatMoneyCents(paidCents));
+
+    return ActivityItem(
+      id: 'ord:$id',
+      name: (rest['nombre'] ?? 'Restaurante').toString(),
+      detail: detail,
+      value: valueLabel,
+      positive: false,
+      kind: planCreditsUsed > 0 && paidCents <= 0 ? 'lunch' : 'order',
     );
   }
 

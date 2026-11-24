@@ -9,10 +9,11 @@ import '../../../core/contracts/models.dart';
 import '../../../core/contracts/qr_parser.dart';
 import '../../../core/theme/app_theme.dart';
 import 'customer_controller.dart';
-import 'customer_widgets.dart' show formatCents, formatMoney;
+import 'customer_widgets.dart' show formatCents;
 import 'social_widgets.dart';
 
-/// C8 · Estado del pedido: QR de la preorden y cómo se valida en caja.
+/// C8 · Estado del pedido con línea de tiempo visual (Heurísticas de Nielsen),
+/// QR limpio e instrucción única contextual.
 class OrderStatusSheet extends ConsumerStatefulWidget {
   const OrderStatusSheet({super.key, required this.orderId});
 
@@ -42,240 +43,473 @@ class _OrderStatusSheetState extends ConsumerState<OrderStatusSheet> {
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
+    final textTheme = Theme.of(context).textTheme;
     final controller = ref.watch(customerControllerProvider);
     final order = controller.state.activeOrder;
     final found = order != null && order.orderNumber == widget.orderId;
 
     return SizedBox(
-      height: MediaQuery.sizeOf(context).height * (found ? 0.9 : 0.5),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-          child: Text('Tu pedido', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: colors.onSurface)),
-        ),
-        Expanded(
-          child: found
-              ? _content(order)
-              : SocialEmpty(
-                  icon: Icons.schedule_rounded,
-                  title: 'Sin pedidos hoy',
-                  message: 'Elige un local para almorzar.',
-                  actionLabel: 'Ver locales',
-                  onAction: () {
-                    final router = GoRouter.of(context);
-                    router.pop();
-                    router.go('/customer/restaurants');
-                  },
-                ),
-        ),
-      ]),
+      height: MediaQuery.sizeOf(context).height * (found ? 0.88 : 0.5),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+            child: Text(
+              'Tu pedido',
+              style: (textTheme.headlineMedium ?? const TextStyle()).copyWith(
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                color: colors.onSurface,
+              ),
+            ),
+          ),
+          Expanded(
+            child: found
+                ? _content(order)
+                : SocialEmpty(
+                    icon: Icons.schedule_rounded,
+                    title: 'Sin pedidos hoy',
+                    message: 'Elige un local para almorzar.',
+                    actionLabel: 'Ver locales',
+                    onAction: () {
+                      final router = GoRouter.of(context);
+                      router.pop();
+                      router.go('/customer/restaurants');
+                    },
+                  ),
+          ),
+        ],
+      ),
     );
   }
 
   Widget _content(ActiveOrder order) {
     final colors = context.colorScheme;
     final b = context.bocadooColors;
+    final textTheme = Theme.of(context).textTheme;
     final left = order.expiresAt?.difference(DateTime.now());
     final expired = left != null && left.isNegative;
     final countdown = left == null || expired
         ? null
         : '${left.inMinutes}:${(left.inSeconds % 60).toString().padLeft(2, '0')}';
-    final ready = order.status == 'LISTO';
-    final muted = TextStyle(fontSize: 13, fontWeight: FontWeight.w500, height: 1.35, color: colors.onSurfaceVariant);
 
-    return ListView(padding: const EdgeInsets.fromLTRB(16, 0, 16, 24), children: [
-      Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-          border: Border.all(color: colors.outlineVariant),
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Theme.of(context).scaffoldBackgroundColor, colors.primaryContainer],
+    final isReady = order.status == 'LISTO' || order.status == 'ENTREGADO';
+    final currentStep = isReady ? 2 : 1; // 0: Recibida, 1: En cocina, 2: Lista/En caja
+    final cashToPay = order.cashToCollectCents > 0
+        ? order.cashToCollectCents
+        : order.effectiveTotalCents;
+
+    final String contextualRule;
+    final IconData contextualIcon;
+    final Color contextualBg;
+    final Color contextualFg;
+    if (order.hasPlan && order.cashToCollectCents <= 0) {
+      contextualIcon = Icons.verified_rounded;
+      contextualBg = b.successContainer.withValues(alpha: 0.72);
+      contextualFg = b.onSuccessContainer;
+      contextualRule =
+          'Presenta este QR en caja para descontar 1 almuerzo de tu plan (\$0,00 a pagar).';
+    } else if (order.hasPlan && order.cashToCollectCents > 0) {
+      contextualIcon = Icons.payments_outlined;
+      contextualBg = colors.primaryContainer.withValues(alpha: 0.65);
+      contextualFg = colors.onPrimaryContainer;
+      contextualRule =
+          'Presenta este QR en caja para descontar 1 almuerzo de tu plan y pagar ${formatCents(order.cashToCollectCents)} adicionales.';
+    } else {
+      contextualIcon = Icons.payments_outlined;
+      contextualBg = colors.primaryContainer.withValues(alpha: 0.65);
+      contextualFg = colors.onPrimaryContainer;
+      contextualRule =
+          'Presenta este QR en caja y cancela ${formatCents(cashToPay)} en efectivo o transferencia.';
+    }
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+      children: [
+        // Tarjeta superior: cabecera + línea de tiempo + resumen compacto
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+            border: Border.all(color: colors.outlineVariant),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Theme.of(context).scaffoldBackgroundColor,
+                colors.primaryContainer.withValues(alpha: 0.55),
+              ],
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  SocialBadge(
+                    label: 'Orden #${order.orderNumber}',
+                    background: colors.primary,
+                    foreground: colors.onPrimary,
+                  ),
+                  const Spacer(),
+                  SocialBadge(
+                    label: expired
+                        ? 'Vencida'
+                        : (countdown == null ? 'Activa' : 'Vence en $countdown'),
+                    icon: Icons.schedule_rounded,
+                    background: colors.surface,
+                    foreground: expired ? b.danger : colors.primary,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text(
+                order.restaurantName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: (textTheme.titleLarge ?? const TextStyle()).copyWith(
+                  fontSize: 19,
+                  fontWeight: FontWeight.w800,
+                  color: colors.onSurface,
+                ),
+              ),
+              const SizedBox(height: 14),
+              _OrderStatusTimeline(
+                currentStep: currentStep,
+                isDoneFinal: order.isDelivered,
+              ),
+              const SizedBox(height: 14),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  color: colors.surface,
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: colors.outlineVariant),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (order.soup != null && order.soup!.trim().isNotEmpty)
+                      _SummaryRow(
+                        icon: Icons.soup_kitchen_outlined,
+                        label: 'Sopa',
+                        value: order.soup!,
+                      ),
+                    if (order.main != null && order.main!.trim().isNotEmpty)
+                      _SummaryRow(
+                        icon: Icons.dinner_dining_outlined,
+                        label: 'Segundo',
+                        value: order.main!,
+                      ),
+                    if ((order.soup == null || order.soup!.trim().isEmpty) &&
+                        (order.main == null || order.main!.trim().isEmpty) &&
+                        order.detail.trim().isNotEmpty)
+                      _SummaryRow(
+                        icon: Icons.restaurant_menu_rounded,
+                        label: 'Pedido',
+                        value: order.detail,
+                      ),
+                    _SummaryRow(
+                      icon: order.takeaway
+                          ? Icons.takeout_dining_outlined
+                          : Icons.restaurant_rounded,
+                      label: 'Modalidad',
+                      value: order.takeaway
+                          ? 'Para llevar (+${formatCents(order.effectiveSurchargeCents)})'
+                          : 'Para comer en el local',
+                    ),
+                    if (order.estimatedArrivalLabel != null &&
+                        order.estimatedArrivalLabel!.trim().isNotEmpty)
+                      _SummaryRow(
+                        icon: Icons.access_time_rounded,
+                        label: 'Hora estimada',
+                        value: order.estimatedArrivalLabel!,
+                      ),
+                    _SummaryRow(
+                      icon: order.hasPlan
+                          ? Icons.confirmation_number_outlined
+                          : Icons.payments_outlined,
+                      label: 'Total en caja',
+                      value: order.hasPlan
+                          ? (order.cashToCollectCents > 0
+                              ? '1 cupo + ${formatCents(order.cashToCollectCents)}'
+                              : 'Plan Activo (\$0,00)')
+                          : formatCents(cashToPay),
+                      highlightValue: true,
+                      isLast: true,
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
         ),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Row(children: [
-            SocialBadge(label: 'Orden #${order.orderNumber}', background: colors.primary, foreground: colors.onPrimary),
-            const Spacer(),
-            SocialBadge(
-              label: expired ? 'Vencida' : (countdown == null ? 'Guardada' : 'Vence en $countdown'),
-              icon: Icons.schedule_rounded,
-              background: colors.surface,
-              foreground: expired ? b.danger : colors.primary,
-            ),
-          ]),
-          const SizedBox(height: 10),
-          Text(order.restaurantName,
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: colors.onSurface)),
-          const SizedBox(height: 2),
-          Text(
-            ready
-                ? 'Listo para retirar · Acércate al mostrador con tu número de orden.'
-                : 'En preparación · Tu almuerzo se está sirviendo en la cocina.',
-            style: muted,
+
+        const SizedBox(height: 14),
+
+        // Tarjeta central QR limpia (sin píldora duplicada #X)
+        Container(
+          padding: const EdgeInsets.fromLTRB(16, 18, 16, 18),
+          decoration: BoxDecoration(
+            color: colors.surface,
+            borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+            border: Border.all(color: colors.outlineVariant),
           ),
-          const SizedBox(height: 10),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: colors.surface,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: colors.outlineVariant),
+          child: Column(
+            children: [
+              Text(
+                'Muestra este QR en la caja al llegar',
+                textAlign: TextAlign.center,
+                style: (textTheme.titleMedium ?? const TextStyle()).copyWith(
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.w700,
+                  color: colors.primary,
+                ),
+              ),
+              const SizedBox(height: 14),
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: b.qrBackground,
+                  borderRadius: BorderRadius.circular(22),
+                  border: Border.all(color: colors.outlineVariant),
+                ),
+                child: SocialQr(
+                  value: AppMode.useMock
+                      ? BocadooQrParser.generateOrderCode(
+                          order.orderNumber,
+                          orderId: order.id,
+                        )
+                      : order.qrPayload,
+                  size: 162,
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 14),
+
+        // Única instrucción contextual (máximo 2 líneas, cero ruido visual)
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: contextualBg,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: (order.hasPlan && order.cashToCollectCents <= 0
+                      ? b.success
+                      : colors.primary)
+                  .withValues(alpha: 0.28),
             ),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              if (order.soup != null) _Line(label: 'Sopa:', value: order.soup!),
-              if (order.main != null) _Line(label: 'Segundo:', value: order.main!),
-              if (order.soup == null && order.main == null && order.detail.isNotEmpty)
-                _Line(label: 'Pedido:', value: order.detail),
-              const SizedBox(height: 4),
-              Row(children: [
-                Icon(order.takeaway ? Icons.takeout_dining_outlined : Icons.restaurant_rounded,
-                    size: 16, color: colors.onSurfaceVariant),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    order.takeaway
-                        ? 'Modalidad: Para llevar (+ ${formatCents(order.effectiveSurchargeCents)})'
-                        : 'Modalidad: Para comer en el local',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: colors.onSurfaceVariant),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Icon(contextualIcon, size: 22, color: contextualFg),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  contextualRule,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: (textTheme.bodySmall ?? const TextStyle()).copyWith(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    height: 1.3,
+                    color: contextualFg,
                   ),
                 ),
-              ]),
-              const SizedBox(height: 4),
-              if (order.estimatedArrivalLabel != null && order.estimatedArrivalLabel!.isNotEmpty)
-                _Line(label: 'Hora estimada:', value: order.estimatedArrivalLabel!),
-              _Line(
-                label: 'Total en caja:',
-                value: order.hasPlan
-                    ? 'Cubierto por tu plan (\$0,00)'
-                    : '${formatCents(order.effectiveTotalCents)} en efectivo',
               ),
-            ]),
+            ],
           ),
-        ]),
-      ),
-      const SizedBox(height: 14),
-      Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: colors.surface,
-          borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-          border: Border.all(color: colors.outlineVariant),
         ),
-        child: Column(children: [
-          Text('Muestra este QR en la caja al llegar',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: colors.primary)),
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: b.qrBackground,
-              borderRadius: BorderRadius.circular(22),
-              border: Border.all(color: colors.outlineVariant),
-            ),
-            child: SocialQr(
-              value: AppMode.useMock
-                  ? BocadooQrParser.generateOrderCode(order.orderNumber, orderId: order.id)
-                  : order.qrPayload,
-              size: 150,
-            ),
-          ),
-          const SizedBox(height: 10),
-          SocialBadge(
-            label: AppMode.useMock
-                ? BocadooQrParser.generateOrderCode(order.orderNumber, orderId: order.id)
-                : '#${order.orderNumber}',
-            background: colors.primaryContainer,
-            foreground: colors.primary,
-          ),
-        ]),
-      ),
-      const SizedBox(height: 14),
-      Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: Theme.of(context).scaffoldBackgroundColor,
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: colors.outlineVariant),
+
+        const SizedBox(height: 18),
+
+        ElevatedButton(
+          onPressed: () => context.pop(),
+          child: const Text('Listo, voy al restaurante'),
         ),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Text('¿Cómo se valida en el restaurante?',
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: colors.onSurface)),
-          const SizedBox(height: 10),
-          _Rule(
-            icon: Icons.verified_user_outlined,
-            color: b.success,
-            title: 'Si tienes plan activo:',
-            text: 'El cajero escanea tu QR y se descuenta 1 almuerzo de tu saldo. Pagas \$0,00 adicionales.',
-            yours: order.hasPlan,
-          ),
-          const SizedBox(height: 10),
-          _Rule(
-            icon: Icons.payments_outlined,
-            color: colors.primary,
-            title: 'Si no tienes plan (cobro suelto):',
-            text: 'El cajero escanea tu QR y te cobra el almuerzo suelto '
-                '(${formatMoney(order.singleLunchPrice)}) en efectivo o transferencia.',
-            yours: !order.hasPlan,
-          ),
-        ]),
-      ),
-      const SizedBox(height: 20),
-      ElevatedButton(onPressed: () => context.pop(), child: const Text('Listo, voy al restaurante')),
-    ]);
-  }
-}
-
-class _Line extends StatelessWidget {
-  const _Line({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colorScheme;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: Text.rich(
-        TextSpan(children: [
-          TextSpan(text: '$label ', style: TextStyle(fontWeight: FontWeight.w900, color: colors.primary)),
-          TextSpan(text: value),
-        ]),
-        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: colors.onSurface),
-      ),
+      ],
     );
   }
 }
 
-class _Rule extends StatelessWidget {
-  const _Rule({required this.icon, required this.color, required this.title, required this.text, required this.yours});
+class _OrderStatusTimeline extends StatelessWidget {
+  const _OrderStatusTimeline({
+    required this.currentStep,
+    required this.isDoneFinal,
+  });
 
-  final IconData icon;
-  final Color color;
-  final String title;
-  final String text;
-  final bool yours;
+  /// 0 = Recibida, 1 = En cocina, 2 = Lista / En caja.
+  final int currentStep;
+  final bool isDoneFinal;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
-    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Padding(padding: const EdgeInsets.only(top: 1), child: Icon(icon, size: 18, color: color)),
-      const SizedBox(width: 8),
-      Expanded(
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Wrap(spacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
-            Text(title, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: color)),
-            if (yours)
-              SocialBadge(label: 'Tu caso', background: colors.primaryContainer, foreground: colors.onPrimaryContainer),
-          ]),
-          Text(text, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, height: 1.35, color: colors.onSurfaceVariant)),
-        ]),
+    final b = context.bocadooColors;
+    final textTheme = Theme.of(context).textTheme;
+
+    const labels = ['Recibida', 'En cocina', 'Lista / En caja'];
+
+    Widget buildNode(int index) {
+      final isCompleted = index < currentStep || (index == 2 && isDoneFinal);
+      final isActive = index == currentStep && !isDoneFinal;
+      final bg = isCompleted
+          ? b.success
+          : (isActive ? colors.primary : colors.surface);
+      final borderColor = isCompleted
+          ? b.success
+          : (isActive ? colors.primary : colors.outlineVariant);
+      final fg = (isCompleted || isActive) ? colors.onPrimary : colors.onSurfaceVariant;
+
+      return AnimatedContainer(
+        duration: const Duration(milliseconds: 220),
+        width: 28,
+        height: 28,
+        decoration: BoxDecoration(
+          color: bg,
+          shape: BoxShape.circle,
+          border: Border.all(color: borderColor, width: isActive ? 2 : 1.5),
+          boxShadow: isActive
+              ? [
+                  BoxShadow(
+                    color: colors.primary.withValues(alpha: 0.28),
+                    blurRadius: 8,
+                  ),
+                ]
+              : null,
+        ),
+        child: Center(
+          child: isCompleted
+              ? Icon(Icons.check_rounded, size: 16, color: fg)
+              : (isActive
+                  ? Icon(
+                      index == 1
+                          ? Icons.soup_kitchen_rounded
+                          : Icons.notifications_active_rounded,
+                      size: 14,
+                      color: fg,
+                    )
+                  : Container(
+                      width: 6,
+                      height: 6,
+                      decoration: BoxDecoration(
+                        color: colors.outlineVariant,
+                        shape: BoxShape.circle,
+                      ),
+                    )),
+        ),
+      );
+    }
+
+    Widget buildTrack(bool filled) => Expanded(
+          child: Container(
+            height: 3,
+            margin: const EdgeInsets.symmetric(horizontal: 6),
+            decoration: BoxDecoration(
+              color: filled ? b.success : colors.outlineVariant,
+              borderRadius: BorderRadius.circular(999),
+            ),
+          ),
+        );
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          child: Row(
+            children: [
+              buildNode(0),
+              buildTrack(currentStep >= 1),
+              buildNode(1),
+              buildTrack(currentStep >= 2),
+              buildNode(2),
+            ],
+          ),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: List.generate(3, (i) {
+            final isActive = i == currentStep && !isDoneFinal;
+            final isDone = i < currentStep || (i == 2 && isDoneFinal);
+            return Expanded(
+              child: Text(
+                labels[i],
+                textAlign: i == 0
+                    ? TextAlign.left
+                    : (i == 2 ? TextAlign.right : TextAlign.center),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: (textTheme.labelMedium ?? const TextStyle()).copyWith(
+                  fontSize: 11.5,
+                  fontWeight: (isActive || isDone) ? FontWeight.w700 : FontWeight.w500,
+                  color: isActive
+                      ? colors.primary
+                      : (isDone ? b.success : colors.onSurfaceVariant),
+                ),
+              ),
+            );
+          }),
+        ),
+      ],
+    );
+  }
+}
+
+class _SummaryRow extends StatelessWidget {
+  const _SummaryRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+    this.highlightValue = false,
+    this.isLast = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final bool highlightValue;
+  final bool isLast;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    return Padding(
+      padding: EdgeInsets.only(bottom: isLast ? 0 : 7),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Icon(icon, size: 16, color: colors.primary),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '$label: ',
+            style: (textTheme.bodySmall ?? const TextStyle()).copyWith(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: colors.onSurfaceVariant,
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              textAlign: TextAlign.right,
+              style: (textTheme.bodyMedium ?? const TextStyle()).copyWith(
+                fontSize: 13.5,
+                fontWeight: highlightValue ? FontWeight.w800 : FontWeight.w700,
+                color: highlightValue ? colors.primary : colors.onSurface,
+              ),
+            ),
+          ),
+        ],
       ),
-    ]);
+    );
   }
 }
