@@ -8,6 +8,7 @@ import '../../../core/theme/app_theme.dart';
 import 'customer_controller.dart';
 import 'customer_widgets.dart';
 import 'widgets/flash_offers_section.dart';
+import 'widgets/location_setup_sheet.dart';
 import 'widgets/quick_access_category_row.dart';
 
 String? rLogoOrImage(Restaurant r) =>
@@ -35,6 +36,9 @@ class _RestaurantsScreenState extends ConsumerState<RestaurantsScreen> {
       if (!mounted) return;
       _controllerRef = ref.read(customerControllerProvider);
       _controllerRef?.setRestaurantsVisible(true);
+      if (_controllerRef != null) {
+        ensureCustomerLocationPrompt(context, _controllerRef!);
+      }
     });
   }
 
@@ -77,6 +81,33 @@ class _RestaurantsScreenState extends ConsumerState<RestaurantsScreen> {
   }
 
   Widget _buildBody(BuildContext context, CustomerController controller, CustomerUiState s) {
+    if (!s.hasConfiguredLocation) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.location_on_outlined,
+                size: 36,
+                color: context.colorScheme.primary,
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'Configura tu ubicación para ver restaurantes cercanos',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: context.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     if (s.restaurants.isEmpty && (s.isLoading || s.status == CustomerStatus.initial)) {
       return Semantics(
         label: 'Buscando restaurantes',
@@ -148,16 +179,20 @@ class _RestaurantsScreenState extends ConsumerState<RestaurantsScreen> {
                   '${s.searchZoneLabel ?? 'Zona'} · ${s.searchRadiusMeters! < 1000 ? '${s.searchRadiusMeters} m' : '${(s.searchRadiusMeters! / 1000).toStringAsFixed(1).replaceAll('.', ',')} km'}',
                   style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: colors.primary),
                 ),
+                onPressed: () => showLocationSetupSheet(context, controller),
                 onDeleted: controller.clearSearchArea,
               ),
             ),
           ],
           const SizedBox(height: 12),
           if (filtered.isEmpty)
-            _NoResults(onClear: () {
-              _search.clear();
-              controller.clearFilters();
-            })
+            _NoResults(
+              onChangeLocation: () => showLocationSetupSheet(context, controller),
+              onClear: () {
+                _search.clear();
+                controller.clearFilters();
+              },
+            )
           else
             for (final r in filtered) ...[
               _RestaurantCard(
@@ -222,7 +257,7 @@ class _Header extends StatelessWidget {
             shape: StadiumBorder(side: BorderSide(color: colors.primary.withValues(alpha: 0.25))),
             child: InkWell(
               customBorder: const StadiumBorder(),
-              onTap: () => context.push('/customer/mapa'),
+              onTap: () => showLocationSetupSheet(context, controller),
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -634,30 +669,52 @@ class _Tag extends StatelessWidget {
 }
 
 class _NoResults extends StatelessWidget {
+  final VoidCallback onChangeLocation;
   final VoidCallback onClear;
-  const _NoResults({required this.onClear});
+  const _NoResults({required this.onChangeLocation, required this.onClear});
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
+    final textTheme = Theme.of(context).textTheme;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 40),
+      padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 12),
       child: Column(children: [
         Container(
           width: 56,
           height: 56,
           decoration: BoxDecoration(color: Theme.of(context).scaffoldBackgroundColor, shape: BoxShape.circle),
-          child: Icon(Icons.search_rounded, size: 26, color: colors.onSurfaceVariant),
+          child: Icon(Icons.location_searching_rounded, size: 26, color: colors.primary),
         ),
         const SizedBox(height: 12),
-        Text('Sin resultados', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: colors.onSurface)),
+        Text(
+          'Sin restaurantes en este rango',
+          textAlign: TextAlign.center,
+          style: (textTheme.titleMedium ?? const TextStyle()).copyWith(
+            fontSize: 17,
+            fontWeight: FontWeight.w800,
+            color: colors.onSurface,
+          ),
+        ),
         const SizedBox(height: 4),
-        Text('Intenta cambiar los filtros de búsqueda.',
-            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant)),
+        Text(
+          'Amplía el radio de búsqueda o elige otra zona cercana.',
+          textAlign: TextAlign.center,
+          style: (textTheme.bodySmall ?? const TextStyle()).copyWith(
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+            color: colors.onSurfaceVariant,
+          ),
+        ),
         const SizedBox(height: 16),
-        ElevatedButton(
+        FilledButton.icon(
+          onPressed: onChangeLocation,
+          icon: const Icon(Icons.tune_rounded, size: 18),
+          label: const Text('Ampliar rango o cambiar ubicación'),
+        ),
+        const SizedBox(height: 8),
+        TextButton(
           onPressed: onClear,
-          style: ElevatedButton.styleFrom(minimumSize: const Size(160, 48)),
           child: const Text('Limpiar filtros'),
         ),
       ]),

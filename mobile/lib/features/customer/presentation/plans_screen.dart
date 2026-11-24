@@ -10,6 +10,7 @@ import '../../../core/location/location_service.dart';
 import '../../../core/theme/app_theme.dart';
 import 'customer_controller.dart';
 import 'customer_widgets.dart';
+import 'widgets/location_setup_sheet.dart';
 import 'widgets/restaurant_plans_sheet.dart';
 import 'widgets/restaurant_plans_summary_card.dart';
 
@@ -49,7 +50,14 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
   void initState() {
     super.initState();
     _scrollCtrl.addListener(_onScroll);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _syncAndLoad());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final ctrl = ref.read(customerControllerProvider);
+      ensureCustomerLocationPrompt(context, ctrl);
+      if (ctrl.state.hasConfiguredLocation) {
+        _syncAndLoad();
+      }
+    });
   }
 
   @override
@@ -84,7 +92,7 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
   String _signatureFor(CustomerUiState s) {
     final c = s.searchCenter;
     final near = s.filters.contains(RestaurantFilter.near);
-    return '${c?.latitude},${c?.longitude}|${s.searchRadiusMeters}|$near|${s.restaurants.length}';
+    return '${s.hasConfiguredLocation}|${c?.latitude},${c?.longitude}|${s.searchRadiusMeters}|$near|${s.restaurants.length}';
   }
 
   List<Restaurant> _zoneRestaurants(CustomerUiState s) {
@@ -280,6 +288,33 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
         listenable: controller,
         builder: (context, _) {
           final s = controller.state;
+          if (!s.hasConfiguredLocation) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.location_on_outlined,
+                      size: 36,
+                      color: colors.primary,
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      'Configura tu ubicación para ver planes cercanos',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: colors.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }
           final currentSig = _signatureFor(s);
           if (currentSig != _zoneSignature && !_loadingBatch) {
             WidgetsBinding.instance.addPostFrameCallback((_) => _syncAndLoad());
@@ -369,27 +404,44 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
                           ),
                         ),
                         const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.location_on_rounded,
-                              size: 14,
-                              color: colors.primary,
-                            ),
-                            const SizedBox(width: 4),
-                            Expanded(
-                              child: Text(
-                                'Mostrando planes cerca de: $zoneLabel',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w500,
-                                  color: colors.onSurfaceVariant,
+                        InkWell(
+                          borderRadius: BorderRadius.circular(12),
+                          onTap: () =>
+                              showLocationSetupSheet(context, controller),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.location_on_rounded,
+                                  size: 15,
+                                  color: colors.primary,
                                 ),
-                              ),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  child: Text(
+                                    'Mostrando planes cerca de: $zoneLabel',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                      color: colors.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  'Cambiar',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w800,
+                                    color: colors.primary,
+                                  ),
+                                ),
+                              ],
                             ),
-                          ],
+                          ),
                         ),
                       ],
                     ),
@@ -582,7 +634,11 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
                   SliverToBoxAdapter(
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-                      child: _EmptyPlansState(query: _query),
+                      child: _EmptyPlansState(
+                        query: _query,
+                        onChangeLocation: () =>
+                            showLocationSetupSheet(context, controller),
+                      ),
                     ),
                   )
                 else ...[
@@ -959,17 +1015,22 @@ class _TopRestaurantTile extends StatelessWidget {
 }
 
 class _EmptyPlansState extends StatelessWidget {
-  const _EmptyPlansState({required this.query});
+  const _EmptyPlansState({
+    required this.query,
+    required this.onChangeLocation,
+  });
 
   final String query;
+  final VoidCallback onChangeLocation;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
+    final textTheme = Theme.of(context).textTheme;
     final isSearch = query.isNotEmpty;
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 32),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 30),
       decoration: BoxDecoration(
         color: Theme.of(context).scaffoldBackgroundColor,
         borderRadius: BorderRadius.circular(18),
@@ -979,33 +1040,37 @@ class _EmptyPlansState extends StatelessWidget {
         children: [
           Icon(
             isSearch ? Icons.search_off_rounded : Icons.location_off_outlined,
-            size: 30,
-            color: colors.onSurfaceVariant,
+            size: 32,
+            color: colors.primary,
           ),
           const SizedBox(height: 10),
           Text(
             isSearch
                 ? "No encontramos planes para '$query' en tu zona actual."
-                : 'Aún no hay planes en esta zona',
+                : 'No hay planes en este rango',
             textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 15,
+            style: (textTheme.titleMedium ?? const TextStyle()).copyWith(
+              fontSize: 15.5,
               fontWeight: FontWeight.w800,
               color: colors.onSurface,
             ),
           ),
-          if (!isSearch) ...[
-            const SizedBox(height: 6),
-            Text(
-              'Cambia tu ubicación en la pestaña Restaurantes para explorar otras zonas cercanas.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-                color: colors.onSurfaceVariant,
-              ),
+          const SizedBox(height: 6),
+          Text(
+            'Amplía el rango de búsqueda o selecciona otra zona para ver más planes disponibles.',
+            textAlign: TextAlign.center,
+            style: (textTheme.bodySmall ?? const TextStyle()).copyWith(
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              color: colors.onSurfaceVariant,
             ),
-          ],
+          ),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: onChangeLocation,
+            icon: const Icon(Icons.tune_rounded, size: 18),
+            label: const Text('Ampliar rango o cambiar ubicación'),
+          ),
         ],
       ),
     );

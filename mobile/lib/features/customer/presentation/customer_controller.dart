@@ -85,6 +85,7 @@ class CustomerUiState {
   final LatLng? searchCenter;
   final String? searchZoneLabel;
   final int? searchRadiusMeters;
+  final bool hasConfiguredLocation;
   final String? plansRestaurantId;
   final List<PlanTemplate> planTemplates;
   final bool isLoadingPlans;
@@ -115,6 +116,7 @@ class CustomerUiState {
     this.searchCenter,
     this.searchZoneLabel,
     this.searchRadiusMeters,
+    this.hasConfiguredLocation = false,
     this.plansRestaurantId,
     this.planTemplates = const [],
     this.isLoadingPlans = false,
@@ -358,6 +360,8 @@ class CustomerUiState {
     LatLng? searchCenter,
     String? searchZoneLabel,
     int? searchRadiusMeters,
+    bool? hasConfiguredLocation,
+    bool clearSearchRadius = false,
     bool clearSearchArea = false,
     String? plansRestaurantId,
     List<PlanTemplate>? planTemplates,
@@ -393,8 +397,11 @@ class CustomerUiState {
       searchCenter: clearSearchArea ? null : (searchCenter ?? this.searchCenter),
       searchZoneLabel:
           clearSearchArea ? null : (searchZoneLabel ?? this.searchZoneLabel),
-      searchRadiusMeters:
-          clearSearchArea ? null : (searchRadiusMeters ?? this.searchRadiusMeters),
+      searchRadiusMeters: (clearSearchArea || clearSearchRadius)
+          ? null
+          : (searchRadiusMeters ?? this.searchRadiusMeters),
+      hasConfiguredLocation:
+          hasConfiguredLocation ?? this.hasConfiguredLocation,
       plansRestaurantId: plansRestaurantId ?? this.plansRestaurantId,
       planTemplates: planTemplates ?? this.planTemplates,
       isLoadingPlans: isLoadingPlans ?? this.isLoadingPlans,
@@ -437,7 +444,14 @@ class CustomerController extends ChangeNotifier {
   Timer? _sseFallbackPoller;
   int _sseRetryAttempt = 0;
   DateTime? _lastSseRedemptionAt;
+  bool _isLocationPromptOpen = false;
   final Set<String> _flashOrderNumbers = {};
+
+  bool get isLocationPromptOpen => _isLocationPromptOpen;
+
+  void setLocationPromptOpen(bool open) {
+    _isLocationPromptOpen = open;
+  }
 
   /// Etiquetas reales de qué incluye el plan (`incluye[]` de backend o menú del local).
   List<String> planIncludesFor(
@@ -898,6 +912,7 @@ class CustomerController extends ChangeNotifier {
         searchCenter: _state.searchCenter,
         searchZoneLabel: _state.searchZoneLabel,
         searchRadiusMeters: _state.searchRadiusMeters,
+        hasConfiguredLocation: _state.hasConfiguredLocation,
         plansRestaurantId: _state.plansRestaurantId,
         planTemplates: _state.planTemplates,
         undo: _state.undo,
@@ -1464,17 +1479,26 @@ class CustomerController extends ChangeNotifier {
     required int? radiusMeters,
   }) {
     if (radiusMeters == null) {
-      _emit(_state.copyWith(clearSearchArea: true));
+      _emit(_state.copyWith(
+        searchCenter: center,
+        searchZoneLabel: label,
+        clearSearchRadius: true,
+        hasConfiguredLocation: true,
+      ));
       return;
     }
     _emit(_state.copyWith(
       searchCenter: center,
       searchZoneLabel: label,
       searchRadiusMeters: radiusMeters,
+      hasConfiguredLocation: true,
     ));
   }
 
-  void clearSearchArea() => _emit(_state.copyWith(clearSearchArea: true));
+  void clearSearchArea() => _emit(_state.copyWith(
+        clearSearchArea: true,
+        hasConfiguredLocation: true,
+      ));
 
   Future<bool> claimReward(String restaurantId) async {
     final ok = await _repository.claimReward(restaurantId);
