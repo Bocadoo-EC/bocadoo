@@ -11,7 +11,6 @@ class OwnerOrder {
   const OwnerOrder({
     this.id,
     this.restaurantId,
-    this.clientId,
     required this.number,
     required this.dinerName,
     required this.amount,
@@ -49,7 +48,6 @@ class OwnerOrder {
 
   final String? id;
   final String? restaurantId;
-  final String? clientId;
   final String number;
   final String dinerName;
   final String? soup;

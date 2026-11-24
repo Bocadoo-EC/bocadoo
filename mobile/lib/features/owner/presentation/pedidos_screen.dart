@@ -35,88 +35,8 @@ class PedidosScreen extends ConsumerStatefulWidget {
   ConsumerState<PedidosScreen> createState() => _PedidosScreenState();
 }
 
-class _PedidosScreenState extends ConsumerState<PedidosScreen>
-    with WidgetsBindingObserver {
+class _PedidosScreenState extends ConsumerState<PedidosScreen> {
   bool _autoHandled = false;
-  Timer? _livePollTimer;
-  GoRouter? _router;
-  bool _routeVisible = true;
-  bool _pollInFlight = false;
-  String? _confirmingOrderNumber;
-  final Set<String> _pedidosResueltosLocal = <String>{};
-
-  static bool _isPendingOrderState(String rawEstado) {
-    final upper = rawEstado.trim().toUpperCase();
-    return upper == 'EN_CAMINO' || upper == 'PENDIENTE';
-  }
-
-  static bool _isConflictOrAlreadyMessage(String raw) {
-    final lower = raw.trim().toLowerCase();
-    return lower.contains('cambió mientras') ||
-        lower.contains('anteriormente') ||
-        lower.contains('ya fue') ||
-        lower.contains('409');
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _livePollTimer = Timer.periodic(
-      const Duration(seconds: 8),
-      (_) => unawaited(_pollTick()),
-    );
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final nextRouter = GoRouter.maybeOf(context);
-    if (nextRouter != _router) {
-      _router?.routeInformationProvider.removeListener(_onRouteChanged);
-      _router = nextRouter;
-      _router?.routeInformationProvider.addListener(_onRouteChanged);
-      _onRouteChanged();
-    }
-  }
-
-  void _onRouteChanged() {
-    final uri = _router?.routeInformationProvider.value.uri.toString() ?? '';
-    final visible = uri.startsWith('/owner/pedidos');
-    if (visible == _routeVisible) return;
-    _routeVisible = visible;
-    if (visible) {
-      unawaited(_pollTick());
-    }
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && _routeVisible) {
-      unawaited(_pollTick());
-    }
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    _router?.routeInformationProvider.removeListener(_onRouteChanged);
-    _livePollTimer?.cancel();
-    _livePollTimer = null;
-    super.dispose();
-  }
-
-  Future<void> _pollTick() async {
-    if (!mounted || !_routeVisible || _pollInFlight) return;
-    final lifecycle = WidgetsBinding.instance.lifecycleState;
-    if (lifecycle != null && lifecycle != AppLifecycleState.resumed) return;
-    _pollInFlight = true;
-    try {
-      _refresh();
-    } finally {
-      _pollInFlight = false;
-    }
-  }
 
   void _refresh() {
     ref.invalidate(activeOrdersProvider);
@@ -125,23 +45,14 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen>
     ref.invalidate(dailySummaryProvider);
     ref.invalidate(ownerClientsProvider);
     unawaited(ref.read(cajaMovementsProvider.notifier).refresh());
-    unawaited(ref.read(cajaLiveSyncProvider.notifier).syncNow(includeMovements: false));
   }
 
   OwnerClient? _resolveActivePlanClient(
     List<OwnerClient> clients,
     OwnerOrder order,
   ) {
-    final activeClients = clients
-        .where((c) => c.activeLunches > 0)
-        .toList();
+    final activeClients = clients.where((c) => c.activeLunches > 0).toList();
     if (activeClients.isEmpty) return null;
-    final directClientId = order.clientId?.trim();
-    if (directClientId != null && directClientId.isNotEmpty) {
-      final byDirectId =
-          activeClients.where((c) => c.id == directClientId).firstOrNull;
-      if (byDirectId != null) return byDirectId;
-    }
     if (!AppMode.useMock) {
       final clientId =
           ref.read(apiOwnerRepositoryProvider).clientIdForOrder(order.number);
@@ -205,15 +116,15 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen>
     OwnerOrder order, {
     OwnerClient? planOverrideClient,
   }) async {
-    final activeLunches =
-        planOverrideClient != null && planOverrideClient.activeLunches > 0
-            ? planOverrideClient.activeLunches
-            : null;
+    final overrideLunches = !order.paidByPlan &&
+            planOverrideClient != null &&
+            planOverrideClient.activeLunches > 0
+        ? planOverrideClient.activeLunches
+        : null;
     final payment = await _openSheet<({OwnerPayMethod method, int changeCents})>(
       _OrderConfirmChargeSheet(
         order: order,
-        planOverrideLunches: !order.paidByPlan ? activeLunches : null,
-        activePlanLunches: activeLunches,
+        planOverrideLunches: overrideLunches,
       ),
     );
     if (payment == null || !mounted) return;
@@ -231,110 +142,61 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen>
     OwnerPayMethod paymentMethod = OwnerPayMethod.efectivo,
     int changeCents = 0,
   }) async {
-    if (_confirmingOrderNumber == order.number) return;
-    _confirmingOrderNumber = order.number;
     final messenger = ScaffoldMessenger.of(context);
-    try {
-      final repo = ref.read(ownerOrdersRepositoryProvider);
-      final restaurantId = ref.read(ownerRestaurantIdProvider);
-      final usePlanPriority = !order.paidByPlan &&
-          planOverrideClient != null &&
-          planOverrideClient.activeLunches > 0 &&
-          !AppMode.useMock;
-      final res = usePlanPriority
-          ? await ref
-              .read(apiOwnerRepositoryProvider)
-              .confirmOrderWithPlanPriority(
-                order.number,
-                restaurantId,
-                clientId: planOverrideClient.id,
-                paymentMethod: paymentMethod,
-              )
-          : await repo.confirmAndRedeemOrder(
+    final repo = ref.read(ownerOrdersRepositoryProvider);
+    final restaurantId = ref.read(ownerRestaurantIdProvider);
+    final usePlanPriority = !order.paidByPlan &&
+        planOverrideClient != null &&
+        planOverrideClient.activeLunches > 0 &&
+        !AppMode.useMock;
+    final res = usePlanPriority
+        ? await ref
+            .read(apiOwnerRepositoryProvider)
+            .confirmOrderWithPlanPriority(
               order.number,
               restaurantId,
+              clientId: planOverrideClient.id,
               paymentMethod: paymentMethod,
-            );
-      if (!mounted) return;
-      if (!res.isValid) {
-        final conflictMsg = _isConflictOrAlreadyMessage(res.supportingLine);
-        if (res.isAlreadyRedeemed || conflictMsg) {
-          setState(() => _pedidosResueltosLocal.add(order.number));
-          if (!AppMode.useMock) {
-            ref.read(apiOwnerRepositoryProvider).markOrderResolvedLocally(
-                  orderId: order.id,
-                  orderNumber: order.number,
-                );
-          }
-          ref
-              .read(cajaLiveSyncProvider.notifier)
-              .removeOrderOptimistically(order.number);
-          _refresh();
-          showInfoSnackBar(
-            messenger,
-            'Este pedido ya fue descontado anteriormente',
+            )
+        : await repo.confirmAndRedeemOrder(
+            order.number,
+            restaurantId,
+            paymentMethod: paymentMethod,
           );
-          return;
-        }
-        _refresh();
-        final apiErr = AppMode.useMock
-            ? null
-            : ref.read(apiOwnerRepositoryProvider).consumeLastError();
-        showInfoSnackBar(
-          messenger,
-          res.supportingLine.isNotEmpty
-              ? res.supportingLine
-              : (apiErr ?? 'No se pudo completar el pedido #${order.number}.'),
-        );
-        return;
-      }
-
-      // Cierre atómico: desaparece inmediatamente de Pedidos en camino y sincroniza Caja.
-      setState(() => _pedidosResueltosLocal.add(order.number));
-      if (!AppMode.useMock) {
-        ref.read(apiOwnerRepositoryProvider).markOrderResolvedLocally(
-              orderId: order.id,
-              orderNumber: order.number,
-            );
-      }
-      ref
-          .read(cajaLiveSyncProvider.notifier)
-          .removeOrderOptimistically(order.number);
-      _refresh();
-
-      if ((order.paidByPlan && order.cashToCollectCents <= 0) ||
-          usePlanPriority) {
-        final remaining = res.remainingLunches ??
-            (planOverrideClient != null
-                ? (planOverrideClient.activeLunches - 1).clamp(0, 999)
-                : null);
-        final diner = order.dinerName.trim().isEmpty
-            ? 'comensal'
-            : order.dinerName.trim();
-        final feedback = remaining != null
-            ? '¡Listo! Se descontó 1 almuerzo del plan de $diner (quedan $remaining disp.)'
-            : '¡Listo! Se descontó 1 almuerzo del plan de $diner';
-        showInfoSnackBar(messenger, feedback);
-        return;
-      }
-
-      final totalText = OwnerFormat.money(
-        Money.fromCents(
-          order.paidByPlan ? order.cashToCollectCents : order.effectiveTotalCents,
-        ),
-      );
-      final changeText = changeCents > 0
-          ? ' · Cambio ${OwnerFormat.money(Money.fromCents(changeCents))}'
-          : '';
+    if (!mounted) return;
+    _refresh();
+    if (!res.isValid) {
+      final apiErr = AppMode.useMock
+          ? null
+          : ref.read(apiOwnerRepositoryProvider).consumeLastError();
       showInfoSnackBar(
         messenger,
-        order.paidByPlan
-            ? 'Plan canjeado y diferencia cobrada ($totalText · ${paymentMethod.label})$changeText'
-            : 'Pedido #${order.number} cobrado ($totalText · ${paymentMethod.label})$changeText y entregado',
+        res.supportingLine.isNotEmpty
+            ? res.supportingLine
+            : (apiErr ?? 'No se pudo completar el pedido #${order.number}.'),
       );
-    } finally {
-      _confirmingOrderNumber = null;
+      return;
     }
+
+    if ((order.paidByPlan && order.cashToCollectCents <= 0) || usePlanPriority) {
+      showInfoSnackBar(messenger, '${res.title} · ${res.supportingLine}');
+      return;
+    }
+
+    final totalText = OwnerFormat.money(
+      Money.fromCents(
+        order.paidByPlan ? order.cashToCollectCents : order.effectiveTotalCents,
+      ),
+    );
+    final changeText = changeCents > 0
+        ? ' · Cambio ${OwnerFormat.money(Money.fromCents(changeCents))}'
+        : '';
+    showInfoSnackBar(
+      messenger,
+      order.paidByPlan
+          ? 'Plan canjeado y diferencia cobrada ($totalText · ${paymentMethod.label})$changeText'
+          : 'Pedido #${order.number} cobrado ($totalText · ${paymentMethod.label})$changeText y entregado',
+    );
   }
 
   Future<T?> _openSheet<T>(Widget child) => showModalBottomSheet<T>(
@@ -355,19 +217,12 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen>
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     final orders = ref.watch(activeOrdersProvider);
-    final clientsAsync = ref.watch(ownerClientsProvider);
-    final clients = clientsAsync.value ?? const <OwnerClient>[];
+    final clients =
+        ref.watch(ownerClientsProvider).value ?? const <OwnerClient>[];
     final tables = ref.watch(pendingTablesProvider).value ?? const <PendingTable>[];
     final lunchesToday =
         ref.watch(dailySummaryProvider).value?.lunchesRedeemedToday ?? 0;
-    final visibleOrders = (orders.value ?? const <OwnerOrder>[])
-        .where(
-          (o) =>
-              _isPendingOrderState(o.estado) &&
-              !_pedidosResueltosLocal.contains(o.number),
-        )
-        .toList(growable: false);
-    final count = visibleOrders.length + tables.length;
+    final count = (orders.value?.length ?? 0) + tables.length;
 
     return Scaffold(
       backgroundColor: colors.surface,
@@ -397,23 +252,14 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen>
                 onRetry: _refresh,
               ),
               data: (list) {
-                final filteredList = list
-                    .where(
-                      (o) =>
-                          _isPendingOrderState(o.estado) &&
-                          !_pedidosResueltosLocal.contains(o.number),
-                    )
-                    .toList(growable: false);
-                if (clientsAsync.hasValue || clientsAsync.hasError) {
-                  _maybeOpenFromScanner(filteredList, clients);
-                }
-                if (filteredList.isEmpty && tables.isEmpty) {
+                _maybeOpenFromScanner(list, clients);
+                if (list.isEmpty && tables.isEmpty) {
                   return _Empty(
                     onBack: _back,
                     hasDispatchedToday: lunchesToday > 0,
                   );
                 }
-                final totalItems = tables.length + filteredList.length;
+                final totalItems = tables.length + list.length;
                 return RefreshIndicator(
                   onRefresh: () async => _refresh(),
                   child: ListView.separated(
@@ -431,7 +277,7 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen>
                           },
                         );
                       }
-                      final order = filteredList[i - tables.length];
+                      final order = list[i - tables.length];
                       final matchedClient =
                           _resolveActivePlanClient(clients, order);
                       final planLunches = !order.paidByPlan &&
@@ -439,14 +285,9 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen>
                               matchedClient.activeLunches > 0
                           ? matchedClient.activeLunches
                           : null;
-                      final activePlanLunches =
-                          matchedClient != null && matchedClient.activeLunches > 0
-                              ? matchedClient.activeLunches
-                              : null;
                       return _OrderCard(
                         order: order,
                         planOverrideLunches: planLunches,
-                        activePlanLunches: activePlanLunches,
                         onAction: () => _act(
                           order,
                           planOverrideClient: matchedClient,
@@ -632,13 +473,11 @@ class _OrderCard extends StatelessWidget {
     required this.order,
     required this.onAction,
     this.planOverrideLunches,
-    this.activePlanLunches,
   });
 
   final OwnerOrder order;
   final VoidCallback onAction;
   final int? planOverrideLunches;
-  final int? activePlanLunches;
 
   @override
   Widget build(BuildContext context) {
@@ -647,11 +486,6 @@ class _OrderCard extends StatelessWidget {
     final arrival = _arrivalLabel(order);
     final isPlan = order.paidByPlan ||
         (planOverrideLunches != null && planOverrideLunches! > 0);
-    final hasPlanOverride =
-        !order.paidByPlan &&
-        planOverrideLunches != null &&
-        planOverrideLunches! > 0;
-    final badgeLunches = planOverrideLunches ?? activePlanLunches;
     TextSpan line(String label, String value) => TextSpan(children: [
           TextSpan(text: '$label: ', style: TextStyle(fontWeight: FontWeight.w800, color: colors.primary)),
           TextSpan(text: value),
@@ -722,9 +556,7 @@ class _OrderCard extends StatelessWidget {
               if (!isPlan) ...[
                 const TextSpan(text: '\n'),
                 line('Pago', 'Pago por confirmar en caja'),
-              ] else if (!hasPlanOverride &&
-                  order.paidByPlan &&
-                  order.cashToCollectCents > 0) ...[
+              ] else if (order.paidByPlan && order.cashToCollectCents > 0) ...[
                 const TextSpan(text: '\n'),
                 line(
                   'Saldo por cobrar',
@@ -791,8 +623,8 @@ class _OrderCard extends StatelessWidget {
           LayoutBuilder(
             builder: (context, constraints) {
               final badge = OwnerBadge(
-                label: badgeLunches != null && badgeLunches > 0
-                    ? '🎫 Plan activo ($badgeLunches disp.)'
+                label: planOverrideLunches != null
+                    ? '🎫 Plan activo ($planOverrideLunches disp.)'
                     : '🎫 Plan activo · 1 almuerzo',
                 background: b.successContainer,
                 foreground: b.onSuccessContainer,
@@ -837,12 +669,10 @@ class _OrderConfirmChargeSheet extends StatefulWidget {
   const _OrderConfirmChargeSheet({
     required this.order,
     this.planOverrideLunches,
-    this.activePlanLunches,
   });
 
   final OwnerOrder order;
   final int? planOverrideLunches;
-  final int? activePlanLunches;
 
   @override
   State<_OrderConfirmChargeSheet> createState() =>
@@ -853,7 +683,6 @@ class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
   OwnerPayMethod _method = OwnerPayMethod.efectivo;
   final TextEditingController _cash = TextEditingController();
   bool _expanded = false;
-  bool _submitting = false;
 
   @override
   void dispose() {
@@ -918,12 +747,11 @@ class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
     final primaryButtonLabel = isPlan
         ? (hasCashToCollect
             ? 'Descontar 1 almuerzo y cobrar · $totalFormatted'
-            : 'Descontar 1 almuerzo')
+            : 'Descontar 1 almuerzo del plan')
         : 'Confirmar cobro y entrega · $totalFormatted';
     final headlineMetric = isPlan
         ? (hasCashToCollect ? totalFormatted : '1 almuerzo')
         : totalFormatted;
-    final badgeLunches = widget.planOverrideLunches ?? widget.activePlanLunches;
 
     return ConstrainedBox(
       constraints: BoxConstraints(
@@ -1021,21 +849,12 @@ class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
                                   crossAxisAlignment: WrapCrossAlignment.center,
                                   children: [
                                     OwnerBadge(
-                                      label: badgeLunches != null && badgeLunches > 0
-                                          ? 'Plan activo ($badgeLunches disp.)'
-                                          : 'Plan activo',
+                                      label: hasPlanOverride
+                                          ? 'Plan activo (${widget.planOverrideLunches} disp.) · 1 almuerzo'
+                                          : 'Plan activo · 1 almuerzo',
                                       background: b.successContainer,
                                       foreground: b.onSuccessContainer,
                                     ),
-                                    if (!hasCashToCollect)
-                                      Text(
-                                        '1 almuerzo del plan activo',
-                                        style: TextStyle(
-                                          fontSize: 12.5,
-                                          fontWeight: FontWeight.w800,
-                                          color: b.success,
-                                        ),
-                                      ),
                                   ],
                                 ),
                               ],
@@ -1134,78 +953,102 @@ class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
                     ],
                   ),
                 ),
-                if (hasCashToCollect) ...[
-                  const SizedBox(height: 14),
-                  const OwnerSectionLabel('Método de pago'),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      for (final (m, icon) in const [
-                        (OwnerPayMethod.efectivo, Icons.payments_outlined),
-                        (
-                          OwnerPayMethod.transferencia,
-                          Icons.account_balance_outlined
-                        ),
-                        (OwnerPayMethod.deuna, Icons.bolt_rounded),
-                      ]) ...[
-                        if (m != OwnerPayMethod.efectivo) const SizedBox(width: 8),
-                        Expanded(
-                          child: Builder(
-                            builder: (context) {
-                              final selected = _method == m;
-                              final bg = selected
-                                  ? colors.primary
-                                  : Theme.of(context).scaffoldBackgroundColor;
-                              final fg = selected
-                                  ? colors.onPrimary
-                                  : colors.onSurface;
-                              return Material(
-                                color: bg,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(14),
-                                  side: BorderSide(
-                                    color: selected
-                                        ? colors.primary
-                                        : colors.outlineVariant,
-                                  ),
-                                ),
-                                child: InkWell(
-                                  borderRadius: BorderRadius.circular(14),
-                                  onTap: () => setState(() {
-                                    _method = m;
-                                    if (m != OwnerPayMethod.efectivo) {
-                                      _cash.clear();
-                                    }
-                                  }),
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(vertical: 12),
-                                    child: Column(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(icon, size: 20, color: fg),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          m.shortLabel,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                            fontSize: 13,
-                                            fontWeight: FontWeight.w900,
-                                            color: fg,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              );
-                            },
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    const OwnerSectionLabel('Método de pago'),
+                    if (!hasCashToCollect) ...[
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '1 almuerzo del plan',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.end,
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w800,
+                            color: b.success,
                           ),
                         ),
-                      ],
+                      ),
                     ],
-                  ),
-                ],
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    for (final (m, icon) in const [
+                      (OwnerPayMethod.efectivo, Icons.payments_outlined),
+                      (
+                        OwnerPayMethod.transferencia,
+                        Icons.account_balance_outlined
+                      ),
+                      (OwnerPayMethod.deuna, Icons.bolt_rounded),
+                    ]) ...[
+                      if (m != OwnerPayMethod.efectivo) const SizedBox(width: 8),
+                      Expanded(
+                        child: Builder(
+                          builder: (context) {
+                            final selected = hasCashToCollect && _method == m;
+                            final bg = !hasCashToCollect
+                                ? colors.surfaceContainerHighest.withValues(alpha: 0.45)
+                                : (selected
+                                    ? colors.primary
+                                    : Theme.of(context).scaffoldBackgroundColor);
+                            final fg = !hasCashToCollect
+                                ? colors.onSurfaceVariant.withValues(alpha: 0.55)
+                                : (selected ? colors.onPrimary : colors.onSurface);
+                            return Material(
+                              color: bg,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                                side: BorderSide(
+                                  color: selected
+                                      ? colors.primary
+                                      : colors.outlineVariant.withValues(
+                                          alpha: hasCashToCollect ? 1 : 0.6,
+                                        ),
+                                ),
+                              ),
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(14),
+                                onTap: hasCashToCollect
+                                    ? () => setState(() {
+                                          _method = m;
+                                          if (m != OwnerPayMethod.efectivo) {
+                                            _cash.clear();
+                                          }
+                                        })
+                                    : null,
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(icon, size: 20, color: fg),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        m.shortLabel,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w900,
+                                          color: fg,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
                 if (isCash) ...[
                   const SizedBox(height: 12),
                   Row(
@@ -1274,14 +1117,11 @@ class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
                 ],
                 const SizedBox(height: 16),
                 ElevatedButton.icon(
-                  onPressed: (canConfirm && !_submitting)
-                      ? () {
-                          setState(() => _submitting = true);
-                          Navigator.of(context).pop((
+                  onPressed: canConfirm
+                      ? () => Navigator.of(context).pop((
                             method: _method,
                             changeCents: changeCents > 0 ? changeCents : 0,
-                          ));
-                        }
+                          ))
                       : null,
                   icon: const Icon(Icons.check_circle_outline_rounded),
                   label: Text(

@@ -45,20 +45,12 @@ Future<void> openScannerFlow(BuildContext context, WidgetRef ref) async {
       }
       return;
     }
-    if (state is! OwnerSuccess &&
-        state is! OwnerError &&
-        state is! OwnerPlanOrderConfirm) {
-      return;
-    }
+    if (state is! OwnerSuccess && state is! OwnerError) return;
 
     while (true) {
       if (!context.mounted) return;
       state = ref.read(ownerControllerProvider);
-      if (state is! OwnerSuccess &&
-          state is! OwnerError &&
-          state is! OwnerPlanOrderConfirm) {
-        return;
-      }
+      if (state is! OwnerSuccess && state is! OwnerError) return;
 
       ref.invalidate(activeOrdersProvider);
       ref.invalidate(pendingTablesProvider);
@@ -67,7 +59,6 @@ Future<void> openScannerFlow(BuildContext context, WidgetRef ref) async {
       final name = switch (state) {
         OwnerSuccess(:final result) => result.studentName,
         OwnerError(:final result) => result?.studentName,
-        OwnerPlanOrderConfirm(:final order) => order.dinerName,
         _ => null,
       };
       final dialogResult = await showDialog<ScanDialogResult>(
@@ -75,7 +66,6 @@ Future<void> openScannerFlow(BuildContext context, WidgetRef ref) async {
         builder: (_) => const ScanResultDialog(),
       );
       if (!context.mounted) return;
-      state = ref.read(ownerControllerProvider);
 
       final action = dialogResult?.action ?? ScanDialogAction.done;
       final extraGuests = dialogResult?.extraGuests ?? 0;
@@ -118,10 +108,9 @@ Future<void> openScannerFlow(BuildContext context, WidgetRef ref) async {
             );
           }
           final totalRedeemed = 1 + extraGuests;
-          final who = (result.studentName ?? 'Comensal').trim();
-          final finalRem = (result.remainingLunches! - extraGuests).clamp(0, 999);
+          final who = result.studentName ?? 'Comensal';
           final undoLabel = totalRedeemed == 1
-              ? '¡Listo! Se descontó 1 almuerzo del plan de $who (quedan $finalRem disp.)'
+              ? '1 almuerzo canjeado · $who'
               : '$totalRedeemed almuerzos canjeados · $who';
           showUndoSnackBar(
             messenger,
@@ -145,13 +134,6 @@ Future<void> openScannerFlow(BuildContext context, WidgetRef ref) async {
               );
             },
           );
-        } else {
-          final who = (result.studentName ?? 'comensal').trim();
-          final rem = result.remainingLunches;
-          final feedback = rem != null
-              ? '¡Listo! Se descontó 1 almuerzo del plan de $who (quedan $rem disp.)'
-              : '¡Listo! Se descontó 1 almuerzo del plan de $who';
-          showInfoSnackBar(messenger, feedback);
         }
       }
 
@@ -207,28 +189,11 @@ class ScanResultDialog extends ConsumerStatefulWidget {
 }
 
 class _ScanResultDialogState extends ConsumerState<ScanResultDialog> {
-  late OwnerState _shown = ref.read(ownerControllerProvider);
+  late final OwnerState _shown = ref.read(ownerControllerProvider);
   Timer? _timer;
   int _undoSeconds = 0;
   bool _undoing = false;
-  bool _confirmingPlanOrder = false;
   int _extraGuests = 0;
-
-  Future<void> _confirmPlanOrder() async {
-    if (_confirmingPlanOrder) return;
-    setState(() => _confirmingPlanOrder = true);
-    await ref.read(ownerControllerProvider.notifier).confirmPendingPlanOrder();
-    if (!mounted) return;
-    final next = ref.read(ownerControllerProvider);
-    if (next is OwnerSuccess) {
-      Navigator.of(context).pop(const ScanDialogResult(ScanDialogAction.done));
-      return;
-    }
-    setState(() {
-      _confirmingPlanOrder = false;
-      _shown = next;
-    });
-  }
 
   bool get _redeemed {
     final shown = _shown;
@@ -278,28 +243,10 @@ class _ScanResultDialogState extends ConsumerState<ScanResultDialog> {
     showInfoSnackBar(messenger, ok ? 'Descuento revertido' : 'No se pudo deshacer el descuento');
   }
 
+  static String _lunchesLeft(int n) => n == 1 ? 'Queda 1 almuerzo' : 'Quedan $n almuerzos';
+
   _View _view() {
     final shown = _shown;
-    if (shown is OwnerPlanOrderConfirm) {
-      final ord = shown.order;
-      final dishParts = <String>[
-        if (ord.soup != null && ord.soup!.trim().isNotEmpty) ord.soup!.trim(),
-        if (ord.main != null && ord.main!.trim().isNotEmpty) ord.main!.trim(),
-        if (ord.drink != null && ord.drink!.trim().isNotEmpty) ord.drink!.trim(),
-      ];
-      final planLabel = shown.availableLunches != null
-          ? 'Plan activo (${shown.availableLunches} disp.)'
-          : 'Plan activo';
-      return _View(
-        _Tone.success,
-        Icons.confirmation_num_outlined,
-        planLabel,
-        '1 almuerzo del plan activo',
-        dishName: dishParts.isNotEmpty
-            ? 'Pedido #${ord.number} · ${dishParts.join(' · ')}'
-            : 'Pedido #${ord.number}',
-      );
-    }
     if (shown is OwnerSuccess) {
       final r = shown.result;
       final postScan = r.remainingLunches ?? 0;
@@ -307,7 +254,7 @@ class _ScanResultDialogState extends ConsumerState<ScanResultDialog> {
           ? (postScan - _extraGuests).clamp(0, postScan)
           : postScan;
       if (r.isWarning) {
-        final detail = left > 0 ? 'Plan activo ($left disp.) · 1 almuerzo del plan activo' : '1 almuerzo del plan activo';
+        final detail = left > 0 ? '${_lunchesLeft(left)} · ${r.supportingLine}' : r.supportingLine;
         return _View(
           _Tone.warning,
           Icons.warning_amber_rounded,
@@ -320,14 +267,8 @@ class _ScanResultDialogState extends ConsumerState<ScanResultDialog> {
       }
       final title = _supportsExtraGuests && _extraGuests > 0
           ? '${1 + _extraGuests} almuerzos canjeados'
-          : (r.remainingLunches != null
-              ? 'Plan activo ($left disp.)'
-              : (r.title.isNotEmpty && r.title != 'Validado'
-                  ? r.title
-                  : 'Plan activo'));
-      final detail = r.cashToCollectCents > 0
-          ? r.supportingLine
-          : '1 almuerzo del plan activo';
+          : (r.title.isNotEmpty && r.title != 'Validado' ? r.title : 'Almuerzo canjeado');
+      final detail = r.remainingLunches != null ? _lunchesLeft(left) : r.supportingLine;
       return _View(
         _Tone.success,
         Icons.check_circle_outline_rounded,
@@ -358,12 +299,9 @@ class _ScanResultDialogState extends ConsumerState<ScanResultDialog> {
         );
       }
       if (r.isAlreadyRedeemed) {
-        return _View(
-          _Tone.neutral,
-          Icons.history_rounded,
-          r.title.isNotEmpty ? r.title : 'Pedido ya descontado',
-          'Este pedido ya fue descontado anteriormente',
-        );
+        final at = r.redeemedAt;
+        return _View(_Tone.neutral, Icons.history_rounded, r.title,
+            at != null ? 'Se descontó a las ${OwnerFormat.time(at)}' : r.supportingLine);
       }
       if (r.actionRequired == 'RETRY_NETWORK') {
         return _View(
@@ -407,7 +345,6 @@ class _ScanResultDialogState extends ConsumerState<ScanResultDialog> {
     final name = switch (_shown) {
       OwnerSuccess(:final result) => result.studentName,
       OwnerError(:final result) => result?.studentName,
-      OwnerPlanOrderConfirm(:final order) => order.dinerName,
       _ => null,
     };
     final (Color bg, Color fg) = switch (view.tone) {
@@ -515,35 +452,7 @@ class _ScanResultDialogState extends ConsumerState<ScanResultDialog> {
               ),
             ],
             const SizedBox(height: 16),
-            if (_shown is OwnerPlanOrderConfirm) ...[
-              ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(minimumSize: buttonSize),
-                onPressed: _confirmingPlanOrder ? null : _confirmPlanOrder,
-                icon: _confirmingPlanOrder
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.check_circle_outline_rounded),
-                label: Text(
-                  _confirmingPlanOrder
-                      ? 'Descontando...'
-                      : 'Descontar 1 almuerzo',
-                ),
-              ),
-              const SizedBox(height: 8),
-              FilledButton.tonal(
-                style: FilledButton.styleFrom(minimumSize: buttonSize),
-                onPressed: _confirmingPlanOrder
-                    ? null
-                    : () => pop(const ScanDialogResult(ScanDialogAction.done)),
-                child: const Text(
-                  'Cancelar',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
-                ),
-              ),
-            ] else if (view.action != null) ...[
+            if (view.action != null) ...[
               ElevatedButton(
                 style: ElevatedButton.styleFrom(minimumSize: buttonSize),
                 onPressed: _undoing
