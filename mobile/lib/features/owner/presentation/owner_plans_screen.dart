@@ -59,6 +59,8 @@ class _OwnerPlansScreenState extends ConsumerState<OwnerPlansScreen> {
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     final clients = ref.watch(ownerClientsProvider);
+    final plansAsync = ref.watch(planTemplatesProvider);
+    final hasPlans = (plansAsync.value ?? const <OwnerPlanTemplate>[]).isNotEmpty;
     final q = _search.text.trim().toLowerCase();
     final filtered = [
       for (final c in clients.value ?? const <OwnerClient>[])
@@ -92,7 +94,7 @@ class _OwnerPlansScreenState extends ConsumerState<OwnerPlansScreen> {
                     onPressed: _addClient,
                     icon: const Icon(Icons.add_rounded),
                   ),
-                ] else
+                ] else if (hasPlans)
                   IconButton.filledTonal(
                     tooltip: 'Nuevo plan',
                     onPressed: () => context.push('/owner/planes/nuevo'),
@@ -134,7 +136,6 @@ class _OwnerPlansScreenState extends ConsumerState<OwnerPlansScreen> {
   }
 
   Widget _plansBody() {
-    final colors = context.colorScheme;
     final counts = ref.watch(planClientCountsProvider).value ?? const <String, int>{};
     return ref.watch(planTemplatesProvider).when(
           loading: () => const OwnerLoadingView('Cargando planes'),
@@ -164,9 +165,6 @@ class _OwnerPlansScreenState extends ConsumerState<OwnerPlansScreen> {
                     ),
                     const SizedBox(height: 12),
                   ],
-                  Text('Toca la cantidad de un plan para editarlo.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: colors.onSurfaceVariant)),
                 ]),
         );
   }
@@ -239,55 +237,74 @@ class _PlanCard extends StatelessWidget {
 
     return Opacity(
       opacity: plan.active ? 1 : 0.6,
-      child: Container(
-        padding: const EdgeInsets.all(18),
-        decoration: BoxDecoration(
-          color: plan.active ? colors.surface : Theme.of(context).scaffoldBackgroundColor,
+      child: Material(
+        color: plan.active ? colors.surface : Theme.of(context).scaffoldBackgroundColor,
+        shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-          border: Border.all(color: colors.outlineVariant),
+          side: BorderSide(color: colors.outlineVariant),
         ),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Row(children: [
-            Flexible(
-              child: OwnerBadge(
-                label: tagLabel,
-                background: colors.primaryContainer,
-                foreground: colors.onPrimaryContainer,
-              ),
-            ),
-            const SizedBox(width: 6),
-            OwnerBadge(
-              label: plan.coverage.label,
-              background: Theme.of(context).scaffoldBackgroundColor,
-              foreground: colors.onSurfaceVariant,
-            ),
-            const Spacer(),
-            Semantics(
-              label: 'Estado de ${plan.name}',
-              child: Switch(value: plan.active, onChanged: onToggle),
-            ),
-          ]),
-          InkWell(
-            borderRadius: BorderRadius.circular(12),
-            onTap: onEdit,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: Row(children: [
+        child: InkWell(
+          borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+          onTap: onEdit,
+          child: Padding(
+            padding: const EdgeInsets.all(18),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Row(children: [
                 Expanded(
-                  child: Text('${plan.lunches} ${plan.coverage.unit}',
-                      style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: colors.onSurface)),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: colors.primaryContainer,
+                        borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+                      ),
+                      child: Text(
+                        tagLabel,
+                        maxLines: 1,
+                        softWrap: false,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                          color: colors.onPrimaryContainer,
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
-                Icon(Icons.edit_outlined, size: 20, color: colors.primary),
+                const SizedBox(width: 8),
+                Semantics(
+                  label: 'Estado de ${plan.name}',
+                  child: Switch(value: plan.active, onChanged: onToggle),
+                ),
               ]),
-            ),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Row(children: [
+                  Expanded(
+                    child: Text(
+                      plan.lunches == 1 ? '1 almuerzo' : '${plan.lunches} almuerzos',
+                      style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: colors.onSurface),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Editar plan',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: onEdit,
+                    icon: Icon(Icons.edit_outlined, size: 20, color: colors.primary),
+                  ),
+                ]),
+              ),
+              Divider(height: 16, color: colors.outlineVariant),
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                column('Precio', OwnerFormat.money(plan.price), '${OwnerFormat.money(plan.perLunch)} c/u'),
+                column('Vigencia', '${plan.validityDays} días'),
+                column('Clientes', '$clients'),
+              ]),
+            ]),
           ),
-          Divider(height: 16, color: colors.outlineVariant),
-          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            column('Precio', OwnerFormat.money(plan.price), '${OwnerFormat.money(plan.perLunch)} c/u'),
-            column('Vigencia', '${plan.validityDays} días'),
-            column('Clientes', '$clients'),
-          ]),
-        ]),
+        ),
       ),
     );
   }

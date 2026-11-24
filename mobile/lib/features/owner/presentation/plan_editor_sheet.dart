@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -10,6 +11,7 @@ import 'owner_format.dart';
 import 'owner_widgets.dart';
 
 const _dayLetters = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
+const _cardRadius = 12.0;
 
 /// Valores que precarga cada tipo de plan.
 OwnerPlanTemplate _preset(PlanKind kind) => switch (kind) {
@@ -41,16 +43,19 @@ class PlanEditorSheet extends ConsumerStatefulWidget {
 
 class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
   final _name = TextEditingController();
+  final _priceController = TextEditingController();
   OwnerPlanTemplate _plan = _preset(PlanKind.mensual);
   bool _loaded = false;
   bool _saving = false;
   String? _error;
+  String? _priceError;
 
   bool get _editing => widget.planId != null;
 
   @override
   void dispose() {
     _name.dispose();
+    _priceController.dispose();
     super.dispose();
   }
 
@@ -58,8 +63,11 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
     if (_loaded) return;
     _loaded = true;
     final existing = plans.where((p) => p.id == widget.planId).firstOrNull;
-    if (existing != null) _plan = existing;
+    if (existing != null) {
+      _plan = existing.copyWith(coverage: PlanCoverage.almuerzo);
+    }
     _name.text = _plan.name;
+    _priceController.text = _plan.price.toStringAsFixed(2);
   }
 
   void _update(OwnerPlanTemplate next) => setState(() => _plan = next);
@@ -67,8 +75,11 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
   void _applyKind(PlanKind kind) {
     final p = _preset(kind);
     _name.text = p.name;
+    _priceController.text = p.price.toStringAsFixed(2);
+    _priceError = null;
     _update(_plan.copyWith(
       kind: kind,
+      coverage: PlanCoverage.almuerzo,
       name: p.name,
       lunches: p.lunches,
       price: p.price,
@@ -78,23 +89,42 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
     ));
   }
 
+  double? _parsePrice(String raw) {
+    final normalized = raw.trim().replaceAll(',', '.');
+    if (normalized.isEmpty) return null;
+    final parsed = double.tryParse(normalized);
+    if (parsed == null || parsed <= 0) return null;
+    return (parsed * 100).round() / 100;
+  }
+
   Future<void> _save() async {
     final name = _name.text.trim();
-    if (name.isEmpty) {
-      setState(() => _error = 'Escribe el nombre del plan.');
+    final parsedPrice = _parsePrice(_priceController.text);
+    if (name.isEmpty || parsedPrice == null) {
+      setState(() {
+        _error = name.isEmpty ? 'Escribe el nombre del plan.' : null;
+        _priceError =
+            parsedPrice == null ? 'Ingresa un precio mayor a \$0.00.' : null;
+      });
       return;
     }
     setState(() {
       _saving = true;
       _error = null;
+      _priceError = null;
     });
     final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
     final container = ProviderScope.containerOf(context, listen: false);
     try {
-      final saved = await ref
-          .read(ownerCashRepositoryProvider)
-          .savePlanTemplate(ref.read(ownerRestaurantIdProvider), _plan.copyWith(name: name));
+      final saved = await ref.read(ownerCashRepositoryProvider).savePlanTemplate(
+            ref.read(ownerRestaurantIdProvider),
+            _plan.copyWith(
+              name: name,
+              price: parsedPrice,
+              coverage: PlanCoverage.almuerzo,
+            ),
+          );
       if (!mounted) return;
       container
         ..invalidate(planTemplatesProvider)
@@ -122,13 +152,11 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
     }
     _load(plans.value ?? const []);
     final p = _plan;
-    final unit = p.coverage.unit;
-    final unitTitle = '${unit[0].toUpperCase()}${unit.substring(1)}';
 
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
       child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           OwnerBackHeader(
             title: _editing ? 'Editar plan' : 'Nuevo plan',
@@ -136,12 +164,12 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
             eyebrow: Text(ref.watch(ownerRestaurantNameProvider),
                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: colors.onSurfaceVariant)),
             trailing: !_editing
-                ? OwnerBadge(label: 'Borrador', background: colors.primaryContainer, foreground: colors.onPrimaryContainer)
+                ? null
                 : p.active
                     ? OwnerBadge(label: 'Activo', background: b.successContainer, foreground: b.success)
                     : OwnerBadge(
                         label: 'Inactivo',
-                        background: Theme.of(context).scaffoldBackgroundColor,
+                        background: colors.surfaceContainerHighest,
                         foreground: colors.onSurfaceVariant,
                       ),
           ),
@@ -157,10 +185,10 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
               Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(_name.text.trim().isEmpty ? 'Plan ${p.lunches} $unit' : _name.text.trim(),
+                    Text(_name.text.trim().isEmpty ? 'Plan ${p.lunches} almuerzos' : _name.text.trim(),
                         style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900, color: b.imageForeground)),
                     const SizedBox(height: 2),
-                    Text('${p.lunches} $unit · vigencia ${p.validityDays} días',
+                    Text('${p.lunches} almuerzos · vigencia ${p.validityDays} días',
                         style: TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.w600,
@@ -188,37 +216,32 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
             textCapitalization: TextCapitalization.sentences,
             decoration: InputDecoration(
               hintText: 'Ej. Plan mensual ejecutivo',
+              fillColor: colors.surface,
               suffixIcon: const Icon(Icons.edit_outlined),
               errorText: _error,
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(_cardRadius),
+                borderSide: BorderSide(color: colors.outlineVariant),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(_cardRadius),
+                borderSide: BorderSide(color: colors.primary, width: 1.5),
+              ),
             ),
             onChanged: (_) => setState(() => _error = null),
           ),
           const SizedBox(height: 16),
           const OwnerSectionLabel('Tipo de plan'),
           const SizedBox(height: 6),
-          OwnerSegmented(
-            labels: const ['Semanal', 'Quincenal', 'Mensual', 'Libre'],
+          _CleanPlanKindBar(
             index: p.kind.index,
-            filledSelected: true,
             onChanged: (i) => _applyKind(PlanKind.values[i]),
-          ),
-          const SizedBox(height: 16),
-          const OwnerSectionLabel('Qué cubre el plan'),
-          const SizedBox(height: 6),
-          OwnerSegmented(
-            labels: [for (final c in PlanCoverage.values) c.label],
-            index: p.coverage.index,
-            filledSelected: true,
-            onChanged: (i) {
-              final c = PlanCoverage.values[i];
-              _update(p.copyWith(coverage: c, includes: c.defaultIncludes));
-            },
           ),
           const SizedBox(height: 16),
           Row(children: [
             Expanded(
               child: _Stepper(
-                label: unitTitle,
+                label: 'Almuerzos',
                 value: '${p.lunches}',
                 onMinus: p.lunches > 1 ? () => _update(p.copyWith(lunches: p.lunches - 1)) : null,
                 onPlus: () => _update(p.copyWith(lunches: p.lunches + 1)),
@@ -235,13 +258,98 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
             ),
           ]),
           const SizedBox(height: 10),
-          Row(children: [
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Expanded(
-              child: _Stepper(
-                label: 'Precio del plan',
-                value: OwnerFormat.money(p.price),
-                onMinus: p.price > 1 ? () => _update(p.copyWith(price: p.price - 1)) : null,
-                onPlus: () => _update(p.copyWith(price: p.price + 1)),
+              child: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: colors.surface,
+                  borderRadius: BorderRadius.circular(_cardRadius),
+                  border: Border.all(
+                    color: _priceError != null ? colors.error : colors.outlineVariant,
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'Precio del plan',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: colors.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: _priceController,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      inputFormatters: [
+                        FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+                      ],
+                      maxLines: 1,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w900,
+                        color: colors.onSurface,
+                      ),
+                      decoration: InputDecoration(
+                        prefixText: '\$ ',
+                        prefixStyle: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                          color: colors.onSurfaceVariant,
+                        ),
+                        hintText: '15.00',
+                        isDense: true,
+                        filled: true,
+                        fillColor: colors.surface,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 10,
+                        ),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: BorderSide(color: colors.outlineVariant),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: BorderSide(color: colors.outlineVariant),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: BorderSide(color: colors.primary, width: 1.5),
+                        ),
+                      ),
+                      onChanged: (raw) {
+                        final parsed = _parsePrice(raw);
+                        setState(() {
+                          _priceError = null;
+                          if (parsed != null) {
+                            _plan = _plan.copyWith(price: parsed);
+                          }
+                        });
+                      },
+                    ),
+                    if (_priceError != null) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        _priceError!,
+                        maxLines: 2,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: colors.error,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
               ),
             ),
             const SizedBox(width: 10),
@@ -276,14 +384,10 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
               ),
           ]),
           const SizedBox(height: 16),
-          OwnerSectionLabel(switch (p.coverage) {
-            PlanCoverage.almuerzo => 'El almuerzo incluye',
-            PlanCoverage.desayuno => 'El desayuno incluye',
-            PlanCoverage.mixto => 'El combo incluye',
-          }),
+          const OwnerSectionLabel('El almuerzo incluye'),
           const SizedBox(height: 6),
           Wrap(spacing: 6, runSpacing: 6, children: [
-            for (final item in p.coverage.includeOptions)
+            for (final item in PlanCoverage.almuerzo.includeOptions)
               _IncludeChip(
                 label: item,
                 included: p.includes.contains(item),
@@ -296,18 +400,18 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
           ]),
           const SizedBox(height: 16),
           Container(
-            padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+            padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
             decoration: BoxDecoration(
-              color: Theme.of(context).scaffoldBackgroundColor,
-              borderRadius: BorderRadius.circular(18),
+              color: colors.surface,
+              borderRadius: BorderRadius.circular(_cardRadius),
               border: Border.all(color: colors.outlineVariant),
             ),
             child: Row(children: [
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('Visible en el marketplace',
+                  Text('Visible para los comensales',
                       style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: colors.onSurface)),
-                  Text('Los comensales pueden comprarlo en la app',
+                  Text('Los clientes podrán verlo y comprarlo desde la app',
                       style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: colors.onSurfaceVariant)),
                 ]),
               ),
@@ -315,18 +419,87 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
             ]),
           ),
           const SizedBox(height: 20),
-          ElevatedButton.icon(
-            onPressed: _saving ? null : _save,
-            icon: const Icon(Icons.check_rounded),
-            label: const Text('Guardar plan'),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Gratis para publicar. Bocadoo cobra un porcentaje solo con cada almuerzo servido.',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: colors.onSurfaceVariant),
+          SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: _saving ? null : _save,
+                    icon: const Icon(Icons.check_rounded),
+                    label: const Text('Guardar plan'),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Gratis para publicar. Bocadoo cobra un porcentaje solo con cada almuerzo servido.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: colors.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
         ]),
+      ),
+    );
+  }
+}
+
+class _CleanPlanKindBar extends StatelessWidget {
+  const _CleanPlanKindBar({required this.index, required this.onChanged});
+
+  final int index;
+  final ValueChanged<int> onChanged;
+
+  static const _labels = ['Semanal', 'Quincenal', 'Mensual', 'Libre'];
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(_cardRadius),
+        border: Border.all(color: colors.outlineVariant),
+      ),
+      child: Row(
+        children: [
+          for (var i = 0; i < _labels.length; i++)
+            Expanded(
+              child: Material(
+                color: i == index
+                    ? colors.onSurface.withValues(alpha: 0.08)
+                    : colors.surface.withValues(alpha: 0),
+                borderRadius: BorderRadius.circular(8),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: () => onChanged(i),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+                    child: Text(
+                      _labels[i],
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: i == index ? FontWeight.w900 : FontWeight.w700,
+                        color: i == index ? colors.onSurface : colors.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -346,8 +519,8 @@ class _Stepper extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: Theme.of(context).scaffoldBackgroundColor,
-        borderRadius: BorderRadius.circular(20),
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(_cardRadius),
         border: Border.all(color: colors.outlineVariant),
       ),
       child: Column(children: [
@@ -359,16 +532,26 @@ class _Stepper extends StatelessWidget {
         Row(children: [
           IconButton.outlined(
             tooltip: 'Menos',
+            style: IconButton.styleFrom(
+              side: BorderSide(color: colors.outlineVariant),
+              foregroundColor: colors.onSurface,
+            ),
             onPressed: onMinus,
             icon: const Icon(Icons.remove_rounded, size: 18),
           ),
           Expanded(
             child: Text(value,
+                maxLines: 1,
+                softWrap: false,
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900, color: colors.onSurface)),
           ),
-          IconButton.filledTonal(
+          IconButton.outlined(
             tooltip: 'Más',
+            style: IconButton.styleFrom(
+              side: BorderSide(color: colors.outlineVariant),
+              foregroundColor: colors.onSurface,
+            ),
             onPressed: onPlus,
             icon: const Icon(Icons.add_rounded, size: 18),
           ),
@@ -389,7 +572,7 @@ class _DayCircle extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     return Material(
-      color: selected ? colors.primary : Theme.of(context).scaffoldBackgroundColor,
+      color: selected ? colors.primary : colors.surface,
       shape: CircleBorder(side: BorderSide(color: selected ? colors.primary : colors.outlineVariant)),
       child: InkWell(
         customBorder: const CircleBorder(),
@@ -422,8 +605,14 @@ class _IncludeChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     return Material(
-      color: included ? colors.primaryContainer : Theme.of(context).scaffoldBackgroundColor,
-      shape: StadiumBorder(side: BorderSide(color: included ? colors.primaryContainer : colors.outlineVariant)),
+      color: colors.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+        side: BorderSide(
+          color: included ? colors.onSurface : colors.outlineVariant,
+          width: included ? 1.5 : 1,
+        ),
+      ),
       child: InkWell(
         customBorder: const StadiumBorder(),
         onTap: onTap,
@@ -431,13 +620,13 @@ class _IncludeChip extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
             Icon(included ? Icons.check_rounded : Icons.add_rounded,
-                size: 14, color: included ? colors.primary : colors.onSurfaceVariant),
+                size: 14, color: included ? colors.onSurface : colors.onSurfaceVariant),
             const SizedBox(width: 4),
             Text(label,
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w700,
-                  color: included ? colors.onPrimaryContainer : colors.onSurfaceVariant,
+                  color: included ? colors.onSurface : colors.onSurfaceVariant,
                 )),
           ]),
         ),

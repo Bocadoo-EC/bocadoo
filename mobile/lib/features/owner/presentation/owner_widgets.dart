@@ -237,7 +237,13 @@ class OwnerBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       decoration: BoxDecoration(color: background, borderRadius: BorderRadius.circular(AppTheme.buttonRadius)),
-      child: Text(label, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: foreground)),
+      child: Text(
+        label,
+        maxLines: 1,
+        softWrap: false,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: foreground),
+      ),
     );
   }
 }
