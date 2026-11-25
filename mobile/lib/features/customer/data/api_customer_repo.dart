@@ -740,7 +740,14 @@ class ApiCustomerRepository implements ICustomerRepository {
           estado == 'CANCELADA' ||
           estado == 'RECHAZADA' ||
           estado == 'FINALIZADA' ||
-          estado == 'ENTREGADA') {
+          estado == 'ENTREGADA' ||
+          estado == 'ENTREGADO' ||
+          estado == 'SERVIDA' ||
+          estado == 'SERVIDO' ||
+          estado == 'CANJEADA' ||
+          estado == 'CANJEADO' ||
+          estado == 'COMPLETADA' ||
+          estado == 'COMPLETADO') {
         continue;
       }
 
@@ -750,18 +757,10 @@ class ApiCustomerRepository implements ICustomerRepository {
         _orderIdByNumber[numero] = id;
       }
 
-      if (estado == 'SERVIDA') {
-        final seenById = id.isNotEmpty && prefs.getBool('pedido_visto_$id') == true;
-        final seenByNumber =
-            numero.isNotEmpty && prefs.getBool('pedido_visto_$numero') == true;
-        if (seenById || seenByNumber) continue;
-        final createdRaw = item['creadoEn']?.toString();
-        final created = createdRaw != null ? DateTime.tryParse(createdRaw) : null;
-        if (created != null &&
-            EcuadorTime.now().difference(created.toUtc().subtract(const Duration(hours: 5))).inHours >= 12) {
-          continue;
-        }
-      }
+      final seenById = id.isNotEmpty && prefs.getBool('pedido_visto_$id') == true;
+      final seenByNumber =
+          numero.isNotEmpty && prefs.getBool('pedido_visto_$numero') == true;
+      if (seenById || seenByNumber) continue;
 
       return _mapPedidoToActiveOrder(item);
     }
@@ -781,24 +780,35 @@ class ApiCustomerRepository implements ICustomerRepository {
     return at.toIso8601String();
   }
 
+  /// Solo platos del menú publicado del día (p. ej. desayuno/plato suelto del día);
+  /// los platos de la carta fija deben viajar en `cartaItems` (PR 7a / PR 9).
   static List<Map<String, dynamic>> _buildExtrasPayload({
     required List<String> platos,
     String? breakfastId,
-    required List<({String platoId, int quantity})> cartaItems,
   }) {
-    final extras = <Map<String, dynamic>>[
+    return <Map<String, dynamic>>[
       if (platos.isEmpty && breakfastId != null && breakfastId.isNotEmpty)
         {'plato': breakfastId, 'cantidad': 1},
     ];
+  }
+
+  /// Ítems de carta fija (`A_LA_CARTA`, `EXTRA`, `BEBIDA`) en el formato
+  /// oficial `cartaItems: [{ platoId, cantidad }]` (máx. 10 renglones en total).
+  static List<Map<String, dynamic>> _buildCartaItemsPayload(
+    List<({String platoId, int quantity})> cartaItems, {
+    int existingExtrasCount = 0,
+  }) {
+    final maxAllowed = (10 - existingExtrasCount).clamp(0, 10);
+    final payload = <Map<String, dynamic>>[];
     for (final c in cartaItems) {
-      if (extras.length >= 10) break;
+      if (payload.length >= maxAllowed) break;
       if (c.platoId.isEmpty || c.quantity <= 0) continue;
-      extras.add({
-        'plato': c.platoId,
+      payload.add({
+        'platoId': c.platoId,
         'cantidad': c.quantity.clamp(1, 10),
       });
     }
-    return extras;
+    return payload;
   }
 
   OrderQuote? _parseCotizacion(dynamic raw) {
@@ -866,15 +876,19 @@ class ApiCustomerRepository implements ICustomerRepository {
     final extras = _buildExtrasPayload(
       platos: platos,
       breakfastId: breakfastId,
-      cartaItems: cartaItems,
     );
-    if (platos.isEmpty && extras.isEmpty) return null;
+    final cartaPayload = _buildCartaItemsPayload(
+      cartaItems,
+      existingExtrasCount: extras.length,
+    );
+    if (platos.isEmpty && extras.isEmpty && cartaPayload.isEmpty) return null;
 
     final body = <String, dynamic>{
       'restaurante': restaurantId,
       'paraLlevar': takeaway,
       if (platos.isNotEmpty) 'almuerzo': {'platos': platos},
       if (extras.isNotEmpty) 'extras': extras,
+      if (cartaPayload.isNotEmpty) 'cartaItems': cartaPayload,
     };
 
     final res = await guard(
@@ -905,10 +919,13 @@ class ApiCustomerRepository implements ICustomerRepository {
     final extras = _buildExtrasPayload(
       platos: platos,
       breakfastId: breakfastId,
-      cartaItems: cartaItems,
+    );
+    final cartaPayload = _buildCartaItemsPayload(
+      cartaItems,
+      existingExtrasCount: extras.length,
     );
 
-    if (platos.isEmpty && extras.isEmpty) {
+    if (platos.isEmpty && extras.isEmpty && cartaPayload.isEmpty) {
       throw ApiException(
         status: 422,
         code: 'PEDIDO_VACIO',
@@ -924,12 +941,15 @@ class ApiCustomerRepository implements ICustomerRepository {
       'horaLlegada': ?_arrivalIso(estimatedArrival),
       if (platos.isNotEmpty) 'almuerzo': {'platos': platos},
       if (extras.isNotEmpty) 'extras': extras,
+      if (cartaPayload.isNotEmpty) 'cartaItems': cartaPayload,
     };
 
-    final cartaKey =
+    final extrasKey =
         extras.map((e) => '${e['plato']}x${e['cantidad']}').join(',');
+    final cartaKey =
+        cartaPayload.map((e) => '${e['platoId']}x${e['cantidad']}').join(',');
     final intent =
-        'crear-pedido:$restaurantId:${platos.join(",")}:${breakfastId ?? ""}:$takeaway:$cartaKey';
+        'crear-pedido:$restaurantId:${platos.join(",")}:${breakfastId ?? ""}:$takeaway:$extrasKey:$cartaKey';
     final key = _idempotency.keyFor(intent);
     final res = await guard(
       () => _api.send<Map<String, dynamic>>(
@@ -2054,10 +2074,16 @@ class ApiCustomerRepository implements ICustomerRepository {
     final cotizacion = _parseCotizacion(json['cotizacion']);
     // Regla oficial de backend: usar cotizacion (lineas[].fuente == 'PLAN' y
     // saldoPorCobrarCentavos) en lugar de almuerzo.cubiertoPorPlan o totalCentavos.
+    final hasPlanLineInQuote = cotizacion != null &&
+        cotizacion.lineas.any(
+          (l) => l.fuente.trim().toUpperCase() == 'PLAN',
+        );
     final planCreditsUsed = cotizacion != null
-        ? cotizacion.planCreditsUsed
+        ? (cotizacion.planCreditsUsed > 0
+            ? cotizacion.planCreditsUsed
+            : (hasPlanLineInQuote ? 1 : 0))
         : (almuerzo?['cubiertoPorPlan'] == true ? 1 : 0);
-    final hasPlan = planCreditsUsed > 0;
+    final hasPlan = hasPlanLineInQuote || planCreditsUsed > 0;
     final recargoCents = cotizacion != null
         ? cotizacion.recargoCentavos
         : (_asInt(json['recargoLlevarCentavos']) ??

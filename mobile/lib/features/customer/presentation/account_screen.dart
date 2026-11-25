@@ -9,6 +9,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/appearance_selector.dart';
 import '../../../core/widgets/bocadoo_logo.dart';
 import '../../auth/data/auth_repository.dart';
+import '../../owner/presentation/owner_controller.dart';
 import 'customer_controller.dart';
 import 'customer_widgets.dart' show CustomerErrorView;
 import 'social_widgets.dart';
@@ -33,6 +34,7 @@ Future<void> _logoutCustomer(BuildContext context, WidgetRef ref) async {
     ref.invalidate(customerRepositoryProvider);
     ref.invalidate(customerControllerProvider);
     ref.invalidate(customerProfileProvider);
+    invalidateOwnerBusinessProviders(ref);
   }
   if (!context.mounted) return;
   context.go('/login');

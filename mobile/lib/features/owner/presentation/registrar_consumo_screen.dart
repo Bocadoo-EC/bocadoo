@@ -4,11 +4,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/config/api_capabilities.dart';
 import '../../../core/config/app_mode.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatters.dart';
 import '../domain/models/cash_models.dart';
 import '../domain/models/daily_menu.dart';
+import '../domain/models/extras_models.dart';
 import 'owner_controller.dart';
 import 'owner_widgets.dart';
 import 'pos_payment_sheet.dart';
@@ -241,8 +243,11 @@ class _RegistrarConsumoScreenState
     if (_planMode && _scannedPlan == null) return;
     if (!_planMode && _directCart.isEmpty) return;
 
-    final result =
-        await showModalBottomSheet<({OwnerPayMethod method, int changeCents})>(
+    final isCashier = !ApiCapabilities.canSwitchToOwner ||
+        ref.read(ownerRoleProvider) == OwnerRole.cashier;
+
+    final result = await showModalBottomSheet<
+        ({OwnerPayMethod method, int changeCents, String? reference})>(
       context: context,
       useRootNavigator: true,
       isScrollControlled: true,
@@ -252,14 +257,13 @@ class _RegistrarConsumoScreenState
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
       builder: (_) => _ChargeBottomSheet(
-        title: _scannedPlan != null && _planMode
-            ? 'Confirmar cobro'
-            : 'Confirmar cobro',
+        title: 'Confirmar cobro',
         items: _activeCart,
         hasPlanLunch: _planMode && _scannedPlan != null,
         planClientName: _planMode ? _scannedPlan?.name : null,
         initialPlanLunchParaLlevar: _planLunchParaLlevar,
         takeawaySurchargeCents: takeawaySurchargeCents,
+        isCashier: isCashier,
         onChangeQty: _changeQty,
         onRemoveLine: _removeLine,
         onToggleParaLlevar: _toggleLineParaLlevar,
@@ -296,6 +300,7 @@ class _RegistrarConsumoScreenState
       takeawayCount: finalTakeawayCount,
       takeawaySurchargeCents: takeawaySurchargeCents,
       changeCents: result.changeCents,
+      referenciaExterna: result.reference,
       planClient: _planMode ? _scannedPlan : null,
     );
   }
@@ -306,6 +311,7 @@ class _RegistrarConsumoScreenState
     required int takeawayCount,
     required int takeawaySurchargeCents,
     required int changeCents,
+    String? referenciaExterna,
     _ScannedPlanClient? planClient,
   }) async {
     final snapshot = _activeCart.map((l) => l.copy()).toList();
@@ -347,6 +353,7 @@ class _RegistrarConsumoScreenState
       lines: saleLines,
       total: Money.fromCents(totalCents),
       method: method,
+      referenciaExterna: referenciaExterna,
     );
 
     if (!mounted) return;
@@ -1553,6 +1560,7 @@ class _ChargeBottomSheet extends StatefulWidget {
     required this.hasPlanLunch,
     required this.initialPlanLunchParaLlevar,
     required this.takeawaySurchargeCents,
+    required this.isCashier,
     required this.onChangeQty,
     required this.onRemoveLine,
     required this.onToggleParaLlevar,
@@ -1565,6 +1573,7 @@ class _ChargeBottomSheet extends StatefulWidget {
   final bool hasPlanLunch;
   final bool initialPlanLunchParaLlevar;
   final int takeawaySurchargeCents;
+  final bool isCashier;
   final String? planClientName;
   final void Function(String key, int delta) onChangeQty;
   final void Function(String key) onRemoveLine;
@@ -1578,12 +1587,15 @@ class _ChargeBottomSheet extends StatefulWidget {
 class _ChargeBottomSheetState extends State<_ChargeBottomSheet> {
   OwnerPayMethod _method = OwnerPayMethod.efectivo;
   final TextEditingController _cash = TextEditingController();
+  final TextEditingController _reference = TextEditingController();
+  bool _referenceTouched = false;
   bool _expanded = false;
   late bool _planLunchParaLlevar = widget.initialPlanLunchParaLlevar;
 
   @override
   void dispose() {
     _cash.dispose();
+    _reference.dispose();
     super.dispose();
   }
 
@@ -1673,8 +1685,13 @@ class _ChargeBottomSheetState extends State<_ChargeBottomSheet> {
         isCash && receivedCents != null && receivedCents < effectiveTotal;
     final changeCents =
         receivedCents == null ? 0 : receivedCents - effectiveTotal;
-    final canConfirm =
-        (itemCount > 0) && (!isCash || (!invalid && !shortfall));
+    final requiresReference = widget.isCashier &&
+        effectiveTotal > 0 &&
+        _method != OwnerPayMethod.efectivo;
+    final hasReference = _reference.text.trim().isNotEmpty;
+    final canConfirm = (itemCount > 0) &&
+        (!isCash || (!invalid && !shortfall)) &&
+        (!requiresReference || hasReference);
 
     return SafeArea(
       child: Padding(
@@ -2037,20 +2054,37 @@ class _ChargeBottomSheetState extends State<_ChargeBottomSheet> {
                   method: _method,
                   effectiveTotalCents: effectiveTotal,
                   cashController: _cash,
+                  referenceController: _reference,
+                  requireReferenceOnDigital: widget.isCashier,
+                  referenceTouched: _referenceTouched,
                   onMethodChanged: (m) => setState(() {
                     _method = m;
-                    if (m != OwnerPayMethod.efectivo) _cash.clear();
+                    if (m != OwnerPayMethod.efectivo) {
+                      _cash.clear();
+                    } else {
+                      _reference.clear();
+                      _referenceTouched = false;
+                    }
                   }),
                   onCashChanged: () => setState(() {}),
+                  onReferenceChanged: () =>
+                      setState(() => _referenceTouched = true),
                 ),
               ],
               const SizedBox(height: 16),
               ElevatedButton.icon(
                 onPressed: canConfirm
-                    ? () => Navigator.of(context).pop((
+                    ? () {
+                        final trimmedRef = _reference.text.trim();
+                        Navigator.of(context).pop((
                           method: _method,
                           changeCents: changeCents > 0 ? changeCents : 0,
-                        ))
+                          reference: _method != OwnerPayMethod.efectivo &&
+                                  trimmedRef.isNotEmpty
+                              ? trimmedRef
+                              : null,
+                        ));
+                      }
                     : null,
                 icon: const Icon(Icons.check_circle_outline_rounded),
                 label: Text(

@@ -593,11 +593,11 @@ class _WalletDeck extends StatelessWidget {
               ? (matchingPass?.remainingLunches ?? order.planCreditsUsed)
               : null,
           scheduledTime: order.estimatedArrivalLabel,
-          extraCashCents: order.hasPlan ? order.cashToCollectCents : 0,
+          extraCashCents: effectiveHasPlan ? order.cashToCollectCents : 0,
           qrData: qrData,
           hasActiveOrderQr: hasQr,
           inactiveQrLabel: 'Generando QR...',
-          statusBadgeLabel: effectiveHasPlan ? 'Preorden con Plan' : null,
+          statusBadgeLabel: effectiveHasPlan ? 'Cubierto por tu Plan' : null,
           statusBadgeIcon:
               effectiveHasPlan ? Icons.confirmation_number_rounded : null,
           actionLabel: 'VER ESTADO',

@@ -42,12 +42,16 @@ class LocalCustomerCache {
     return _memoryFallback;
   }
 
-  /// Limpia el pase guardado en caché.
+  /// Limpia toda la caché local de comensal (pase y solicitudes pendientes).
   Future<void> clear() async {
     _memoryFallback = null;
+    _pendingMemoryFallback = const [];
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.remove(_cachedPassKey);
+      await Future.wait([
+        prefs.remove(_cachedPassKey),
+        prefs.remove(_pendingPlansKey),
+      ]);
     } catch (_) {}
   }
 

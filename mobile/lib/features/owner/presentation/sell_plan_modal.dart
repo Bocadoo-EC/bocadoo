@@ -3,10 +3,12 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/config/api_capabilities.dart';
 import '../../../core/config/app_mode.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatters.dart';
 import '../domain/models/cash_models.dart';
+import '../domain/models/extras_models.dart';
 import 'owner_controller.dart';
 import 'owner_format.dart';
 import 'owner_widgets.dart';
@@ -24,11 +26,13 @@ class SellPlanSheet extends ConsumerStatefulWidget {
 
 class _SellPlanSheetState extends ConsumerState<SellPlanSheet> {
   final _search = TextEditingController();
+  final _reference = TextEditingController();
   OwnerClient? _client;
   String? _newName;
   String? _planId;
   OwnerPayMethod _method = OwnerPayMethod.efectivo;
   bool _deductToday = false;
+  bool _referenceTouched = false;
   bool _saving = false;
   bool _prefilled = false;
   String? _error;
@@ -36,6 +40,7 @@ class _SellPlanSheetState extends ConsumerState<SellPlanSheet> {
   @override
   void dispose() {
     _search.dispose();
+    _reference.dispose();
     super.dispose();
   }
 
@@ -44,7 +49,9 @@ class _SellPlanSheetState extends ConsumerState<SellPlanSheet> {
     _prefilled = true;
     final name = widget.initialClientName?.trim();
     if (name == null || name.isEmpty) return;
-    final match = clients.where((c) => c.name.toLowerCase() == name.toLowerCase()).firstOrNull;
+    final match = clients
+        .where((c) => c.name.toLowerCase() == name.toLowerCase())
+        .firstOrNull;
     if (match != null) {
       _client = match;
     } else {
@@ -56,6 +63,17 @@ class _SellPlanSheetState extends ConsumerState<SellPlanSheet> {
     final clientName = _client?.name ?? _newName?.trim();
     if (clientName == null || clientName.isEmpty) {
       setState(() => _error = 'Selecciona o escribe el nombre del comensal');
+      return;
+    }
+    final isCashier =
+        !ApiCapabilities.canSwitchToOwner ||
+        ref.read(ownerRoleProvider) == OwnerRole.cashier;
+    final trimmedRef = _reference.text.trim();
+    if (isCashier && _method != OwnerPayMethod.efectivo && trimmedRef.isEmpty) {
+      setState(() {
+        _referenceTouched = true;
+        _error = 'Ingresa el número de referencia o comprobante.';
+      });
       return;
     }
     setState(() {
@@ -73,6 +91,10 @@ class _SellPlanSheetState extends ConsumerState<SellPlanSheet> {
       template: plan,
       method: _method,
       deductToday: _deductToday,
+      referenciaExterna:
+          _method != OwnerPayMethod.efectivo && trimmedRef.isNotEmpty
+          ? trimmedRef
+          : null,
     );
     if (!mounted) return;
     if (saleId == null) {
@@ -87,7 +109,15 @@ class _SellPlanSheetState extends ConsumerState<SellPlanSheet> {
     }
     container
       ..invalidate(dailySummaryProvider)
-      ..invalidate(ownerClientsProvider);
+      ..invalidate(ownerClientsProvider)
+      ..invalidate(activeOrdersProvider)
+      ..invalidate(ordersOnTheWayProvider)
+      ..invalidate(pendingTablesProvider);
+    unawaited(
+      container
+          .read(cajaLiveSyncProvider.notifier)
+          .syncNow(includeMovements: true),
+    );
     if (_deductToday) {
       unawaited(container.read(cajaMovementsProvider.notifier).refresh());
     }
@@ -102,7 +132,10 @@ class _SellPlanSheetState extends ConsumerState<SellPlanSheet> {
         container
           ..invalidate(dailySummaryProvider)
           ..invalidate(ownerClientsProvider);
-        showInfoSnackBar(messenger, ok ? 'Venta de plan revertida' : 'No se pudo deshacer la venta');
+        showInfoSnackBar(
+          messenger,
+          ok ? 'Venta de plan revertida' : 'No se pudo deshacer la venta',
+        );
       },
     );
   }
@@ -112,7 +145,8 @@ class _SellPlanSheetState extends ConsumerState<SellPlanSheet> {
     final colors = context.colorScheme;
     final clientsAsync = ref.watch(ownerClientsProvider);
     final templatesAsync = ref.watch(planTemplatesProvider);
-    final singleLunchPrice = ref.watch(lunchPriceProvider).value ??
+    final singleLunchPrice =
+        ref.watch(lunchPriceProvider).value ??
         ref.watch(executivePricesProvider).lunch;
     final singleLunchCents = Money.toCents(singleLunchPrice);
     final clients = clientsAsync.value ?? const <OwnerClient>[];
@@ -121,17 +155,28 @@ class _SellPlanSheetState extends ConsumerState<SellPlanSheet> {
       for (final t in templatesAsync.value ?? const <OwnerPlanTemplate>[])
         if (t.active) t,
     ];
-    final plan = templates.where((t) => t.id == _planId).firstOrNull ??
+    final plan =
+        templates.where((t) => t.id == _planId).firstOrNull ??
         templates.firstOrNull;
+    final isCashier =
+        !ApiCapabilities.canSwitchToOwner ||
+        ref.watch(ownerRoleProvider) == OwnerRole.cashier;
     final hasClient =
         _client != null || (_newName != null && _newName!.trim().isNotEmpty);
-    final canActivate = hasClient && plan != null && !_saving;
+    final requiresReference = isCashier && _method != OwnerPayMethod.efectivo;
+    final hasReference = _reference.text.trim().isNotEmpty;
+    final canActivate =
+        hasClient &&
+        plan != null &&
+        !_saving &&
+        (!requiresReference || hasReference);
 
     final keyboard = MediaQuery.viewInsetsOf(context).bottom;
     final sysNav = MediaQuery.viewPaddingOf(context).bottom;
     final safeBottom = MediaQuery.paddingOf(context).bottom;
-    final navClearance =
-        keyboard > 0 ? 0.0 : (sysNav - safeBottom).clamp(0.0, double.infinity);
+    final navClearance = keyboard > 0
+        ? 0.0
+        : (sysNav - safeBottom).clamp(0.0, double.infinity);
 
     return ConstrainedBox(
       constraints: BoxConstraints(
@@ -219,7 +264,10 @@ class _SellPlanSheetState extends ConsumerState<SellPlanSheet> {
                   ),
                 const SizedBox(height: 10),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: colors.surfaceContainerLow,
                     borderRadius: BorderRadius.circular(14),
@@ -270,18 +318,57 @@ class _SellPlanSheetState extends ConsumerState<SellPlanSheet> {
                       (OwnerPayMethod.transferencia, Icons.smartphone_rounded),
                       (OwnerPayMethod.deuna, Icons.bolt_rounded),
                     ]) ...[
-                      if (m != OwnerPayMethod.efectivo) const SizedBox(width: 8),
+                      if (m != OwnerPayMethod.efectivo)
+                        const SizedBox(width: 8),
                       Expanded(
                         child: OwnerChoice(
                           label: m.shortLabel,
                           icon: icon,
                           selected: _method == m,
-                          onTap: () => setState(() => _method = m),
+                          onTap: () => setState(() {
+                            _method = m;
+                            if (m == OwnerPayMethod.efectivo) {
+                              _reference.clear();
+                              _referenceTouched = false;
+                            }
+                          }),
                         ),
                       ),
                     ],
                   ],
                 ),
+                if (_method != OwnerPayMethod.efectivo) ...[
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _reference,
+                    enabled: !_saving,
+                    onChanged: (_) => setState(() {
+                      _referenceTouched = true;
+                      if (_error != null) _error = null;
+                    }),
+                    textCapitalization: TextCapitalization.characters,
+                    textInputAction: TextInputAction.done,
+                    decoration: InputDecoration(
+                      isDense: true,
+                      prefixIcon: const Icon(Icons.receipt_long_outlined),
+                      labelText: isCashier
+                          ? 'N.º de referencia / comprobante *'
+                          : 'N.º de referencia / comprobante (opcional)',
+                      hintText: _method == OwnerPayMethod.deuna
+                          ? 'Ej. Código Deuna o últimos dígitos'
+                          : 'Ej. N.º de comprobante bancario',
+                      helperText: isCashier
+                          ? 'Obligatorio para cobros en ${_method.shortLabel} como cajero.'
+                          : null,
+                      errorText:
+                          isCashier &&
+                              _referenceTouched &&
+                              _reference.text.trim().isEmpty
+                          ? 'Ingresa la referencia del pago.'
+                          : null,
+                    ),
+                  ),
+                ],
                 if (_error != null) ...[
                   const SizedBox(height: 10),
                   Text(
@@ -348,9 +435,11 @@ class _ClientPicker extends StatelessWidget {
     final shown = q.isEmpty
         ? clients.take(5).toList()
         : clients
-            .where((c) => c.name.toLowerCase().contains(q) || c.phone.contains(q))
-            .take(6)
-            .toList();
+              .where(
+                (c) => c.name.toLowerCase().contains(q) || c.phone.contains(q),
+              )
+              .take(6)
+              .toList();
     final exact = clients.any((c) => c.name.toLowerCase() == q);
 
     return Column(
@@ -366,8 +455,10 @@ class _ClientPicker extends StatelessWidget {
                 decoration: InputDecoration(
                   hintText: 'Buscar por nombre o teléfono…',
                   prefixIcon: const Icon(Icons.search_rounded),
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 12,
+                  ),
                   enabledBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
                     borderSide: BorderSide(color: colors.outline),
@@ -415,7 +506,9 @@ class _ClientPicker extends StatelessWidget {
                       ),
                       decoration: BoxDecoration(
                         color: colors.primary,
-                        borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+                        borderRadius: BorderRadius.circular(
+                          AppTheme.buttonRadius,
+                        ),
                       ),
                       child: Text(
                         '1 toque',
@@ -518,10 +611,14 @@ class _SelectedClient extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
     final b = context.bocadooColors;
-    final cleanParts =
-        name.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty).take(2);
-    final initials =
-        cleanParts.isEmpty ? '?' : cleanParts.map((p) => p[0]).join().toUpperCase();
+    final cleanParts = name
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((p) => p.isNotEmpty)
+        .take(2);
+    final initials = cleanParts.isEmpty
+        ? '?'
+        : cleanParts.map((p) => p[0]).join().toUpperCase();
     final nextTotal = (activeLunches + addedLunches).clamp(0, 9999);
 
     return Container(
@@ -643,14 +740,14 @@ class _PlanCard extends StatelessWidget {
     final colors = context.colorScheme;
     final b = context.bocadooColors;
     final fg = selected ? colors.onPrimary : colors.onSurface;
-    final muted =
-        selected ? colors.onPrimary.withValues(alpha: 0.85) : colors.onSurfaceVariant;
+    final muted = selected
+        ? colors.onPrimary.withValues(alpha: 0.85)
+        : colors.onSurfaceVariant;
     final unitCents = Money.toCents(plan.perLunch);
     final totalCents = Money.toCents(plan.price);
-    final savingsCents =
-        (singleLunchCents > 0 && unitCents < singleLunchCents)
-            ? (singleLunchCents * plan.lunches) - totalCents
-            : 0;
+    final savingsCents = (singleLunchCents > 0 && unitCents < singleLunchCents)
+        ? (singleLunchCents * plan.lunches) - totalCents
+        : 0;
     final badgeBg = selected ? colors.surface : b.successContainer;
     final badgeFg = selected ? b.success : b.onSuccessContainer;
 

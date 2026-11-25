@@ -68,6 +68,30 @@ class ApiClient {
   late final Dio dio;
   late final _AuthInterceptor _authInterceptor;
 
+  /// Actualiza inmediatamente las cabeceras `Authorization` y `x-restaurant-id`
+  /// en ambas instancias de Dio para evitar reutilizar tokens o locales previos.
+  void syncSessionHeaders({String? accessToken, String? restaurantId}) {
+    _authInterceptor.clearPendingRefresh();
+    if (accessToken != null && accessToken.isNotEmpty) {
+      dio.options.headers['Authorization'] = 'Bearer $accessToken';
+    } else {
+      dio.options.headers.remove('Authorization');
+    }
+    if (restaurantId != null && restaurantId.isNotEmpty) {
+      dio.options.headers['x-restaurant-id'] = restaurantId;
+    } else {
+      dio.options.headers.remove('x-restaurant-id');
+    }
+  }
+
+  /// Limpia cualquier cabecera de sesión o refresh en vuelo al hacer logout/login.
+  void resetSessionHeaders() {
+    _authInterceptor.clearPendingRefresh();
+    dio.options.headers.remove('Authorization');
+    dio.options.headers.remove('x-restaurant-id');
+    _authInterceptor.clearRefreshDioHeaders();
+  }
+
   /// Fuerza la renovación del par access/refresh token (usado p. ej. por SSE ante TOKEN_VENCIDO).
   Future<bool> refreshSession() => _authInterceptor.refreshSession();
 
@@ -211,6 +235,15 @@ class _AuthInterceptor extends Interceptor {
 
   Future<bool> refreshSession() => _refresh();
 
+  void clearPendingRefresh() {
+    _refreshing = null;
+  }
+
+  void clearRefreshDioHeaders() {
+    _refreshDio.options.headers.remove('Authorization');
+    _refreshDio.options.headers.remove('x-restaurant-id');
+  }
+
   Future<bool> _doRefresh() async {
     try {
       final refreshToken = await _tokens.refresh;
@@ -248,6 +281,7 @@ class _AuthInterceptor extends Interceptor {
     RequestInterceptorHandler handler,
   ) async {
     if (options.extra['auth'] == false) {
+      options.headers.remove('Authorization');
       return handler.next(options);
     }
     final expiresAt = await _tokens.accessExpiresAt;
@@ -258,6 +292,8 @@ class _AuthInterceptor extends Interceptor {
     final accessToken = await _tokens.access;
     if (accessToken != null && accessToken.isNotEmpty) {
       options.headers['Authorization'] = 'Bearer $accessToken';
+    } else {
+      options.headers.remove('Authorization');
     }
     handler.next(options);
   }

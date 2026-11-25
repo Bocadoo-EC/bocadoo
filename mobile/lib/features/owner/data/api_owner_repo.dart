@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/analytics/events_service.dart';
@@ -22,6 +23,7 @@ import '../domain/models/extras_models.dart';
 import '../domain/models/menu_models.dart';
 import '../domain/models/metrics_models.dart';
 import '../domain/repositories/i_owner_repository.dart';
+import 'resolved_orders_store.dart';
 
 enum _SaleUndoKind { plan, pos }
 
@@ -124,8 +126,53 @@ class ApiOwnerRepository
   int _cachedLunchPriceCents = 0;
   String? _lastError;
   Map<String, String> _lastFieldErrors = const {};
+  SaldoCambioConflict? _lastSaldoCambioConflict;
+  bool _lastOrderResolvedAlreadyCovered = false;
 
   bool get _isCashier => _session.isCashierAccount;
+
+  /// Devuelve y limpia el último conflicto `409 SALDO_CAMBIO` si ocurrió.
+  SaldoCambioConflict? consumeSaldoCambioConflict() {
+    final c = _lastSaldoCambioConflict;
+    _lastSaldoCambioConflict = null;
+    return c;
+  }
+
+  /// Traduce errores `application/problem+json` priorizando su `code` real.
+  static String _formatConflictOrApiError(ApiException e) {
+    final code = e.code.trim().toUpperCase();
+    final detail = e.detail.trim();
+    switch (code) {
+      case 'SALDO_CAMBIO':
+        return 'El saldo del pedido cambió en caja. Confirma el nuevo monto.';
+      case 'PEDIDO_EXPIRADO':
+        return 'Este pedido ya expiró y no puede canjearse.';
+      case 'PEDIDO_YA_CANJEADO':
+        return 'Este pedido ya fue canjeado anteriormente.';
+      case 'CUENTA_COBRADA':
+        return 'La cuenta asociada ya fue cobrada; anúlala antes de deshacer.';
+      case 'OFERTA_AGOTADA':
+        return 'La oferta flash del pedido se agotó antes del canje.';
+      case 'OFERTA_EXPIRADA':
+      case 'OFERTA_CERRADA':
+        return 'La oferta flash del pedido ya no está vigente.';
+      case 'PLATO_AGOTADO':
+        return 'Uno de los platos del pedido se marcó como agotado.';
+      case 'REFERENCIA_PAGO_REPETIDA':
+        return 'Esa referencia de pago ya fue registrada en otro cobro.';
+      case 'REFERENCIA_PAGO_REQUERIDA':
+        return 'Ingresa la referencia del pago para confirmar.';
+      case 'MENU_NO_PUBLICADO':
+        return 'Publica el menú de hoy antes de procesar este pedido.';
+      case 'IDEMPOTENCY_KEY_REUTILIZADA':
+        return 'Reintenta confirmar la operación con los datos actualizados.';
+    }
+    if ((e.status == 400 || e.status == 409 || e.status == 422) &&
+        detail.isNotEmpty) {
+      return detail;
+    }
+    return e.userMessage;
+  }
 
   /// Devuelve y limpia el último mensaje de error legible generado por una
   /// operación de caja/pedidos/cierre que retorna `bool` o `null`.
@@ -199,8 +246,13 @@ class ApiOwnerRepository
       }
     }
 
+    if (timeFallback is DateTime) return timeFallback.toLocal();
     final timeStr = timeFallback?.toString().trim() ?? '';
     if (timeStr.isNotEmpty && timeStr.contains(':')) {
+      if (timeStr.contains('T') || timeStr.contains('-')) {
+        final directParsed = DateTime.tryParse(timeStr);
+        if (directParsed != null) return directParsed.toLocal();
+      }
       final dateStr = (raw is String && raw.trim().length >= 10)
           ? raw.trim().substring(0, 10)
           : (dateFallback?.toString().trim() ?? '');
@@ -360,7 +412,7 @@ class ApiOwnerRepository
       );
       return _mapOrder(data);
     } on ApiException catch (e) {
-      _lastError = e.userMessage;
+      _lastError = _formatConflictOrApiError(e);
       return null;
     }
   }
@@ -467,7 +519,12 @@ class ApiOwnerRepository
         .toString();
 
     final estado = (json['estado'] ?? 'EN_CAMINO').toString().toUpperCase();
-    final paidByPlan = almuerzo?['cubiertoPorPlan'] == true;
+    // Fuente de verdad en vivo: `cotizacion.lineas` (`fuente == 'PLAN'`) y
+    // `cotizacion.saldoPorCobrarCentavos`; `almuerzo.cubiertoPorPlan` / `totalCentavos`
+    // son fotos congeladas del momento de pedir.
+    final paidByPlan = cotizacion != null
+        ? hasPlanLineInQuote
+        : almuerzo?['cubiertoPorPlan'] == true;
     final takeaway = json['paraLlevar'] == true;
     final number = _asInt(json['numero']).toString();
     final id = (json['id'] ?? '').toString();
@@ -486,14 +543,24 @@ class ApiOwnerRepository
               : 25)
         : 0;
     final rawTotalCents = _asInt(json['totalCentavos']);
-    final resolvedTotalCents = paidByPlan
+    final fallbackTotalCents = paidByPlan
         ? 0
         : (takeaway && baseCents > 0 && rawTotalCents <= baseCents
               ? baseCents + recargoCents
               : (rawTotalCents > 0
                     ? rawTotalCents
                     : (baseCents > 0 ? baseCents + recargoCents : 0)));
-    final planCreditsUsed = _asInt(json['planCreditsUsed']);
+    final resolvedTotalCents = quoteBalanceToCollectCents ?? fallbackTotalCents;
+    final quotePlanLinesCount = quoteLineas
+        .whereType<Map>()
+        .where(
+          (l) => (l['fuente'] ?? '').toString().trim().toUpperCase() == 'PLAN',
+        )
+        .length;
+    final rawCredits = _asInt(json['planCreditsUsed']);
+    final planCreditsUsed = rawCredits > 0
+        ? rawCredits
+        : (hasPlanLineInQuote ? quotePlanLinesCount : 0);
     final rawCashToCollect =
         quoteBalanceToCollectCents ??
         json['cashToCollectCents'] ??
@@ -501,12 +568,10 @@ class ApiOwnerRepository
         json['porCobrarCentavos'];
     final cashToCollectCents = rawCashToCollect != null
         ? _asInt(rawCashToCollect)
-        : (paidByPlan ? rawTotalCents : 0);
+        : (paidByPlan ? resolvedTotalCents : 0);
     final cashItems = _cartaItemLabels(json['cartaItems']);
     final amount = Money.fromCents(
-      paidByPlan && cashToCollectCents > 0
-          ? cashToCollectCents
-          : resolvedTotalCents,
+      paidByPlan ? cashToCollectCents : resolvedTotalCents,
     );
     final validated = estado == 'CANJEADA';
 
@@ -800,6 +865,26 @@ class ApiOwnerRepository
           ? data['consumoPrevio'] as Map
           : null;
       final plan = data['plan'] is Map ? data['plan'] as Map : null;
+      final pedidoCerrado = data['pedido'] is Map ? data['pedido'] as Map : null;
+      if (pedidoCerrado != null) {
+        final closedId = pedidoCerrado['id']?.toString();
+        final closedNum = pedidoCerrado['numero']?.toString();
+        if (closedNum != null && closedNum.isNotEmpty) {
+          _ordersByNumber.remove(closedNum);
+          _redeemedCodes.add('ORD:$closedNum');
+          _redeemedCodes.add(
+            BocadooQrParser.generateOrderCode(
+              closedNum,
+              orderId: closedId,
+              restaurantId: restaurantId,
+            ),
+          );
+        }
+        await ResolvedOrdersStore.instance.markResolved(
+          id: closedId,
+          number: closedNum,
+        );
+      }
 
       final clienteId = cliente?['id']?.toString();
       final clienteNombre = cliente?['nombre']?.toString();
@@ -1257,8 +1342,19 @@ class ApiOwnerRepository
       final name = (cliente?['nombre'] ?? comensal?['nombre'] ?? 'Comensal')
           .toString();
       final almuerzo = p['almuerzo'] is Map ? p['almuerzo'] as Map : null;
-      final paidByPlan = almuerzo?['cubiertoPorPlan'] == true;
-      final isPrepaid = paidByPlan && totalCents == 0;
+      final cotizacion = p['cotizacion'] is Map ? p['cotizacion'] as Map : null;
+      final quoteLineas = cotizacion?['lineas'] is List
+          ? cotizacion!['lineas'] as List
+          : const [];
+      final hasPlanLine = quoteLineas.whereType<Map>().any(
+        (l) => (l['fuente'] ?? '').toString().trim().toUpperCase() == 'PLAN',
+      );
+      final paidByPlan = cotizacion != null
+          ? hasPlanLine
+          : almuerzo?['cubiertoPorPlan'] == true;
+      final quoteBalance = _asNullableInt(cotizacion?['saldoPorCobrarCentavos']);
+      final effectiveCents = quoteBalance ?? (paidByPlan ? 0 : totalCents);
+      final isPrepaid = paidByPlan && effectiveCents == 0;
       final dishLabel = _extractPlatosLabel(
         almuerzo,
         platoNombre: p['platoNombre'] ?? _orderDishByNumber[numero],
@@ -1270,7 +1366,7 @@ class ApiOwnerRepository
           id: (p['id'] ?? '').toString(),
           customerName: 'Pedido #$numero · $name',
           type: isPrepaid ? 'Canje de plan' : 'Pedido #$numero',
-          amount: Money.fromCents(paidByPlan ? 0 : totalCents),
+          amount: Money.fromCents(effectiveCents),
           paymentMethod: isPrepaid ? 'Plan' : 'Efectivo',
           timestamp: _parseDateTime(
             p['canjeadoEn'] ?? p['servidoEn'] ?? p['creadoEn'],
@@ -1890,6 +1986,8 @@ class ApiOwnerRepository
               raw['en'] ??
               raw['timestamp'] ??
               raw['createdAt'] ??
+              raw['hora'] ??
+              raw['horaLocal'] ??
               raw['fecha'] ??
               consumoMap?['creadoEn'] ??
               consumoMap?['fecha'] ??
@@ -2095,8 +2193,16 @@ class ApiOwnerRepository
     required OwnerPlanTemplate template,
     required OwnerPayMethod method,
     bool deductToday = false,
+    String? referenciaExterna,
   }) async {
     _lastError = null;
+    final trimmedRef = referenciaExterna?.trim();
+    if (_isCashier &&
+        method != OwnerPayMethod.efectivo &&
+        (trimmedRef == null || trimmedRef.isEmpty)) {
+      _lastError = 'Ingresa la referencia del pago para confirmar.';
+      return null;
+    }
     try {
       var targetClientId = clientId;
       if (targetClientId == null || targetClientId.isEmpty) {
@@ -2110,7 +2216,7 @@ class ApiOwnerRepository
       }
 
       final intent =
-          'sell_plan:$targetClientId:${template.id}:${_mapPayMethodApi(method)}';
+          'sell_plan:$targetClientId:${template.id}:${_mapPayMethodApi(method)}:${trimmedRef ?? ""}';
       final ik = _idempotency.keyFor(intent);
       late final String saleId;
       try {
@@ -2123,6 +2229,8 @@ class ApiOwnerRepository
                   'planId': template.id,
                   'metodoPago': _mapPayMethodApi(method),
                   'pagoConfirmado': true,
+                  if (trimmedRef != null && trimmedRef.isNotEmpty)
+                    'referenciaExterna': trimmedRef,
                 },
                 restaurant: true,
                 idempotencyKey: ik,
@@ -2145,7 +2253,7 @@ class ApiOwnerRepository
         final redeemIntent = 'sell_plan_deduct_today:$saleId:$targetClientId';
         final redeemKey = _idempotency.keyFor(redeemIntent);
         try {
-          await guard(
+          final validarRes = await guard(
             () => _api.send<Map<String, dynamic>>(
               'POST',
               '${ApiConfig.v1}/caja/validar',
@@ -2154,6 +2262,19 @@ class ApiOwnerRepository
               idempotencyKey: redeemKey,
             ),
           );
+          final pedidoCerrado = validarRes?['pedido'] is Map
+              ? validarRes!['pedido'] as Map
+              : null;
+          if (pedidoCerrado != null) {
+            final closedNum = pedidoCerrado['numero']?.toString();
+            if (closedNum != null && closedNum.isNotEmpty) {
+              _ordersByNumber.remove(closedNum);
+            }
+            await ResolvedOrdersStore.instance.markResolved(
+              id: pedidoCerrado['id']?.toString(),
+              number: closedNum,
+            );
+          }
           _idempotency.done(redeemIntent);
         } catch (_) {
           // El plan ya quedó activado; si falla el canje automático (p. ej. sin menú), no revierte la venta.
@@ -2163,7 +2284,7 @@ class ApiOwnerRepository
 
       return saleId;
     } on ApiException catch (e) {
-      _lastError = e.userMessage;
+      _lastError = _formatConflictOrApiError(e);
       return null;
     }
   }
@@ -2559,8 +2680,16 @@ class ApiOwnerRepository
     required List<PosSaleLine> lines,
     required double total,
     required OwnerPayMethod method,
+    String? referenciaExterna,
   }) async {
     _lastError = null;
+    final trimmedRef = referenciaExterna?.trim();
+    if (_isCashier &&
+        method != OwnerPayMethod.efectivo &&
+        (trimmedRef == null || trimmedRef.isEmpty)) {
+      _lastError = 'Ingresa la referencia del pago para confirmar.';
+      return null;
+    }
     try {
       if (_cachedLunchPriceCents == 0) {
         await _fetchRestaurantMap();
@@ -2644,7 +2773,7 @@ class ApiOwnerRepository
       final paraLlevar = mesaTexto.toLowerCase().startsWith('para llevar');
 
       final intent =
-          'pos:$restaurantId:$mesaTexto:$targetCents:${_mapPayMethodApi(method)}';
+          'pos:$restaurantId:$mesaTexto:$targetCents:${_mapPayMethodApi(method)}:${trimmedRef ?? ""}';
       final ik = _idempotency.keyFor(intent);
       try {
         final res = await guard(
@@ -2658,6 +2787,8 @@ class ApiOwnerRepository
                   'paraLlevar': paraLlevar,
                   if (mesaTexto.isNotEmpty) 'mesaTexto': mesaTexto,
                   'pagoConfirmado': true,
+                  if (trimmedRef != null && trimmedRef.isNotEmpty)
+                    'referenciaExterna': trimmedRef,
                 },
                 restaurant: true,
                 idempotencyKey: ik,
@@ -2683,8 +2814,150 @@ class ApiOwnerRepository
         _idempotency.done(intent);
       }
     } on ApiException catch (e) {
-      _lastError = e.userMessage;
+      _lastError = _formatConflictOrApiError(e);
       return null;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Gestión de equipo / Cajeros (`POST /v1/restaurante/personal/cajeros`)
+  // ---------------------------------------------------------------------------
+
+  static String _formatRetryAfter(int? seconds) {
+    if (seconds == null || seconds <= 0) {
+      return 'Espera unos minutos antes de intentar nuevamente.';
+    }
+    if (seconds < 60) {
+      return 'Intenta de nuevo en $seconds s.';
+    }
+    final mins = (seconds / 60).ceil();
+    return mins == 1
+        ? 'Intenta de nuevo en 1 minuto.'
+        : 'Intenta de nuevo en $mins minutos.';
+  }
+
+  /// Crea una cuenta de cajero (si aún no existe) sin tocar la sesión del dueño
+  /// y la vincula al restaurante mediante `POST /v1/restaurante/personal/cajeros`.
+  Future<({bool ok, String message, int? retryAfterSeconds})>
+  createCashierAccount({
+    required String nombre,
+    required String correo,
+    required String password,
+  }) async {
+    _lastError = null;
+    final cleanName = nombre.trim();
+    final cleanEmail = correo.trim();
+    if (cleanName.isEmpty || cleanEmail.isEmpty || password.isEmpty) {
+      return (
+        ok: false,
+        message: 'Completa nombre, correo y contraseña del cajero.',
+        retryAfterSeconds: null,
+      );
+    }
+
+    // Paso 1: registrar usuario sin enviar ni sobrescribir el JWT del dueño.
+    try {
+      await _api.dio.post<Map<String, dynamic>>(
+        '${ApiConfig.v1}/auth/register',
+        data: {
+          'nombre': cleanName,
+          'correo': cleanEmail,
+          'password': password,
+          'aceptaTerminos': true,
+        },
+        options: Options(
+          extra: const {'auth': false, 'restaurant': false, 'skipRetry': true},
+        ),
+      );
+    } on DioException catch (e) {
+      final apiErr = e.error is ApiException
+          ? e.error as ApiException
+          : (e.response != null
+                ? ApiException.fromResponse(e.response!)
+                : ApiException.network());
+      final status = e.response?.statusCode ?? apiErr.status;
+      final codeUpper = apiErr.code.toUpperCase();
+      final msgUpper =
+          '$codeUpper ${apiErr.title.toUpperCase()} ${apiErr.detail.toUpperCase()}';
+      final isAlreadyRegistered =
+          status == 409 ||
+          codeUpper == 'CONFLICT' ||
+          msgUpper.contains('EXISTE') ||
+          msgUpper.contains('REGISTRAD') ||
+          msgUpper.contains('DUPLICAD');
+      if (!isAlreadyRegistered) {
+        if (status == 429) {
+          final retry = int.tryParse(
+            e.response?.headers.value('retry-after')?.trim() ?? '',
+          );
+          return (
+            ok: false,
+            message:
+                'Demasiados intentos de registro. ${_formatRetryAfter(retry)}',
+            retryAfterSeconds: retry,
+          );
+        }
+        final detail = apiErr.detail.trim();
+        return (
+          ok: false,
+          message: detail.isNotEmpty ? detail : apiErr.userMessage,
+          retryAfterSeconds: null,
+        );
+      }
+    } catch (_) {
+      return (
+        ok: false,
+        message: 'No se pudo conectar para crear la cuenta del cajero.',
+        retryAfterSeconds: null,
+      );
+    }
+
+    // Paso 2: vincular el correo al restaurante actual con el JWT del dueño.
+    try {
+      await _api.dio.post<Map<String, dynamic>>(
+        '${ApiConfig.v1}/restaurante/personal/cajeros',
+        data: {'correo': cleanEmail},
+        options: Options(
+          extra: const {'auth': true, 'restaurant': true, 'skipRetry': true},
+        ),
+      );
+      eventsService.track('dueno.cajero_vinculado');
+      return (
+        ok: true,
+        message:
+            'Cajero vinculado correctamente. Ya puede iniciar sesión con su correo y contraseña en Terminal Restaurante.',
+        retryAfterSeconds: null,
+      );
+    } on DioException catch (e) {
+      final apiErr = e.error is ApiException
+          ? e.error as ApiException
+          : (e.response != null
+                ? ApiException.fromResponse(e.response!)
+                : ApiException.network());
+      final status = e.response?.statusCode ?? apiErr.status;
+      if (status == 429) {
+        final retry = int.tryParse(
+          e.response?.headers.value('retry-after')?.trim() ?? '',
+        );
+        return (
+          ok: false,
+          message:
+              'Límite de vinculaciones alcanzado (máx. 10/hora). ${_formatRetryAfter(retry)}',
+          retryAfterSeconds: retry,
+        );
+      }
+      final detail = apiErr.detail.trim();
+      return (
+        ok: false,
+        message: detail.isNotEmpty ? detail : _formatConflictOrApiError(apiErr),
+        retryAfterSeconds: null,
+      );
+    } catch (_) {
+      return (
+        ok: false,
+        message: 'No se pudo vincular el cajero al restaurante.',
+        retryAfterSeconds: null,
+      );
     }
   }
 
@@ -3045,15 +3318,22 @@ class ApiOwnerRepository
 
   @override
   Future<List<OwnerOrder>> getActiveOrders(String restaurantId) async {
+    await ResolvedOrdersStore.instance.ensureLoaded();
     final list = await guard(
       () => _api.getList('${ApiConfig.v1}/caja/pedidos', restaurant: true),
     );
     final orders = <OwnerOrder>[];
     for (final raw in list.whereType<Map>()) {
       final estado = (raw['estado'] ?? '').toString().toUpperCase();
-      if (estado != 'EN_CAMINO' && estado != 'CANJEADA') continue;
+      if (!ResolvedOrdersStore.isOpenOrderStatus(estado)) continue;
       final mapped = _mapOrder(Map<String, dynamic>.from(raw));
       if (_pendingDeliverOrders.contains(mapped.number)) continue;
+      if (ResolvedOrdersStore.instance.isMarkedResolved(
+        id: mapped.id,
+        number: mapped.number,
+      )) {
+        continue;
+      }
       orders.add(mapped);
     }
     return orders;
@@ -3061,6 +3341,7 @@ class ApiOwnerRepository
 
   @override
   Future<List<OwnerOrder>> getEnCaminoOrders(String restaurantId) async {
+    await ResolvedOrdersStore.instance.ensureLoaded();
     final list = await guard(
       () => _api.getList(
         '${ApiConfig.v1}/caja/pedidos',
@@ -3071,9 +3352,15 @@ class ApiOwnerRepository
     final orders = <OwnerOrder>[];
     for (final raw in list.whereType<Map>()) {
       final estado = (raw['estado'] ?? '').toString().toUpperCase();
-      if (estado != 'EN_CAMINO') continue;
+      if (!ResolvedOrdersStore.isOpenOrderStatus(estado)) continue;
       final mapped = _mapOrder(Map<String, dynamic>.from(raw));
       if (_pendingDeliverOrders.contains(mapped.number)) continue;
+      if (ResolvedOrdersStore.instance.isMarkedResolved(
+        id: mapped.id,
+        number: mapped.number,
+      )) {
+        continue;
+      }
       orders.add(mapped);
     }
     return orders;
@@ -3229,6 +3516,7 @@ class ApiOwnerRepository
     String activeRestaurantId, {
     String? rawCodeKey,
     OwnerPayMethod paymentMethod = OwnerPayMethod.efectivo,
+    String? referenciaExterna,
   }) async {
     _lastError = null;
     final cleaned = BocadooQrParser.sanitizeManualInput(orderIdOrCode);
@@ -3338,10 +3626,31 @@ class ApiOwnerRepository
     }
 
     _inFlightOrders.add(order.number);
+    _lastError = null;
+    _lastSaldoCambioConflict = null;
+    _lastOrderResolvedAlreadyCovered = false;
     try {
       if (order.paidByPlan && !order.validated) {
-        final okVal = await validateOrder(activeRestaurantId, order.number);
+        final okVal = await validateOrder(
+          activeRestaurantId,
+          order.number,
+          paymentMethod: paymentMethod,
+        );
         if (!okVal) {
+          final conflict = _lastSaldoCambioConflict;
+          if (conflict != null) {
+            final formatted =
+                '\$${(conflict.newBalanceCents / 100).toStringAsFixed(2).replaceAll('.', ',')}';
+            return ScanResult(
+              isValid: false,
+              outcome: 'ADVERTENCIA',
+              title: 'El saldo del pedido cambió',
+              supportingLine: 'Nuevo saldo por cobrar: $formatted',
+              studentName: order.dinerName,
+              actionRequired: 'CONFIRM_SALDO_CAMBIO',
+              cashToCollectCents: conflict.newBalanceCents,
+            );
+          }
           return ScanResult(
             isValid: false,
             outcome: 'ROJO',
@@ -3354,6 +3663,25 @@ class ApiOwnerRepository
         }
       }
 
+      if (_lastOrderResolvedAlreadyCovered) {
+        await ResolvedOrdersStore.instance.markResolved(
+          id: order.id,
+          number: order.number,
+        );
+        _redeemedCodes.add(ordKey);
+        _redeemedCodes.add(codeKey);
+        return ScanResult(
+          isValid: true,
+          outcome: 'VERDE',
+          title: 'Preorden ya cubierta hoy',
+          supportingLine:
+              '#${order.number} ya tenía consumo en Cobros de hoy y fue limpiada.',
+          studentName: order.dinerName,
+          passId: ordKey,
+          actionRequired: 'ALREADY_COVERED',
+        );
+      }
+
       final entry =
           _ordersByNumber[order.number] ??
           _OrderCacheEntry(
@@ -3364,7 +3692,43 @@ class ApiOwnerRepository
             amount: Money.fromCents(order.effectiveTotalCents),
           );
 
-      await _commitDeliverOrder(entry, paymentMethod: paymentMethod);
+      await _commitDeliverOrder(
+        entry,
+        paymentMethod: paymentMethod,
+        referenciaExterna: referenciaExterna,
+      );
+      if (_lastOrderResolvedAlreadyCovered) {
+        await ResolvedOrdersStore.instance.markResolved(
+          id: order.id,
+          number: order.number,
+        );
+        _redeemedCodes.add(ordKey);
+        _redeemedCodes.add(codeKey);
+        return ScanResult(
+          isValid: true,
+          outcome: 'VERDE',
+          title: 'Preorden ya cubierta hoy',
+          supportingLine:
+              '#${order.number} ya tenía consumo en Cobros de hoy y fue limpiada.',
+          studentName: order.dinerName,
+          passId: ordKey,
+          actionRequired: 'ALREADY_COVERED',
+        );
+      }
+      final conflict = _lastSaldoCambioConflict;
+      if (conflict != null) {
+        final formatted =
+            '\$${(conflict.newBalanceCents / 100).toStringAsFixed(2).replaceAll('.', ',')}';
+        return ScanResult(
+          isValid: false,
+          outcome: 'ADVERTENCIA',
+          title: 'El saldo del pedido cambió',
+          supportingLine: 'Nuevo saldo por cobrar: $formatted',
+          studentName: order.dinerName,
+          actionRequired: 'CONFIRM_SALDO_CAMBIO',
+          cashToCollectCents: conflict.newBalanceCents,
+        );
+      }
       if (_lastError != null && _lastError!.isNotEmpty) {
         return ScanResult(
           isValid: false,
@@ -3453,6 +3817,7 @@ class ApiOwnerRepository
     String activeRestaurantId, {
     required String clientId,
     OwnerPayMethod paymentMethod = OwnerPayMethod.efectivo,
+    String? referenciaExterna,
   }) async {
     _lastError = null;
     var order = await _findOrderByAnyCode(orderIdOrCode, activeRestaurantId);
@@ -3472,6 +3837,7 @@ class ApiOwnerRepository
         order.number,
         activeRestaurantId,
         paymentMethod: paymentMethod,
+        referenciaExterna: referenciaExterna,
       );
     }
 
@@ -3570,6 +3936,14 @@ class ApiOwnerRepository
       final remainingLunches = _asNullableInt(validarRes['almuerzosRestantes']);
       final consumoMap =
           validarRes['consumo'] is Map ? validarRes['consumo'] as Map : null;
+      final closedPedido =
+          validarRes['pedido'] is Map ? validarRes['pedido'] as Map : null;
+      if (closedPedido != null) {
+        await ResolvedOrdersStore.instance.markResolved(
+          id: closedPedido['id']?.toString(),
+          number: closedPedido['numero']?.toString(),
+        );
+      }
       consumoId = consumoMap?['id']?.toString();
       if (consumoId != null && consumoId.isNotEmpty) {
         entry.consumoId = consumoId;
@@ -3608,11 +3982,7 @@ class ApiOwnerRepository
               );
             } catch (_) {}
           }
-          final detail = e.detail.trim();
-          _lastError =
-              ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
-                  ? detail
-                  : e.userMessage;
+          _lastError = _formatConflictOrApiError(e);
           return ScanResult(
             isValid: false,
             outcome: 'ROJO',
@@ -3624,6 +3994,11 @@ class ApiOwnerRepository
         }
       }
 
+      await ResolvedOrdersStore.instance.markResolved(
+        id: entry.id,
+        number: order.number,
+      );
+      _ordersByNumber.remove(order.number);
       _redeemedCodes.add(ordKey);
       _redeemedCodes.add(
         BocadooQrParser.generateOrderCode(
@@ -3684,9 +4059,225 @@ class ApiOwnerRepository
     }
   }
 
-  @override
-  Future<bool> validateOrder(String restaurantId, String orderNumber) async {
+  Future<({bool alreadyCovered, SaldoCambioConflict? conflict})>
+  _handleSaldoCambio409({
+    required _OrderCacheEntry entry,
+    required String restaurantId,
+    required OwnerPayMethod paymentMethod,
+  }) async {
+    OwnerOrder? freshOrder;
+    try {
+      final rawOrder = await guard(
+        () => _api.getMap(
+          '${ApiConfig.v1}/caja/pedidos/${entry.id}',
+          restaurant: true,
+        ),
+      );
+      freshOrder = _mapOrder(rawOrder);
+    } catch (_) {}
+
+    if (freshOrder != null) {
+      try {
+        final page = await getCajaMovements(
+          restaurantId,
+          fecha: EcuadorTime.today(),
+          limit: 50,
+        );
+        if (ResolvedOrdersStore.instance.isOrderCoveredInMovements(
+          freshOrder,
+          page.items,
+        )) {
+          await ResolvedOrdersStore.instance.markResolved(
+            id: entry.id,
+            number: entry.number,
+          );
+          _ordersByNumber.remove(entry.number);
+          _redeemedCodes.add('ORD:${entry.number}');
+          _lastSaldoCambioConflict = null;
+          return (alreadyCovered: true, conflict: null);
+        }
+      } catch (_) {}
+    }
+
+    final newCents = freshOrder != null
+        ? freshOrder.effectiveBalanceToCollectCents
+        : (entry.paidByPlan ? 0 : Money.toCents(entry.amount));
+    final conflict = SaldoCambioConflict(
+      orderId: entry.id,
+      orderNumber: entry.number,
+      dinerName: freshOrder?.dinerName ?? 'Comensal',
+      previousBalanceCents: Money.toCents(entry.amount),
+      newBalanceCents: newCents,
+      coveredByPlan: freshOrder?.hasPlanLineInQuote ?? entry.paidByPlan,
+      paymentMethod: paymentMethod,
+    );
+    _lastSaldoCambioConflict = conflict;
+    return (alreadyCovered: false, conflict: conflict);
+  }
+
+  /// Reintenta `POST /v1/caja/pedidos/{id}/canjear` confirmando
+  /// explícitamente `cobro.saldoEsperadoCentavos` tras un `409 SALDO_CAMBIO`.
+  Future<ScanResult> confirmRedeemWithExpectedBalance(
+    String orderId,
+    String orderNumber,
+    String restaurantId, {
+    required int saldoEsperadoCentavos,
+    OwnerPayMethod paymentMethod = OwnerPayMethod.efectivo,
+    String? referenciaExterna,
+  }) async {
     _lastError = null;
+    _lastSaldoCambioConflict = null;
+    _lastOrderResolvedAlreadyCovered = false;
+    final trimmedRef = referenciaExterna?.trim();
+    if (saldoEsperadoCentavos > 0 &&
+        _isCashier &&
+        paymentMethod != OwnerPayMethod.efectivo &&
+        (trimmedRef == null || trimmedRef.isEmpty)) {
+      _lastError = 'Ingresa la referencia del pago para confirmar.';
+      return ScanResult(
+        isValid: false,
+        outcome: 'ROJO',
+        title: 'Falta referencia de pago',
+        supportingLine: _lastError!,
+        passId: 'ORD:$orderNumber',
+        actionRequired: 'NINGUNA',
+      );
+    }
+    final intent =
+        'order_canjear_saldo:$orderId:$saldoEsperadoCentavos:${DateTime.now().microsecondsSinceEpoch}';
+    final ik = _idempotency.keyFor(intent);
+    try {
+      final canje = await guard(
+        () => _api
+            .send<Map<String, dynamic>>(
+              'POST',
+              '${ApiConfig.v1}/caja/pedidos/$orderId/canjear',
+              body: {
+                'cobro': {
+                  'saldoEsperadoCentavos': saldoEsperadoCentavos,
+                  if (saldoEsperadoCentavos > 0) ...{
+                    'metodoPago': _mapPayMethodApi(paymentMethod),
+                    'pagoConfirmado': true,
+                    if (trimmedRef != null && trimmedRef.isNotEmpty)
+                      'referenciaExterna': trimmedRef,
+                  },
+                },
+              },
+              restaurant: true,
+              idempotencyKey: ik,
+            )
+            .then((v) => v ?? <String, dynamic>{}),
+      );
+      _idempotency.done(intent);
+
+      try {
+        await guard(
+          () => _api.send<Map<String, dynamic>>(
+            'POST',
+            '${ApiConfig.v1}/caja/pedidos/$orderId/servir',
+            restaurant: true,
+          ),
+        );
+      } on ApiException catch (e) {
+        if (e.status != 409 && !e.detail.toUpperCase().contains('SERVID')) {
+          _lastError = _formatConflictOrApiError(e);
+        }
+      }
+
+      await ResolvedOrdersStore.instance.markResolved(
+        id: orderId,
+        number: orderNumber,
+      );
+      _ordersByNumber.remove(orderNumber);
+      _redeemedCodes.add('ORD:$orderNumber');
+      _redeemedCodes.add(
+        BocadooQrParser.generateOrderCode(
+          orderNumber,
+          orderId: orderId,
+          restaurantId: restaurantId,
+        ),
+      );
+
+      final cot = canje['cotizacion'] is Map ? canje['cotizacion'] as Map : null;
+      final finalCents = _asNullableInt(cot?['saldoPorCobrarCentavos']) ??
+          saldoEsperadoCentavos;
+      final dishLabel =
+          _orderDishByNumber[orderNumber] ?? 'Preorden #$orderNumber';
+
+      return ScanResult(
+        isValid: true,
+        outcome: 'VERDE',
+        title: finalCents <= 0
+            ? '1 almuerzo descontado del plan'
+            : 'Preorden #$orderNumber cobrada',
+        supportingLine: '#$orderNumber · $dishLabel',
+        passId: 'ORD:$orderNumber',
+        dishName: dishLabel,
+        actionRequired: 'NINGUNA',
+        cashToCollectCents: finalCents,
+      );
+    } on ApiException catch (e) {
+      if (!e.isNetwork && e.status != 504) {
+        _idempotency.done(intent);
+      }
+      if (e.status == 409 && e.code.trim().toUpperCase() == 'SALDO_CAMBIO') {
+        final entry = _OrderCacheEntry(
+          id: orderId,
+          number: orderNumber,
+          paidByPlan: saldoEsperadoCentavos == 0,
+          validated: false,
+          amount: Money.fromCents(saldoEsperadoCentavos),
+        );
+        final handled = await _handleSaldoCambio409(
+          entry: entry,
+          restaurantId: restaurantId,
+          paymentMethod: paymentMethod,
+        );
+        if (handled.alreadyCovered) {
+          return ScanResult(
+            isValid: true,
+            outcome: 'VERDE',
+            title: 'Preorden ya cubierta hoy',
+            supportingLine:
+                '#$orderNumber ya tenía consumo en Cobros de hoy y fue limpiada.',
+            passId: 'ORD:$orderNumber',
+            actionRequired: 'ALREADY_COVERED',
+          );
+        }
+        final c = handled.conflict;
+        if (c != null) {
+          final formatted =
+              '\$${(c.newBalanceCents / 100).toStringAsFixed(2).replaceAll('.', ',')}';
+          return ScanResult(
+            isValid: false,
+            outcome: 'ADVERTENCIA',
+            title: 'El saldo del pedido cambió',
+            supportingLine: 'Nuevo saldo por cobrar: $formatted',
+            actionRequired: 'CONFIRM_SALDO_CAMBIO',
+            cashToCollectCents: c.newBalanceCents,
+          );
+        }
+      }
+      _lastError = _formatConflictOrApiError(e);
+      return ScanResult(
+        isValid: false,
+        outcome: 'ROJO',
+        title: 'No se pudo completar',
+        supportingLine: _lastError!,
+        actionRequired: 'NINGUNA',
+      );
+    }
+  }
+
+  @override
+  Future<bool> validateOrder(
+    String restaurantId,
+    String orderNumber, {
+    OwnerPayMethod paymentMethod = OwnerPayMethod.efectivo,
+  }) async {
+    _lastError = null;
+    _lastSaldoCambioConflict = null;
+    _lastOrderResolvedAlreadyCovered = false;
     try {
       final entry = await _resolveCachedOrder(restaurantId, orderNumber);
       if (entry == null) {
@@ -3754,13 +4345,21 @@ class ApiOwnerRepository
         if (!e.isNetwork && e.status != 504) {
           _idempotency.done(intent);
         }
+        if (e.status == 409 && e.code.trim().toUpperCase() == 'SALDO_CAMBIO') {
+          final handled = await _handleSaldoCambio409(
+            entry: entry,
+            restaurantId: restaurantId,
+            paymentMethod: paymentMethod,
+          );
+          if (handled.alreadyCovered) {
+            _lastOrderResolvedAlreadyCovered = true;
+            return true;
+          }
+        }
         rethrow;
       }
     } on ApiException catch (e) {
-      final detail = e.detail.trim();
-      _lastError = ((e.status == 400 || e.status == 422) && detail.isNotEmpty)
-          ? detail
-          : e.userMessage;
+      _lastError = _formatConflictOrApiError(e);
       return false;
     }
   }
@@ -3815,8 +4414,19 @@ class ApiOwnerRepository
   Future<void> _commitDeliverOrder(
     _OrderCacheEntry entry, {
     OwnerPayMethod paymentMethod = OwnerPayMethod.efectivo,
+    String? referenciaExterna,
   }) async {
     final today = EcuadorTime.today();
+    final trimmedRef = referenciaExterna?.trim();
+    if (_isCashier &&
+        !entry.paidByPlan &&
+        entry.amount > 0.005 &&
+        paymentMethod != OwnerPayMethod.efectivo &&
+        (trimmedRef == null || trimmedRef.isEmpty)) {
+      _lastError = 'Ingresa la referencia del pago para confirmar.';
+      _pendingDeliverOrders.remove(entry.number);
+      return;
+    }
     try {
       var porCobrarCents = 0;
       var beforeCashCents = 0;
@@ -3843,16 +4453,44 @@ class ApiOwnerRepository
                 .send<Map<String, dynamic>>(
                   'POST',
                   '${ApiConfig.v1}/caja/pedidos/${entry.id}/canjear',
+                  body: (!entry.paidByPlan &&
+                          entry.amount > 0.005 &&
+                          trimmedRef != null &&
+                          trimmedRef.isNotEmpty)
+                      ? {
+                          'cobro': {
+                            'metodoPago': _mapPayMethodApi(paymentMethod),
+                            'pagoConfirmado': true,
+                            'referenciaExterna': trimmedRef,
+                          },
+                        }
+                      : null,
                   restaurant: true,
                   idempotencyKey: ik,
                 )
                 .then((v) => v ?? <String, dynamic>{}),
           );
           final localCents = entry.paidByPlan ? 0 : Money.toCents(entry.amount);
-          final remoteCents = _asInt(canje['porCobrarCentavos'], localCents);
+          final cot = canje['cotizacion'] is Map ? canje['cotizacion'] as Map : null;
+          final remoteCents = _asNullableInt(cot?['saldoPorCobrarCentavos']) ??
+              _asInt(canje['porCobrarCentavos'], localCents);
           porCobrarCents = entry.paidByPlan
               ? remoteCents
               : (localCents > remoteCents ? localCents : remoteCents);
+        } on ApiException catch (e) {
+          if (e.status == 409 && e.code.trim().toUpperCase() == 'SALDO_CAMBIO') {
+            final handled = await _handleSaldoCambio409(
+              entry: entry,
+              restaurantId: _session.activeRestaurantId ?? '',
+              paymentMethod: paymentMethod,
+            );
+            if (handled.alreadyCovered) {
+              _lastOrderResolvedAlreadyCovered = true;
+              return;
+            }
+          }
+          _lastError = _formatConflictOrApiError(e);
+          return;
         } finally {
           _idempotency.done(intent);
         }
@@ -3866,6 +4504,10 @@ class ApiOwnerRepository
           '${ApiConfig.v1}/caja/pedidos/${entry.id}/servir',
           restaurant: true,
         ),
+      );
+      await ResolvedOrdersStore.instance.markResolved(
+        id: entry.id,
+        number: entry.number,
       );
       eventsService.track(
         'dueno.pedido_entregado',
@@ -3910,6 +4552,8 @@ class ApiOwnerRepository
                     'paraLlevar': false,
                     'mesaTexto': 'Pedido #${entry.number}',
                     'pagoConfirmado': true,
+                    if (trimmedRef != null && trimmedRef.isNotEmpty)
+                      'referenciaExterna': trimmedRef,
                   },
                   restaurant: true,
                   idempotencyKey: ventaIk,
@@ -3922,7 +4566,7 @@ class ApiOwnerRepository
         } catch (_) {}
       }
     } on ApiException catch (e) {
-      _lastError = e.userMessage;
+      _lastError = _formatConflictOrApiError(e);
     } finally {
       _pendingDeliverOrders.remove(entry.number);
       _ordersByNumber.remove(entry.number);
@@ -5619,7 +6263,7 @@ class ApiOwnerRepository
         } catch (_) {}
       }
     } on ApiException catch (e) {
-      _lastError = e.userMessage;
+      _lastError = _formatConflictOrApiError(e);
     } catch (_) {
       _lastError = 'No se pudo deshacer la cartulina.';
     } finally {
@@ -5999,9 +6643,12 @@ class ApiOwnerRepository
     var lat = (data['latitud'] as num?)?.toDouble();
     var lng = (data['longitud'] as num?)?.toDouble();
     final profile = _session.profile;
-    if (zone.isEmpty) zone = await profile.getZone() ?? '';
-    lat ??= await profile.getLat();
-    lng ??= await profile.getLng();
+    final canUseLocalProfile = await profile.belongsToUser(_session.userId);
+    if (canUseLocalProfile) {
+      if (zone.isEmpty) zone = await profile.getZone() ?? '';
+      lat ??= await profile.getLat();
+      lng ??= await profile.getLng();
+    }
     final rawMaskedCedula = (data['cedulaRucEnmascarada'] ?? data['cedulaRuc'])
         ?.toString()
         .trim();
@@ -6189,7 +6836,7 @@ class ApiOwnerRepository
         props: {'metodo': _mapPayMethodApi(method), 'origen': 'solicitud'},
       );
     } on ApiException catch (e) {
-      _lastError = e.userMessage;
+      _lastError = _formatConflictOrApiError(e);
     } catch (_) {
       _lastError = 'No se pudo cobrar la solicitud de plan.';
     } finally {

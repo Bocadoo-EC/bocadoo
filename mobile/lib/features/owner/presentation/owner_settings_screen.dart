@@ -11,7 +11,6 @@ import '../../../core/config/app_mode.dart';
 import '../../../core/config/support_config.dart';
 import '../../../core/contracts/models.dart';
 import '../../../core/location/location_service.dart';
-import '../../../core/session/session_notifier.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/ec_validators.dart';
 import '../../../core/utils/external_links.dart';
@@ -19,10 +18,12 @@ import '../../../core/utils/formatters.dart';
 import '../../../core/widgets/appearance_selector.dart';
 import '../../../core/widgets/bocadoo_logo.dart';
 import '../../../core/widgets/owner_location_picker.dart';
+import '../../auth/data/auth_repository.dart';
 import '../data/api_owner_repo.dart';
 import '../domain/models/extras_models.dart';
 import '../domain/models/metrics_models.dart';
 import 'owner_controller.dart';
+import 'owner_format.dart';
 import 'owner_widgets.dart';
 import 'weekly_summary_preview.dart';
 
@@ -31,9 +32,11 @@ const _maxLogoBytes = 60 * 1024;
 class _StoreOpenNotifier extends Notifier<bool> {
   @override
   bool build() {
+    final sessionKey = ref.watch(ownerSessionKeyProvider);
+    ref.watch(ownerRestaurantIdProvider);
     final pos = ref.watch(posMenuProvider).value;
     if (pos != null) return pos.isOpen;
-    if (!AppMode.useMock) {
+    if (!AppMode.useMock && sessionKey.isNotEmpty) {
       final repo = ref.read(ownerMenuRepositoryProvider);
       if (repo is ApiOwnerRepository) {
         Future.microtask(() async {
@@ -83,11 +86,20 @@ class OwnerSettingsScreen extends ConsumerWidget {
           ),
           Expanded(
             child: ListView(padding: const EdgeInsets.fromLTRB(16, 16, 16, 32), children: [
-              _RoleCard(role: role),
+              if (ApiCapabilities.canSwitchToOwner) ...[
+                _RoleCard(role: role),
+                const SizedBox(height: 12),
+              ],
+              if (!isOwner) ...[
+                const _CashierShiftCard(),
+                const SizedBox(height: 12),
+              ],
               if (isOwner) const _IncompleteProfileBanner(),
-              const SizedBox(height: 12),
+              const SizedBox(height: 4),
               const _LocalCard(),
               if (isOwner) ...[
+                const SizedBox(height: 12),
+                const _TeamCashiersCard(),
                 const SizedBox(height: 12),
                 _LinkCard(
                   icon: Icons.bar_chart_rounded,
@@ -132,7 +144,8 @@ class OwnerSettingsScreen extends ConsumerWidget {
               const SizedBox(height: 24),
               OutlinedButton.icon(
                 onPressed: () async {
-                  await ref.read(sessionProvider).logout();
+                  await ref.read(authRepositoryProvider).logout();
+                  invalidateOwnerBusinessProviders(ref);
                   if (context.mounted) context.go('/login');
                 },
                 style: OutlinedButton.styleFrom(
@@ -638,7 +651,8 @@ class _LocalCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colorScheme;
-    final info = ref.watch(localInfoProvider).value;
+    final infoAsync = ref.watch(localInfoProvider);
+    final info = infoAsync.value;
     final isOwner = ref.watch(ownerRoleProvider) == OwnerRole.owner;
     return _Card(
       child: Row(children: [
@@ -654,9 +668,31 @@ class _LocalCard extends ConsumerWidget {
         const SizedBox(width: 12),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(info?.name ?? ref.watch(ownerRestaurantNameProvider),
+            Text(
+                (info != null && info.name.trim().isNotEmpty)
+                    ? info.name
+                    : ref.watch(ownerRestaurantNameProvider),
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: colors.onSurface)),
-            if (info != null) ...[
+            if (infoAsync.isLoading && info == null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  'Sincronizando datos del negocio...',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant),
+                ),
+              )
+            else if (infoAsync.hasError && info == null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: InkWell(
+                  onTap: () => ref.invalidate(localInfoProvider),
+                  child: Text(
+                    'No se pudo cargar el perfil del negocio. Toca para reintentar.',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: colors.error),
+                  ),
+                ),
+              )
+            else if (info != null) ...[
               Text(
                 [
                   if (info.address.trim().isNotEmpty) info.address.trim(),
@@ -731,6 +767,7 @@ class _ExecutivePricesCardState extends ConsumerState<_ExecutivePricesCard> {
   bool _seeded = false;
   bool _saving = false;
   Map<String, String> _fieldErrors = const {};
+  String? _lastSessionKey;
 
   @override
   void dispose() {
@@ -849,6 +886,11 @@ class _ExecutivePricesCardState extends ConsumerState<_ExecutivePricesCard> {
   @override
   Widget build(BuildContext context) {
     final colors = context.colorScheme;
+    final sessionKey = ref.watch(ownerSessionKeyProvider);
+    if (_lastSessionKey != sessionKey) {
+      _lastSessionKey = sessionKey;
+      _seeded = false;
+    }
     final current = ref.watch(executivePricesProvider);
     final info = ref.watch(localInfoProvider).value;
     ref.listen<ExecutivePrices>(executivePricesProvider, (prev, next) {
@@ -1584,6 +1626,389 @@ class _SettingFieldLabel extends StatelessWidget {
         fontWeight: FontWeight.w700,
         letterSpacing: 0.6,
         color: cs.onSurfaceVariant,
+      ),
+    );
+  }
+}
+
+class _CashierShiftCard extends ConsumerWidget {
+  const _CashierShiftCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colorScheme;
+    final b = context.bocadooColors;
+    final shiftClosed = ref.watch(shiftClosedProvider).value ?? false;
+    final movementsState = ref.watch(cajaMovementsProvider);
+    final items = movementsState.items;
+    final totalCollected = Money.fromCents(movementsState.totalCollectedCents);
+
+    return _Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Expanded(child: OwnerSectionLabel('Turno actual')),
+              OwnerBadge(
+                label: shiftClosed ? 'Turno cerrado' : 'Turno activo',
+                background:
+                    shiftClosed ? b.dangerContainer : b.successContainer,
+                foreground:
+                    shiftClosed ? b.onDangerContainer : b.onSuccessContainer,
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Terminal de Caja · Cajero',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                        color: colors.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Cobros registrados hoy: ${items.length}',
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                        color: colors.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Text(
+                OwnerFormat.money(totalCollected),
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w900,
+                  color: colors.primary,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Operaciones habilitadas: cobro en caja, canje de planes, pedidos en camino y consulta del turno de hoy.',
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+              color: colors.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TeamCashiersCard extends ConsumerWidget {
+  const _TeamCashiersCard();
+
+  Future<void> _openCreateCashier(BuildContext context, WidgetRef ref) async {
+    final createdMessage = await showModalBottomSheet<String>(
+      context: context,
+      useRootNavigator: true,
+      isScrollControlled: true,
+      showDragHandle: true,
+      backgroundColor: context.colorScheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      builder: (_) => const _CreateCashierSheet(),
+    );
+    if (createdMessage == null || !context.mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Cajero habilitado'),
+        content: Text(createdMessage),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Entendido'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colorScheme;
+    return _Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const OwnerSectionLabel('Equipo / Cajeros'),
+          const SizedBox(height: 8),
+          Text(
+            'Crea cuentas de cajero para tu equipo y vincúlalas a este local. El cajero solo tendrá acceso a Caja, Pedidos y Turno.',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: colors.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 12),
+          ElevatedButton.icon(
+            onPressed: () => _openCreateCashier(context, ref),
+            icon: const Icon(Icons.person_add_alt_1_rounded),
+            label: const Text('Crear cuenta de cajero'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CreateCashierSheet extends ConsumerStatefulWidget {
+  const _CreateCashierSheet();
+
+  @override
+  ConsumerState<_CreateCashierSheet> createState() =>
+      _CreateCashierSheetState();
+}
+
+class _CreateCashierSheetState extends ConsumerState<_CreateCashierSheet> {
+  final _nameCtrl = TextEditingController();
+  final _emailCtrl = TextEditingController();
+  final _passwordCtrl = TextEditingController();
+
+  bool _obscurePassword = true;
+  bool _saving = false;
+  String? _nameError;
+  String? _emailError;
+  String? _passwordError;
+  String? _serverError;
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _emailCtrl.dispose();
+    _passwordCtrl.dispose();
+    super.dispose();
+  }
+
+  String? _validatePassword(String raw) {
+    if (raw.isEmpty) return 'Este campo es obligatorio.';
+    final hasLen = raw.length >= 10;
+    final hasUpper = RegExp(r'[A-ZÁÉÍÓÚÜÑ]').hasMatch(raw);
+    final hasDigit = RegExp(r'\d').hasMatch(raw);
+    final hasSymbol =
+        RegExp(r'[!@#\$%&*._\-]|[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9\s]').hasMatch(raw);
+    if (!hasLen || !hasUpper || !hasDigit || !hasSymbol) {
+      return 'Usa mín. 10 caracteres, una mayúscula, un número y un símbolo.';
+    }
+    return null;
+  }
+
+  bool _validate() {
+    final nameErr = EcValidators.validatePersonName(_nameCtrl.text);
+    final emailErr = EcValidators.validateEmail(_emailCtrl.text);
+    final passErr = _validatePassword(_passwordCtrl.text);
+    setState(() {
+      _nameError = nameErr;
+      _emailError = emailErr;
+      _passwordError = passErr;
+      _serverError = null;
+    });
+    return nameErr == null && emailErr == null && passErr == null;
+  }
+
+  Future<void> _submit() async {
+    if (_saving || !_validate()) return;
+    setState(() {
+      _saving = true;
+      _serverError = null;
+    });
+
+    if (AppMode.useMock) {
+      if (!mounted) return;
+      Navigator.of(context).pop(
+        'Cajero vinculado correctamente (modo demo). Ya puede iniciar sesión en Terminal Restaurante.',
+      );
+      return;
+    }
+
+    final res = await ref.read(apiOwnerRepositoryProvider).createCashierAccount(
+          nombre: _nameCtrl.text,
+          correo: _emailCtrl.text,
+          password: _passwordCtrl.text,
+        );
+    if (!mounted) return;
+    setState(() => _saving = false);
+
+    if (res.ok) {
+      Navigator.of(context).pop(res.message);
+      return;
+    }
+
+    setState(() => _serverError = res.message);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    final b = context.bocadooColors;
+    final keyboard = MediaQuery.viewInsetsOf(context).bottom;
+    final sysNav = MediaQuery.viewPaddingOf(context).bottom;
+    final safeBottom = MediaQuery.paddingOf(context).bottom;
+    final navClearance =
+        keyboard > 0 ? 0.0 : (sysNav - safeBottom).clamp(0.0, double.infinity);
+
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: EdgeInsets.only(bottom: keyboard),
+        child: SingleChildScrollView(
+          padding: EdgeInsets.fromLTRB(20, 0, 20, navClearance + 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Crear cuenta de cajero',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w900,
+                        color: colors.onSurface,
+                      ),
+                    ),
+                  ),
+                  IconButton.filledTonal(
+                    tooltip: 'Cerrar',
+                    onPressed: _saving ? null : () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Si el correo ya existe en Bocadoo, se vinculará directamente como cajero sin afectar tu sesión actual.',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: colors.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 16),
+              const _SettingFieldLabel('NOMBRE COMPLETO', required: true),
+              const SizedBox(height: 6),
+              TextField(
+                controller: _nameCtrl,
+                enabled: !_saving,
+                textCapitalization: TextCapitalization.words,
+                textInputAction: TextInputAction.next,
+                onChanged: (_) {
+                  if (_nameError != null) {
+                    setState(() => _nameError = null);
+                  }
+                },
+                decoration: InputDecoration(
+                  hintText: 'Ej. María López',
+                  prefixIcon: const Icon(Icons.badge_outlined),
+                  errorText: _nameError,
+                ),
+              ),
+              const SizedBox(height: 14),
+              const _SettingFieldLabel('CORREO ELECTRÓNICO', required: true),
+              const SizedBox(height: 6),
+              TextField(
+                controller: _emailCtrl,
+                enabled: !_saving,
+                keyboardType: TextInputType.emailAddress,
+                textInputAction: TextInputAction.next,
+                onChanged: (_) {
+                  if (_emailError != null) {
+                    setState(() => _emailError = null);
+                  }
+                },
+                decoration: InputDecoration(
+                  hintText: 'cajero@turestaurante.com',
+                  prefixIcon: const Icon(Icons.email_outlined),
+                  errorText: _emailError,
+                ),
+              ),
+              const SizedBox(height: 14),
+              const _SettingFieldLabel('CONTRASEÑA', required: true),
+              const SizedBox(height: 6),
+              TextField(
+                controller: _passwordCtrl,
+                enabled: !_saving,
+                obscureText: _obscurePassword,
+                textInputAction: TextInputAction.done,
+                onSubmitted: (_) => _submit(),
+                onChanged: (_) {
+                  if (_passwordError != null) {
+                    setState(() => _passwordError = null);
+                  }
+                },
+                decoration: InputDecoration(
+                  hintText: 'Mín. 10 caracteres, mayúscula, número y símbolo',
+                  prefixIcon: const Icon(Icons.lock_outline_rounded),
+                  errorText: _passwordError,
+                  errorMaxLines: 2,
+                  suffixIcon: IconButton(
+                    tooltip: _obscurePassword ? 'Mostrar' : 'Ocultar',
+                    onPressed: () =>
+                        setState(() => _obscurePassword = !_obscurePassword),
+                    icon: Icon(
+                      _obscurePassword
+                          ? Icons.visibility_outlined
+                          : Icons.visibility_off_outlined,
+                    ),
+                  ),
+                ),
+              ),
+              if (_serverError != null) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: b.dangerContainer,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Text(
+                    _serverError!,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: b.onDangerContainer,
+                    ),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 18),
+              ElevatedButton.icon(
+                onPressed: _saving ? null : _submit,
+                icon: _saving
+                    ? SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          color: colors.onPrimary,
+                        ),
+                      )
+                    : const Icon(Icons.person_add_alt_1_rounded),
+                label: Text(_saving ? 'Creando y vinculando...' : 'Crear y vincular cajero'),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

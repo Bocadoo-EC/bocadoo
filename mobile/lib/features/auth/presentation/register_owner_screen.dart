@@ -396,10 +396,13 @@ class _RegisterOwnerScreenState extends ConsumerState<RegisterOwnerScreen> {
       }
       final friendlyMsg =
           (result.errorCode ?? '').toUpperCase() == 'REGISTRO_CERRADO'
-              ? 'El registro de restaurantes está cerrado temporalmente.'
+              ? 'El registro de dueños está cerrado por ahora.'
               : (looksTechnical
                   ? 'No pudimos completar el registro por un problema técnico. Por favor, inténtalo de nuevo.'
                   : rawMsg);
+      if ((result.errorCode ?? '').toUpperCase() == 'REGISTRO_CERRADO') {
+        setState(() {});
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(friendlyMsg)),
       );
@@ -446,7 +449,63 @@ class _RegisterOwnerScreenState extends ConsumerState<RegisterOwnerScreen> {
     final cs = context.colorScheme;
     final b = context.bocadooColors;
 
-    return Scaffold(
+    return ValueListenableBuilder<bool>(
+      valueListenable: ownerRegistrationClosedNotifier,
+      builder: (context, registrationClosed, _) {
+        if (registrationClosed) {
+          return Scaffold(
+            body: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: IconButton(
+                        icon: Icon(Icons.arrow_back_rounded, color: cs.onSurface),
+                        onPressed: () => context.pop(),
+                      ),
+                    ),
+                    const Spacer(),
+                    Icon(
+                      Icons.lock_outline_rounded,
+                      size: 56,
+                      color: cs.primary,
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'El registro de dueños está cerrado por ahora',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                        color: cs.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      'Solo cuentas autorizadas de Dueño o Cajero pueden ingresar desde Terminal Restaurante.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: cs.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    ElevatedButton(
+                      onPressed: () => context.go('/login'),
+                      child: const Text('Volver a iniciar sesión'),
+                    ),
+                    const Spacer(),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }
+
+        return Scaffold(
       body: SafeArea(
         bottom: false,
         child: SingleChildScrollView(
@@ -979,6 +1038,8 @@ class _RegisterOwnerScreenState extends ConsumerState<RegisterOwnerScreen> {
           ),
         ),
       ),
+    );
+      },
     );
   }
 }
