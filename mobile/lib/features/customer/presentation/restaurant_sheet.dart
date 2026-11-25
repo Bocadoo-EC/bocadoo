@@ -154,26 +154,29 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
 
     while (mounted) {
       final nowEc = EcuadorTime.now();
-      final suggestedEc = nowEc.add(const Duration(minutes: 5));
-      final initial = TimeOfDay(
-        hour: suggestedEc.hour,
-        minute: suggestedEc.minute,
-      );
+      final rawSuggested = nowEc.add(const Duration(minutes: 5));
+      final sameDaySuggested = rawSuggested.year == nowEc.year &&
+          rawSuggested.month == nowEc.month &&
+          rawSuggested.day == nowEc.day;
+      final initial = sameDaySuggested
+          ? TimeOfDay(hour: rawSuggested.hour, minute: rawSuggested.minute)
+          : const TimeOfDay(hour: 23, minute: 59);
       final nowHhmm =
           '${nowEc.hour.toString().padLeft(2, '0')}:${nowEc.minute.toString().padLeft(2, '0')}';
 
       final picked = await showTimePicker(
         context: context,
         initialTime: initial,
-        helpText: 'Hora de consumo (Ecuador $nowHhmm)',
+        helpText: 'Hora de consumo hoy ($nowHhmm – 23:59)',
       );
       if (picked == null || !mounted) return;
 
       final currentEc = EcuadorTime.now();
       final currentMins = currentEc.hour * 60 + currentEc.minute;
       final pickedMins = picked.hour * 60 + picked.minute;
+      const maxDayMins = 23 * 60 + 59;
 
-      if (pickedMins <= currentMins) {
+      if (pickedMins <= currentMins || pickedMins > maxDayMins) {
         final currentHhmm =
             '${currentEc.hour.toString().padLeft(2, '0')}:${currentEc.minute.toString().padLeft(2, '0')}';
         messenger.hideCurrentSnackBar();
@@ -181,7 +184,7 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
           SnackBar(
             behavior: SnackBarBehavior.floating,
             content: Text(
-              'Selecciona una hora futura para tu consumo (hora actual: $currentHhmm).',
+              'Solo puedes elegir una hora del mismo día (entre $currentHhmm y las 23:59). No se permiten pedidos para el día siguiente.',
             ),
           ),
         );
@@ -195,7 +198,7 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
           SnackBar(
             behavior: SnackBarBehavior.floating,
             content: Text(
-              'Elige una hora dentro del horario de atención (${r.schedule}).',
+              'Elige una hora de hoy dentro del horario de atención (${r.schedule}).',
             ),
           ),
         );
@@ -211,7 +214,12 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
 
   String _resolveArrivalHhmm(HybridOrderState draft) {
     if (draft.selectedArrival != 'En 15 min') return draft.selectedArrival;
-    final target = EcuadorTime.now().add(const Duration(minutes: 15));
+    final nowEc = EcuadorTime.now();
+    final target = nowEc.add(const Duration(minutes: 15));
+    final sameDay = target.year == nowEc.year &&
+        target.month == nowEc.month &&
+        target.day == nowEc.day;
+    if (!sameDay) return '23:59';
     final hh = target.hour.toString().padLeft(2, '0');
     final mm = target.minute.toString().padLeft(2, '0');
     return '$hh:$mm';
@@ -223,8 +231,35 @@ class _RestaurantSheetState extends ConsumerState<RestaurantSheet> {
     HybridOrderState draft,
     HybridTenderSummary tender,
   ) async {
-    setState(() => _sending = true);
     final messenger = ScaffoldMessenger.of(context);
+    final menuAvail = controller.state.menuAvailabilityFor(r.id);
+    if (!r.hasMenu || menuAvail == MenuAvailabilityState.sinPublicar) {
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        const SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text(
+            'El dueño del restaurante aún no ha publicado el menú del día.',
+          ),
+        ),
+      );
+      return;
+    }
+    final nowEc = EcuadorTime.now();
+    final nowMins = nowEc.hour * 60 + nowEc.minute;
+    if (nowMins >= 23 * 60 + 59) {
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        const SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text(
+            'Solo se permiten pedidos para el mismo día hasta las 23:59.',
+          ),
+        ),
+      );
+      return;
+    }
+    setState(() => _sending = true);
     final lunchReady = draft.isLunchReady(r);
     final resolvedSoupId =
         draft.soupId == kIndividualNoSoupId ? null : draft.soupId;

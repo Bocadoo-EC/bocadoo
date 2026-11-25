@@ -58,11 +58,16 @@ class _FlashOrderSheetState extends ConsumerState<FlashOrderSheet> {
     return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
   }
 
-  /// Ventana válida de llegada; `null` si ya no queda margen.
+  /// Ventana válida de llegada (siempre dentro del mismo día hasta las 23:59 Ecuador);
+  /// `null` si ya no queda margen hoy.
   ({DateTime min, DateTime? max})? _window(RestaurantOffer offer, DateTime now) {
-    final min = now.add(_minLead);
-    final max = offer.endsAt;
-    if (max != null && max.isBefore(min)) return null;
+    final min = now.toUtc().add(_minLead);
+    final endOfTodayUtc = EcuadorTime.todayAtUtc('23:59');
+    final offerEndUtc = offer.endsAt?.toUtc();
+    final max = (offerEndUtc == null || offerEndUtc.isAfter(endOfTodayUtc))
+        ? endOfTodayUtc
+        : offerEndUtc;
+    if (max.isBefore(min)) return null;
     return (min: min, max: max);
   }
 
@@ -103,8 +108,11 @@ class _FlashOrderSheetState extends ConsumerState<FlashOrderSheet> {
     );
     final fresh = _window(offer, DateTime.now());
     if (fresh == null || !_inWindow(instant, fresh)) {
-      setState(() => _arrivalError =
-          fresh == null ? 'La oferta ya no admite llegadas.' : 'Elige una hora ${_rangeText(fresh)}.');
+      setState(
+        () => _arrivalError = fresh == null
+            ? 'La oferta ya no admite llegadas hoy (máximo 23:59).'
+            : 'Solo puedes elegir una hora de hoy ${_rangeText(fresh)} (máximo 23:59).',
+      );
       return;
     }
     setState(() {

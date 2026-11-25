@@ -329,8 +329,8 @@ class _StepOneConfigView extends StatelessWidget {
                   Expanded(
                     child: Text(
                       isTimeValid
-                          ? 'Hora límite para completar el grupo: $estimatedTimeHhmm'
-                          : 'La hora debe ser al menos 10 min mayor a la hora actual.',
+                          ? 'Hora límite para completar el grupo (hoy): $estimatedTimeHhmm'
+                          : 'La hora debe ser de hoy (al menos +10 min y máximo 23:59).',
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,

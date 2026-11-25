@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -565,7 +567,12 @@ class _WalletDeck extends StatelessWidget {
         restaurantId: order.restaurantId,
       );
       final qrData = AppMode.useMock ? shortCode : order.qrPayload;
-      final hasQr = qrData.isNotEmpty;
+      final orderMenuAvail = order.restaurantId != null
+          ? state.menuAvailabilityFor(order.restaurantId!)
+          : MenuAvailabilityState.disponible;
+      final isOrderMenuPublished =
+          orderMenuAvail != MenuAvailabilityState.sinPublicar;
+      final hasQr = qrData.isNotEmpty && isOrderMenuPublished;
       final chipLabel = isFlash
           ? 'Flash · ${order.restaurantName}'
           : (effectiveHasPlan
@@ -596,7 +603,8 @@ class _WalletDeck extends StatelessWidget {
           extraCashCents: effectiveHasPlan ? order.cashToCollectCents : 0,
           qrData: qrData,
           hasActiveOrderQr: hasQr,
-          inactiveQrLabel: 'Generando QR...',
+          inactiveQrLabel:
+              !isOrderMenuPublished ? 'Menú sin publicar' : 'Generando QR...',
           statusBadgeLabel: effectiveHasPlan ? 'Cubierto por tu Plan' : null,
           statusBadgeIcon:
               effectiveHasPlan ? Icons.confirmation_number_rounded : null,
@@ -608,56 +616,76 @@ class _WalletDeck extends StatelessWidget {
       );
     }
 
-    // 2. Orden grupal activa
+    // 2. Orden grupal activa (solo si el restaurante ya publicó el menú de hoy)
     if (table != null) {
       final simSession = GroupOrderSimulationStore.instance.sessionById(table.id) ??
           GroupOrderSimulationStore.instance.activeSession;
-      final isMesaCollecting = simSession != null &&
-          simSession.status == GroupOrderStatus.collecting;
-      final isMesaConfirmed = simSession != null &&
-          simSession.status == GroupOrderStatus.confirmed;
-      final shortCode = BocadooQrParser.toShortCode(table.url);
-      final qrData = isMesaConfirmed
-          ? simSession.qrPayload
-          : (AppMode.useMock ? shortCode : table.url);
-      final title = simSession != null
-          ? 'Mesa de ${simSession.hostName}'
-          : table.restaurantName;
+      final tableRestId = simSession?.restaurantId ??
+          state.restaurants
+              .where(
+                (r) =>
+                    r.name.trim().toLowerCase() ==
+                    table.restaurantName.trim().toLowerCase(),
+              )
+              .firstOrNull
+              ?.id;
+      final tableMenuAvail = tableRestId != null
+          ? state.menuAvailabilityFor(tableRestId)
+          : MenuAvailabilityState.disponible;
+      final isTableMenuPublished =
+          tableMenuAvail != MenuAvailabilityState.sinPublicar;
 
-      cards.add(
-        _WalletCardData(
-          keyId: 'table:${table.id}',
-          chipLabel: 'Mesa grupal',
-          chipIcon: Icons.groups_rounded,
-          title: title,
-          orderType: BocadooOrderCardType.groupOrder,
-          totalCents: controller.tableTotalCentsFor(table, state),
-          scheduledTime: simSession?.timeHhmm ?? table.time,
-          qrData: qrData,
-          hasActiveOrderQr: !isMesaCollecting && qrData.isNotEmpty,
-          inactiveQrLabel: isMesaCollecting
-              ? 'Esperando (${simSession.confirmedCount}/${simSession.totalParticipants})'
-              : 'QR pendiente',
-          actionLabel: 'VER ESTADO',
-          displayCodeOverride:
-              isMesaConfirmed ? 'Mesa #${simSession.shortCode}' : null,
-          onViewStatus: () => context.push(
-            '/customer/mesa?groupOrderId=${table.id}${simSession != null ? '&restaurantId=${simSession.restaurantId}' : ''}',
+      if (!isTableMenuPublished) {
+        unawaited(controller.cancelSharedTable(table.id));
+      } else {
+        final isMesaCollecting = simSession != null &&
+            simSession.status == GroupOrderStatus.collecting;
+        final isMesaConfirmed = simSession != null &&
+            simSession.status == GroupOrderStatus.confirmed;
+        final shortCode = BocadooQrParser.toShortCode(table.url);
+        final qrData = isMesaConfirmed
+            ? simSession.qrPayload
+            : (AppMode.useMock ? shortCode : table.url);
+        final title = simSession != null
+            ? 'Mesa de ${simSession.hostName}'
+            : table.restaurantName;
+
+        cards.add(
+          _WalletCardData(
+            keyId: 'table:${table.id}',
+            chipLabel: 'Mesa grupal',
+            chipIcon: Icons.groups_rounded,
+            title: title,
+            orderType: BocadooOrderCardType.groupOrder,
+            totalCents: controller.tableTotalCentsFor(table, state),
+            scheduledTime: simSession?.timeHhmm ?? table.time,
+            qrData: qrData,
+            hasActiveOrderQr:
+                isTableMenuPublished && !isMesaCollecting && qrData.isNotEmpty,
+            inactiveQrLabel: isMesaCollecting
+                ? 'Esperando (${simSession.confirmedCount}/${simSession.totalParticipants})'
+                : 'QR pendiente',
+            actionLabel: 'VER ESTADO',
+            displayCodeOverride:
+                isMesaConfirmed ? 'Mesa #${simSession.shortCode}' : null,
+            onViewStatus: () => context.push(
+              '/customer/mesa?groupOrderId=${table.id}${simSession != null ? '&restaurantId=${simSession.restaurantId}' : ''}',
+            ),
+            contextualFooter: isMesaCollecting
+                ? _PendingGroupTableBlock(
+                    confirmedCount: simSession.confirmedCount,
+                    totalCount: simSession.totalParticipants,
+                    restaurantName: simSession.restaurantName,
+                    onOpenMesa: () => context.push(
+                      '/customer/mesa?groupOrderId=${table.id}&restaurantId=${simSession.restaurantId}',
+                    ),
+                    onCancelMesa: () =>
+                        _confirmCancelGroupTable(context, controller, table.id),
+                  )
+                : null,
           ),
-          contextualFooter: isMesaCollecting
-              ? _PendingGroupTableBlock(
-                  confirmedCount: simSession.confirmedCount,
-                  totalCount: simSession.totalParticipants,
-                  restaurantName: simSession.restaurantName,
-                  onOpenMesa: () => context.push(
-                    '/customer/mesa?groupOrderId=${table.id}&restaurantId=${simSession.restaurantId}',
-                  ),
-                  onCancelMesa: () =>
-                      _confirmCancelGroupTable(context, controller, table.id),
-                )
-              : null,
-        ),
-      );
+        );
+      }
     }
 
     // 3. Planes activos (con QR dormido si aún no tienen orden no-flash en curso hoy)

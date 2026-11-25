@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -48,6 +50,21 @@ class ApiCustomerRepository implements ICustomerRepository {
   final Map<String, List<String>> _planIncludesByName = {};
   final Map<String, String> _orderIdByNumber = {};
   final Map<String, String> _estimatedArrivalByOrderNumber = {};
+  final Map<String, String> _tableRestaurantIdById = {};
+
+  /// ID del restaurante asociado a una mesa compartida cargada desde backend.
+  String? restaurantIdForTable(String tableId) =>
+      _tableRestaurantIdById[tableId];
+
+  /// Verifica si un instante UTC/local pertenece al día calendario actual en Ecuador (UTC-5).
+  static bool _isTodayEcuador(DateTime? dt) {
+    if (dt == null) return true;
+    final ec = dt.toUtc().subtract(const Duration(hours: 5));
+    final today = EcuadorTime.now();
+    return ec.year == today.year &&
+        ec.month == today.month &&
+        ec.day == today.day;
+  }
   final Map<String, ({int partySize, bool takeaway})> _tablePrefsById = {};
   final Map<String, int> _tableTotalCentsById = {};
   final Set<String> _flashOrderNumbers = {};
@@ -309,12 +326,39 @@ class ApiCustomerRepository implements ICustomerRepository {
       await guard(() => _api.getList('${ApiConfig.v1}/mis/mesas')),
     );
     for (final item in list) {
-      final estado = (item['estado'] ?? '').toString();
-      if (estado == 'FINALIZADA' || estado == 'CANCELADA') continue;
+      final estado = (item['estado'] ?? '').toString().toUpperCase();
+      if (estado == 'FINALIZADA' ||
+          estado == 'CANCELADA' ||
+          estado == 'EXPIRADA') {
+        continue;
+      }
       final id = (item['id'] ?? '').toString();
       final rest = _asMap(item['restaurante']);
-      final miembros = _asListOfMaps(item['miembros']);
+      final restId = (rest['id'] ?? '').toString();
+      if (id.isNotEmpty && restId.isNotEmpty) {
+        _tableRestaurantIdById[id] = restId;
+      }
       final hora = DateTime.tryParse((item['horaLlegada'] ?? '').toString());
+      final creado = DateTime.tryParse((item['creadoEn'] ?? '').toString());
+      final isFromPreviousDay =
+          (hora != null && !_isTodayEcuador(hora)) ||
+          (creado != null && !_isTodayEcuador(creado));
+      final menuAvail =
+          restId.isNotEmpty ? cachedTodayMenuAvailability(restId) : null;
+      final isMenuUnpublishedToday =
+          menuAvail == MenuAvailabilityState.sinPublicar;
+
+      // Regla de corte diario y menú publicado: si la mesa no se cobró el día
+      // en que se creó o el dueño aún no ha publicado el menú de hoy, se cancela
+      // y elimina automáticamente.
+      if (isFromPreviousDay || isMenuUnpublishedToday) {
+        if (id.isNotEmpty) {
+          unawaited(cancelSharedTable(id).catchError((_) {}));
+        }
+        continue;
+      }
+
+      final miembros = _asListOfMaps(item['miembros']);
       final cot = _parseCotizacion(item['cotizacion']);
       if (cot != null && id.isNotEmpty) {
         _tableTotalCentsById[id] = cot.saldoPorCobrarCentavos;
@@ -757,6 +801,21 @@ class ApiCustomerRepository implements ICustomerRepository {
         _orderIdByNumber[numero] = id;
       }
 
+      // Corte diario estricto: toda preorden no cobrada en caja el día en que
+      // se generó caduca al cambiar de día.
+      final creado = DateTime.tryParse((item['creadoEn'] ?? '').toString());
+      final hora = DateTime.tryParse(
+        (item['horaLlegada'] ?? item['horaEstimada'] ?? '').toString(),
+      );
+      if ((creado != null && !_isTodayEcuador(creado)) ||
+          (hora != null && !_isTodayEcuador(hora))) {
+        if (id.isNotEmpty) unawaited(prefs.setBool('pedido_visto_$id', true));
+        if (numero.isNotEmpty) {
+          unawaited(prefs.setBool('pedido_visto_$numero', true));
+        }
+        continue;
+      }
+
       final seenById = id.isNotEmpty && prefs.getBool('pedido_visto_$id') == true;
       final seenByNumber =
           numero.isNotEmpty && prefs.getBool('pedido_visto_$numero') == true;
@@ -768,14 +827,19 @@ class ApiCustomerRepository implements ICustomerRepository {
   }
 
   /// `HH:mm` de Ecuador → instante UTC ISO (`horaLlegada`); `null` si no aplica.
+  /// Nunca supera las `23:59` del día actual de Ecuador.
   static String? _arrivalIso(String? hhmm) {
     if (hhmm == null || !RegExp(r'^\d{1,2}:\d{2}$').hasMatch(hhmm)) return null;
     final nowUtc = DateTime.now().toUtc();
+    final endOfTodayUtc = EcuadorTime.todayAtUtc('23:59');
     var at = EcuadorTime.todayAtUtc(hhmm);
     if (!at.isAfter(nowUtc)) {
       at = nowUtc.add(const Duration(minutes: 15));
     } else if (at.difference(nowUtc) > const Duration(hours: 11)) {
       at = nowUtc.add(const Duration(hours: 11));
+    }
+    if (at.isAfter(endOfTodayUtc)) {
+      at = endOfTodayUtc;
     }
     return at.toIso8601String();
   }
@@ -1216,11 +1280,15 @@ class ApiCustomerRepository implements ICustomerRepository {
   }) async {
     final normalizedPartySize = partySize < 2 ? 2 : partySize;
     final nowUtc = DateTime.now().toUtc();
+    final endOfTodayUtc = EcuadorTime.todayAtUtc('23:59');
     var arrivalUtc = EcuadorTime.todayAtUtc(time);
     if (!arrivalUtc.isAfter(nowUtc)) {
       arrivalUtc = nowUtc.add(const Duration(minutes: 15));
     } else if (arrivalUtc.difference(nowUtc) > const Duration(hours: 11)) {
       arrivalUtc = nowUtc.add(const Duration(hours: 11));
+    }
+    if (arrivalUtc.isAfter(endOfTodayUtc)) {
+      arrivalUtc = endOfTodayUtc;
     }
 
     final apiMode = mode == TableMode.hostPays ? 'INVITO_YO' : 'CADA_UNO';
@@ -1278,8 +1346,17 @@ class ApiCustomerRepository implements ICustomerRepository {
       final res = await guard(
         () => _api.getMap('${ApiConfig.v1}/mis/mesas/$tableId'),
       );
-      final estado = (res['estado'] ?? '').toString();
-      if (estado == 'FINALIZADA' || estado == 'CANCELADA') {
+      final estado = (res['estado'] ?? '').toString().toUpperCase();
+      if (estado == 'FINALIZADA' ||
+          estado == 'CANCELADA' ||
+          estado == 'EXPIRADA') {
+        return null;
+      }
+      final hora = DateTime.tryParse((res['horaLlegada'] ?? '').toString());
+      final creado = DateTime.tryParse((res['creadoEn'] ?? '').toString());
+      if ((hora != null && !_isTodayEcuador(hora)) ||
+          (creado != null && !_isTodayEcuador(creado))) {
+        unawaited(cancelSharedTable(tableId).catchError((_) {}));
         return null;
       }
       return await _mapMesaResponseToSharedTable(res);

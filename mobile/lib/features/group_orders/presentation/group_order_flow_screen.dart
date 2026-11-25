@@ -50,7 +50,7 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
   String _selectedTimeLabel = 'En 15 min';
   String? _customTimeLabel;
   late DateTime _estimatedConsumptionTime =
-      DateTime.now().add(const Duration(minutes: 15));
+      _clampToTodayMax(DateTime.now().add(const Duration(minutes: 15)));
   TableMode _selectedMode = TableMode.eachOwn;
   GroupOrderDishSelection _dishSelection = const GroupOrderDishSelection();
 
@@ -323,8 +323,31 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
   String _formatHhmm(DateTime dt) =>
       '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
 
-  bool get _isEstimatedTimeValid => _estimatedConsumptionTime
-      .isAfter(DateTime.now().add(const Duration(minutes: 10)));
+  static DateTime _endOfTodayLocal([DateTime? ref]) {
+    final n = ref ?? DateTime.now();
+    return DateTime(n.year, n.month, n.day, 23, 59);
+  }
+
+  static bool _isSameDayLocal(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  static DateTime _clampToTodayMax(DateTime candidate) {
+    final now = DateTime.now();
+    final endToday = _endOfTodayLocal(now);
+    if (!_isSameDayLocal(candidate, now) || candidate.isAfter(endToday)) {
+      return endToday;
+    }
+    return candidate;
+  }
+
+  bool get _isEstimatedTimeValid {
+    final now = DateTime.now();
+    final endToday = _endOfTodayLocal(now);
+    return _isSameDayLocal(_estimatedConsumptionTime, now) &&
+        _estimatedConsumptionTime
+            .isAfter(now.add(const Duration(minutes: 10))) &&
+        !_estimatedConsumptionTime.isAfter(endToday);
+  }
 
   int _hostRemainingLunches(String? rid) {
     final s = ref.read(customerControllerProvider).state;
@@ -336,31 +359,62 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
   }
 
   void _selectQuickMinutes(int minutes) {
+    final now = DateTime.now();
+    final endToday = _endOfTodayLocal(now);
+    final raw = now.add(Duration(minutes: minutes));
+    if (!_isSameDayLocal(raw, now) || raw.isAfter(endToday)) {
+      if (!endToday.isAfter(now.add(const Duration(minutes: 10)))) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            behavior: SnackBarBehavior.floating,
+            content: Text(
+              'Solo puedes programar pedidos para hoy hasta las 23:59. No se permiten reservas para el día siguiente.',
+            ),
+          ),
+        );
+        return;
+      }
+      setState(() {
+        _selectedTimeLabel = 'custom';
+        _customTimeLabel = '23:59';
+        _estimatedConsumptionTime = endToday;
+      });
+      return;
+    }
     setState(() {
       _selectedTimeLabel = minutes == 15 ? 'En 15 min' : 'En 30 min';
       _customTimeLabel = null;
-      _estimatedConsumptionTime = DateTime.now().add(Duration(minutes: minutes));
+      _estimatedConsumptionTime = raw;
     });
   }
 
   Future<void> _pickCustomTime(Restaurant? r) async {
     final schedule = r?.schedule ?? '12:00 - 15:30';
     final now = DateTime.now();
-    final initial = TimeOfDay.fromDateTime(now.add(const Duration(minutes: 25)));
+    final suggested = _clampToTodayMax(now.add(const Duration(minutes: 25)));
+    final initial = TimeOfDay.fromDateTime(suggested);
     final picked = await showTimePicker(
       context: context,
       initialTime: initial,
-      helpText: 'Hora estimada ($schedule)',
+      helpText: 'Hora de hoy ($schedule · máx. 23:59)',
     );
     if (picked == null || !mounted) return;
-    final candidate =
-        DateTime(now.year, now.month, now.day, picked.hour, picked.minute);
-    if (!candidate.isAfter(now.add(const Duration(minutes: 10)))) {
+    final current = DateTime.now();
+    final currentEndToday = _endOfTodayLocal(current);
+    final candidate = DateTime(
+      current.year,
+      current.month,
+      current.day,
+      picked.hour,
+      picked.minute,
+    );
+    if (!candidate.isAfter(current.add(const Duration(minutes: 10))) ||
+        candidate.isAfter(currentEndToday)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           behavior: SnackBarBehavior.floating,
           content: Text(
-            'Elige una hora al menos 10 minutos mayor a la hora actual.',
+            'Solo puedes elegir una hora del mismo día (al menos +10 min y máximo hasta las 23:59). No se permiten reservas para el día siguiente.',
           ),
         ),
       );
@@ -719,7 +773,7 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
       _selectedTimeLabel = 'En 15 min';
       _customTimeLabel = null;
       _estimatedConsumptionTime =
-          DateTime.now().add(const Duration(minutes: 15));
+          _clampToTodayMax(DateTime.now().add(const Duration(minutes: 15)));
     });
   }
 
@@ -949,16 +1003,18 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
                         label: const Text('En 15 min'),
                         selected: false,
                         onSelected: (_) => setModalState(
-                          () => draftTime =
-                              DateTime.now().add(const Duration(minutes: 15)),
+                          () => draftTime = _clampToTodayMax(
+                            DateTime.now().add(const Duration(minutes: 15)),
+                          ),
                         ),
                       ),
                       ChoiceChip(
                         label: const Text('En 30 min'),
                         selected: false,
                         onSelected: (_) => setModalState(
-                          () => draftTime =
-                              DateTime.now().add(const Duration(minutes: 30)),
+                          () => draftTime = _clampToTodayMax(
+                            DateTime.now().add(const Duration(minutes: 30)),
+                          ),
                         ),
                       ),
                       ChoiceChip(
@@ -966,9 +1022,11 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
                         selected: true,
                         onSelected: (_) async {
                           final now = DateTime.now();
+                          final endToday = _endOfTodayLocal(now);
                           final picked = await showTimePicker(
                             context: ctx,
                             initialTime: TimeOfDay.fromDateTime(draftTime),
+                            helpText: 'Hora de hoy (máx. 23:59)',
                           );
                           if (picked == null) return;
                           final next = DateTime(
@@ -978,8 +1036,18 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
                             picked.hour,
                             picked.minute,
                           );
-                          if (next.isAfter(now.add(const Duration(minutes: 10)))) {
+                          if (next.isAfter(now.add(const Duration(minutes: 10))) &&
+                              !next.isAfter(endToday)) {
                             setModalState(() => draftTime = next);
+                          } else if (ctx.mounted) {
+                            ScaffoldMessenger.of(ctx).showSnackBar(
+                              const SnackBar(
+                                behavior: SnackBarBehavior.floating,
+                                content: Text(
+                                  'Solo puedes elegir una hora del día de hoy (entre +10 min y las 23:59).',
+                                ),
+                              ),
+                            );
                           }
                         },
                       ),

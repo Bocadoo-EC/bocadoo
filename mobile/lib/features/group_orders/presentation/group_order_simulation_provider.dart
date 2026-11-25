@@ -88,10 +88,30 @@ class GroupOrderSimulationStore extends ChangeNotifier {
   final Map<String, GroupOrderSession> _sessionsById = {};
   String? _activeSessionId;
 
-  GroupOrderSession? get activeSession =>
-      _activeSessionId == null ? null : _sessionsById[_activeSessionId];
+  static bool _isSameDayAsNow(DateTime dt) {
+    final now = DateTime.now();
+    return dt.year == now.year && dt.month == now.month && dt.day == now.day;
+  }
+
+  void _purgePreviousDaySessions() {
+    final staleIds = [
+      for (final e in _sessionsById.entries)
+        if (!_isSameDayAsNow(e.value.estimatedConsumptionTime)) e.key,
+    ];
+    if (staleIds.isEmpty) return;
+    for (final id in staleIds) {
+      _sessionsById.remove(id);
+      if (_activeSessionId == id) _activeSessionId = null;
+    }
+  }
+
+  GroupOrderSession? get activeSession {
+    _purgePreviousDaySessions();
+    return _activeSessionId == null ? null : _sessionsById[_activeSessionId];
+  }
 
   GroupOrderSession? sessionById(String tableId) {
+    _purgePreviousDaySessions();
     final clean = tableId.trim();
     if (clean.isEmpty) return null;
     final direct = _sessionsById[clean];
@@ -114,6 +134,7 @@ class GroupOrderSimulationStore extends ChangeNotifier {
   List<PendingTable> get confirmedOwnerTables => ownerTablesFor('');
 
   List<PendingTable> ownerTablesFor(String restaurantId) {
+    _purgePreviousDaySessions();
     final out = <PendingTable>[];
     final targetRid = restaurantId.trim().toLowerCase();
     for (final s in _sessionsById.values) {

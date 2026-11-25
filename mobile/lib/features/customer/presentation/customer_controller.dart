@@ -67,8 +67,15 @@ class PendingPlanRequest {
     required this.requestedAt,
   });
 
-  bool get isExpired =>
-      DateTime.now().difference(requestedAt) > const Duration(hours: 24);
+  bool get isExpired {
+    final reqEc = requestedAt.toUtc().subtract(const Duration(hours: 5));
+    final nowEc = EcuadorTime.now();
+    final isSameDay = reqEc.year == nowEc.year &&
+        reqEc.month == nowEc.month &&
+        reqEc.day == nowEc.day;
+    return !isSameDay ||
+        DateTime.now().difference(requestedAt) > const Duration(hours: 24);
+  }
 
   Map<String, dynamic> toMap() => {
         'planId': plan.id,
@@ -881,14 +888,36 @@ class CustomerController extends ChangeNotifier {
     } catch (_) {}
   }
 
+  String? _resolveTableRestaurantId(
+    ActiveTable? table,
+    List<Restaurant> restaurants,
+  ) {
+    if (table == null) return null;
+    final repo = _repository;
+    if (repo is ApiCustomerRepository) {
+      final byId = repo.restaurantIdForTable(table.id);
+      if (byId != null && byId.isNotEmpty) return byId;
+    }
+    final sim = GroupOrderSimulationStore.instance.sessionById(table.id);
+    if (sim != null && sim.restaurantId.isNotEmpty) return sim.restaurantId;
+    final cleanName = table.restaurantName.trim().toLowerCase();
+    if (cleanName.isEmpty) return null;
+    return restaurants
+        .where((r) => r.name.trim().toLowerCase() == cleanName)
+        .firstOrNull
+        ?.id;
+  }
+
   Future<
       ({
         Map<String, bool> published,
         Map<String, MenuAvailabilityState> availability,
       })> _resolveMenuStatesForPasses(
     List<CustomerPass> passes,
-    List<Restaurant> restaurants,
-  ) async {
+    List<Restaurant> restaurants, {
+    ActiveOrder? order,
+    ActiveTable? table,
+  }) async {
     final pubMap = Map<String, bool>.from(_state.todayMenuPublishedByRest);
     final availMap =
         Map<String, MenuAvailabilityState>.from(_state.todayMenuAvailabilityByRest);
@@ -909,9 +938,13 @@ class CustomerController extends ChangeNotifier {
     }
 
     final repo = _repository;
+    final tableRestId = _resolveTableRestaurantId(table, restaurants);
     final ids = <String>{
       for (final p in passes)
         if (p.restaurantId.isNotEmpty) p.restaurantId,
+      if (order?.restaurantId != null && order!.restaurantId!.isNotEmpty)
+        order.restaurantId!,
+      if (tableRestId != null && tableRestId.isNotEmpty) tableRestId,
     };
     if (ids.isEmpty) return (published: pubMap, availability: availMap);
 
@@ -1000,10 +1033,13 @@ class CustomerController extends ChangeNotifier {
       final order = await orderFuture;
       final activity = await activityFuture;
       final feedback = await feedbackFuture;
-      final effectiveTable = _pruneExpiredCollectingTable(table);
-
       final stamps = <String, StampCard>{};
-      final menuStatesFuture = _resolveMenuStatesForPasses(passes, restaurants);
+      final menuStatesFuture = _resolveMenuStatesForPasses(
+        passes,
+        restaurants,
+        order: order,
+        table: table,
+      );
       await Future.wait([
         for (final p in passes)
           _repository.getStampCard(p.restaurantId).then((card) {
@@ -1011,6 +1047,11 @@ class CustomerController extends ChangeNotifier {
           }, onError: (_) {}),
       ]);
       final menuStates = await menuStatesFuture;
+      final effectiveTable = _pruneExpiredCollectingTable(
+        table,
+        menuAvailabilityByRest: menuStates.availability,
+        restaurants: restaurants,
+      );
 
       final reconciled = _reconcilePendingPlanRequests(
         initialPending,
@@ -1135,6 +1176,8 @@ class CustomerController extends ChangeNotifier {
       final nextMenuStates = await _resolveMenuStatesForPasses(
         activePasses,
         _state.restaurants,
+        order: order,
+        table: table,
       );
 
       String? notice;
@@ -1173,7 +1216,11 @@ class CustomerController extends ChangeNotifier {
             'Tu solicitud de plan en ${firstExpired.restaurant.name} no fue aprobada a tiempo.';
       }
 
-      final effectiveTable = _pruneExpiredCollectingTable(table);
+      final effectiveTable = _pruneExpiredCollectingTable(
+        table,
+        menuAvailabilityByRest: nextMenuStates.availability,
+        restaurants: _state.restaurants,
+      );
       _emit(_state.copyWith(
         passes: activePasses,
         passIndex: activatedPassIdx,
@@ -1262,16 +1309,23 @@ class CustomerController extends ChangeNotifier {
       final passes = results[0] as List<CustomerPass>;
       final activity = results[1] as List<ActivityItem>;
       final nextOrder = results[2] as ActiveOrder?;
-      final nextTable = _pruneExpiredCollectingTable(results[3] as ActiveTable?);
-      _syncOrderPolling(nextOrder);
+      final rawTable = results[3] as ActiveTable?;
+      final nextMenuStates = await _resolveMenuStatesForPasses(
+        passes,
+        _state.restaurants,
+        order: nextOrder,
+        table: rawTable,
+      );
+      final nextTable = _pruneExpiredCollectingTable(
+        rawTable,
+        menuAvailabilityByRest: nextMenuStates.availability,
+        restaurants: _state.restaurants,
+      );
+      _syncOrderPolling(nextOrder, table: nextTable);
       final orderJustFinished = (previousOrder != null && nextOrder == null) ||
           (nextOrder != null &&
               nextOrder.isDelivered &&
               !(previousOrder?.isDelivered ?? false));
-      final nextMenuStates = await _resolveMenuStatesForPasses(
-        passes,
-        _state.restaurants,
-      );
 
       final reconciled = _reconcilePendingPlanRequests(pendingList, passes);
       if (reconciled.remaining.length != pendingList.length) {
@@ -1954,8 +2008,22 @@ class CustomerController extends ChangeNotifier {
     _syncOrderPolling(_state.activeOrder, table: activeTable);
   }
 
-  ActiveTable? _pruneExpiredCollectingTable(ActiveTable? table) {
+  ActiveTable? _pruneExpiredCollectingTable(
+    ActiveTable? table, {
+    Map<String, MenuAvailabilityState>? menuAvailabilityByRest,
+    List<Restaurant>? restaurants,
+  }) {
     if (table == null) return null;
+    final restList = restaurants ?? _state.restaurants;
+    final availMap = menuAvailabilityByRest ?? _state.todayMenuAvailabilityByRest;
+    final tableRestId = _resolveTableRestaurantId(table, restList);
+    if (tableRestId != null &&
+        availMap[tableRestId] == MenuAvailabilityState.sinPublicar) {
+      GroupOrderSimulationStore.instance.markCancelled(table.id);
+      unawaited(_repository.cancelSharedTable(table.id).catchError((_) {}));
+      return null;
+    }
+
     final sim = GroupOrderSimulationStore.instance.sessionById(table.id);
     if (sim != null) {
       if (sim.status == GroupOrderStatus.cancelled ||
@@ -1971,15 +2039,16 @@ class CustomerController extends ChangeNotifier {
       return table;
     }
 
-    // Tras reinicio de app: si solo quedó el anfitrión y ya pasó la hora límite, liberar.
+    // Tras reinicio de app: si ya pasó la hora límite de consumo hoy, liberar y cancelar.
     final parts = table.time.split(':');
-    if (parts.length == 2 && table.membersCount <= 1) {
+    if (parts.length == 2) {
       final h = int.tryParse(parts[0].trim());
       final m = int.tryParse(parts[1].trim());
       if (h != null && m != null) {
         final now = DateTime.now();
         final limit = DateTime(now.year, now.month, now.day, h, m);
-        if (now.isAfter(limit.add(const Duration(minutes: 5)))) {
+        if (table.membersCount <= 1 &&
+            now.isAfter(limit.add(const Duration(minutes: 5)))) {
           unawaited(_repository.cancelSharedTable(table.id).catchError((_) {}));
           return null;
         }

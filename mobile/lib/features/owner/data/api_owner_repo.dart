@@ -3319,6 +3319,16 @@ class ApiOwnerRepository
   // IOwnerOrdersRepository (O12)
   // ---------------------------------------------------------------------------
 
+  /// Verifica si una fecha cae dentro del día calendario actual de Ecuador (UTC-5).
+  static bool _isTodayEcuador(DateTime? dt) {
+    if (dt == null) return true;
+    final ec = dt.toUtc().subtract(const Duration(hours: 5));
+    final today = EcuadorTime.now();
+    return ec.year == today.year &&
+        ec.month == today.month &&
+        ec.day == today.day;
+  }
+
   @override
   Future<List<OwnerOrder>> getActiveOrders(String restaurantId) async {
     await ResolvedOrdersStore.instance.ensureLoaded();
@@ -3330,6 +3340,7 @@ class ApiOwnerRepository
       final estado = (raw['estado'] ?? '').toString().toUpperCase();
       if (!ResolvedOrdersStore.isOpenOrderStatus(estado)) continue;
       final mapped = _mapOrder(Map<String, dynamic>.from(raw));
+      if (!_isTodayEcuador(mapped.createdAt)) continue;
       if (_pendingDeliverOrders.contains(mapped.number)) continue;
       if (ResolvedOrdersStore.instance.isMarkedResolved(
         id: mapped.id,
@@ -3357,6 +3368,7 @@ class ApiOwnerRepository
       final estado = (raw['estado'] ?? '').toString().toUpperCase();
       if (!ResolvedOrdersStore.isOpenOrderStatus(estado)) continue;
       final mapped = _mapOrder(Map<String, dynamic>.from(raw));
+      if (!_isTodayEcuador(mapped.createdAt)) continue;
       if (_pendingDeliverOrders.contains(mapped.number)) continue;
       if (ResolvedOrdersStore.instance.isMarkedResolved(
         id: mapped.id,
@@ -4629,6 +4641,12 @@ class ApiOwnerRepository
         }
         final id = (m['id'] ?? '').toString();
         if (id.isEmpty) continue;
+        final rawCreated = (m['creadoEn'] ?? m['horaLlegada'])?.toString();
+        if (rawCreated != null &&
+            rawCreated.isNotEmpty &&
+            !_isTodayEcuador(_tryParseDateTime(rawCreated))) {
+          continue;
+        }
         activeRaw.add(m);
       }
       if (activeRaw.isEmpty) return const [];
