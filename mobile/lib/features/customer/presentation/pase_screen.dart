@@ -478,7 +478,7 @@ class _WalletCardData {
     this.extraCashCents = 0,
     this.qrData = '',
     this.hasActiveOrderQr = false,
-    this.inactiveQrLabel = 'Se activará al pedir',
+    this.inactiveQrLabel = 'Genera un pedido para obtener tu QR',
     this.statusBadgeLabel,
     this.statusBadgeIcon,
     this.metricLabelOverride,
@@ -673,7 +673,7 @@ class _WalletDeck extends StatelessWidget {
       final inactiveLabel = switch (menuAvail) {
         MenuAvailabilityState.sinPublicar => 'Menú sin publicar',
         MenuAvailabilityState.agotadoTotal => 'Menú agotado hoy',
-        MenuAvailabilityState.disponible => 'Se activará al pedir',
+        MenuAvailabilityState.disponible => 'Genera un pedido para obtener tu QR',
       };
       void openRest() => context.push('/customer/restaurants/${pass.restaurantId}');
 

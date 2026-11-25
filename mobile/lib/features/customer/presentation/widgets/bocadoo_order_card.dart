@@ -26,7 +26,7 @@ class BocadooOrderCard extends StatelessWidget {
     this.extraCashCents = 0,
     this.qrPayload,
     this.hasActiveOrderQr = false,
-    this.inactiveQrLabel = 'Se activará al pedir',
+    this.inactiveQrLabel = 'Genera un pedido para obtener tu QR',
     this.statusBadgeLabel,
     this.statusBadgeIcon,
     this.metricLabelOverride,
@@ -513,13 +513,13 @@ class _QrFocusFrame extends StatelessWidget {
                                   Text(
                                     inactiveQrLabel,
                                     textAlign: TextAlign.center,
-                                    maxLines: 2,
+                                    maxLines: 3,
                                     overflow: TextOverflow.ellipsis,
                                     style: (textTheme.bodySmall ??
                                             const TextStyle())
                                         .copyWith(
                                       color: Colors.white,
-                                      fontSize: 9.5,
+                                      fontSize: 9.2,
                                       height: 1.15,
                                       fontWeight: FontWeight.w700,
                                     ),
