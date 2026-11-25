@@ -812,6 +812,7 @@ class MockOwnerRepository
     required OwnerPlanTemplate template,
     required OwnerPayMethod method,
     bool deductToday = false,
+    String? referenciaExterna,
   }) async {
     await _simulateLatency();
     final now = _clock();
@@ -1075,6 +1076,7 @@ class MockOwnerRepository
     required List<PosSaleLine> lines,
     required double total,
     required OwnerPayMethod method,
+    String? referenciaExterna,
   }) async {
     await _simulateLatency();
     if (lines.isEmpty || total < 0) return null;
@@ -1463,6 +1465,7 @@ class MockOwnerRepository
     String orderIdOrCode,
     String activeRestaurantId, {
     OwnerPayMethod paymentMethod = OwnerPayMethod.efectivo,
+    String? referenciaExterna,
   }) async {
     await _simulateLatency();
     final now = _clock();

@@ -88,6 +88,7 @@ class OwnerShell extends ConsumerStatefulWidget {
 
 class _OwnerShellState extends ConsumerState<OwnerShell> {
   String? _checkedRestaurantId;
+  String? _lastSessionKey;
 
   void _maybeShowOnboarding({
     required String restaurantId,
@@ -124,6 +125,11 @@ class _OwnerShellState extends ConsumerState<OwnerShell> {
 
   @override
   Widget build(BuildContext context) {
+    final sessionKey = ref.watch(ownerSessionKeyProvider);
+    if (_lastSessionKey != sessionKey) {
+      _lastSessionKey = sessionKey;
+      _checkedRestaurantId = null;
+    }
     final isCashier = ref.watch(ownerRoleProvider) == OwnerRole.cashier;
     if (!isCashier) {
       final rid = ref.watch(ownerRestaurantIdProvider);

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/config/api_capabilities.dart';
 import '../../../core/config/app_mode.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatters.dart';
@@ -21,7 +22,8 @@ String _arrivalLabel(OwnerOrder order) {
     return raw;
   }
   final target =
-      order.estimatedArrival ?? order.createdAt.add(const Duration(minutes: 15));
+      order.estimatedArrival ??
+      order.createdAt.add(const Duration(minutes: 15));
   return OwnerFormat.time24(target);
 }
 
@@ -58,8 +60,9 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
     final activeClients = clients.where((c) => c.activeLunches > 0).toList();
     if (activeClients.isEmpty) return null;
     if (!AppMode.useMock) {
-      final clientId =
-          ref.read(apiOwnerRepositoryProvider).clientIdForOrder(order.number);
+      final clientId = ref
+          .read(apiOwnerRepositoryProvider)
+          .clientIdForOrder(order.number);
       if (clientId != null && clientId.isNotEmpty) {
         final byId = activeClients.where((c) => c.id == clientId).firstOrNull;
         if (byId != null) return byId;
@@ -120,15 +123,20 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
     OwnerOrder order, {
     OwnerClient? planOverrideClient,
   }) async {
-    final overrideLunches = !order.paidByPlan &&
+    final overrideLunches =
+        !order.paidByPlan &&
             planOverrideClient != null &&
             planOverrideClient.activeLunches > 0
         ? planOverrideClient.activeLunches
         : null;
-    final payment = await _openSheet<({OwnerPayMethod method, int changeCents})>(
+    final isCashier = !ApiCapabilities.canSwitchToOwner ||
+        ref.read(ownerRoleProvider) == OwnerRole.cashier;
+    final payment = await _openSheet<
+        ({OwnerPayMethod method, int changeCents, String? reference})>(
       _OrderConfirmChargeSheet(
         order: order,
         planOverrideLunches: overrideLunches,
+        isCashier: isCashier,
       ),
     );
     if (payment == null || !mounted) return;
@@ -137,20 +145,23 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
       planOverrideClient: planOverrideClient,
       paymentMethod: payment.method,
       changeCents: payment.changeCents,
+      referenciaExterna: payment.reference,
     );
   }
 
   Future<void> _handleSaldoCambioDialog(
     OwnerOrder order,
-    OwnerPayMethod paymentMethod,
-  ) async {
+    OwnerPayMethod paymentMethod, {
+    String? referenciaExterna,
+  }) async {
     final apiRepo = ref.read(apiOwnerRepositoryProvider);
     final conflict = apiRepo.consumeSaldoCambioConflict();
     if (!mounted || conflict == null) return;
     final messenger = ScaffoldMessenger.of(context);
     final restaurantId = ref.read(ownerRestaurantIdProvider);
-    final newSaldoFormatted =
-        OwnerFormat.money(Money.fromCents(conflict.newBalanceCents));
+    final newSaldoFormatted = OwnerFormat.money(
+      Money.fromCents(conflict.newBalanceCents),
+    );
 
     final choice = await showDialog<String>(
       context: context,
@@ -204,11 +215,16 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
       restaurantId,
       saldoEsperadoCentavos: conflict.newBalanceCents,
       paymentMethod: paymentMethod,
+      referenciaExterna: referenciaExterna,
     );
     if (!mounted) return;
     _refresh();
     if (retryRes.actionRequired == 'CONFIRM_SALDO_CAMBIO') {
-      await _handleSaldoCambioDialog(order, paymentMethod);
+      await _handleSaldoCambioDialog(
+        order,
+        paymentMethod,
+        referenciaExterna: referenciaExterna,
+      );
       return;
     }
     showInfoSnackBar(
@@ -224,11 +240,13 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
     OwnerClient? planOverrideClient,
     OwnerPayMethod paymentMethod = OwnerPayMethod.efectivo,
     int changeCents = 0,
+    String? referenciaExterna,
   }) async {
     final messenger = ScaffoldMessenger.of(context);
     final repo = ref.read(ownerOrdersRepositoryProvider);
     final restaurantId = ref.read(ownerRestaurantIdProvider);
-    final usePlanPriority = !order.paidByPlan &&
+    final usePlanPriority =
+        !order.paidByPlan &&
         planOverrideClient != null &&
         planOverrideClient.activeLunches > 0 &&
         !AppMode.useMock;
@@ -240,16 +258,22 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
               restaurantId,
               clientId: planOverrideClient.id,
               paymentMethod: paymentMethod,
+              referenciaExterna: referenciaExterna,
             )
         : await repo.confirmAndRedeemOrder(
             order.number,
             restaurantId,
             paymentMethod: paymentMethod,
+            referenciaExterna: referenciaExterna,
           );
     if (!mounted) return;
     _refresh();
     if (res.actionRequired == 'CONFIRM_SALDO_CAMBIO' && !AppMode.useMock) {
-      await _handleSaldoCambioDialog(order, paymentMethod);
+      await _handleSaldoCambioDialog(
+        order,
+        paymentMethod,
+        referenciaExterna: referenciaExterna,
+      );
       return;
     }
     if (res.isValid && res.actionRequired == 'ALREADY_COVERED') {
@@ -272,7 +296,8 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
       return;
     }
 
-    if ((order.paidByPlan && order.cashToCollectCents <= 0) || usePlanPriority) {
+    if ((order.paidByPlan && order.cashToCollectCents <= 0) ||
+        usePlanPriority) {
       showInfoSnackBar(messenger, '${res.title} · ${res.supportingLine}');
       return;
     }
@@ -292,16 +317,16 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
   }
 
   Future<T?> _openSheet<T>(Widget child) => showModalBottomSheet<T>(
-        context: context,
-        useRootNavigator: true,
-        isScrollControlled: true,
-        showDragHandle: true,
-        backgroundColor: context.colorScheme.surface,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-        ),
-        builder: (_) => child,
-      );
+    context: context,
+    useRootNavigator: true,
+    isScrollControlled: true,
+    showDragHandle: true,
+    backgroundColor: context.colorScheme.surface,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+    ),
+    builder: (_) => child,
+  );
 
   void _back() => context.go('/owner/caja');
 
@@ -318,7 +343,8 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
     );
     final clients =
         ref.watch(ownerClientsProvider).value ?? const <OwnerClient>[];
-    final tables = ref.watch(pendingTablesProvider).value ?? const <PendingTable>[];
+    final tables =
+        ref.watch(pendingTablesProvider).value ?? const <PendingTable>[];
     final lunchesToday =
         ref.watch(dailySummaryProvider).value?.lunchesRedeemedToday ?? 0;
     final count = (visibleOrdersAsync.value?.length ?? 0) + tables.length;
@@ -327,78 +353,86 @@ class _PedidosScreenState extends ConsumerState<PedidosScreen> {
       backgroundColor: colors.surface,
       body: SafeArea(
         bottom: false,
-        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Container(
-            padding: const EdgeInsets.fromLTRB(12, 8, 16, 10),
-            decoration: BoxDecoration(border: Border(bottom: BorderSide(color: colors.outlineVariant))),
-            child: OwnerBackHeader(
-              title: 'Pedidos en camino',
-              onBack: _back,
-              trailing: OwnerBadge(
-                label: count == 1 ? '1 activo' : '$count activos',
-                background: colors.primaryContainer,
-                foreground: colors.onPrimaryContainer,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              padding: const EdgeInsets.fromLTRB(12, 8, 16, 10),
+              decoration: BoxDecoration(
+                border: Border(
+                  bottom: BorderSide(color: colors.outlineVariant),
+                ),
+              ),
+              child: OwnerBackHeader(
+                title: 'Pedidos en camino',
+                onBack: _back,
+                trailing: OwnerBadge(
+                  label: count == 1 ? '1 activo' : '$count activos',
+                  background: colors.primaryContainer,
+                  foreground: colors.onPrimaryContainer,
+                ),
               ),
             ),
-          ),
-          Expanded(
-            child: visibleOrdersAsync.when(
-              skipLoadingOnReload: true,
-              loading: () => const OwnerLoadingView('Cargando pedidos'),
-              error: (_, _) => OwnerErrorView(
-                title: 'Error al cargar pedidos',
-                message: 'No se pudieron sincronizar los pedidos.',
-                onRetry: _refresh,
-              ),
-              data: (list) {
-                _maybeOpenFromScanner(list, clients);
-                if (list.isEmpty && tables.isEmpty) {
-                  return _Empty(
-                    onBack: _back,
-                    hasDispatchedToday: lunchesToday > 0,
-                  );
-                }
-                final totalItems = tables.length + list.length;
-                return RefreshIndicator(
-                  onRefresh: () async => _refresh(),
-                  child: ListView.separated(
-                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-                    itemCount: totalItems,
-                    separatorBuilder: (_, _) => const SizedBox(height: 12),
-                    itemBuilder: (_, i) {
-                      if (i < tables.length) {
-                        final t = tables[i];
-                        return _TableOrderCard(
-                          table: t,
-                          onAction: () async {
-                            await context.push('/owner/cobrar-mesa/${t.id}');
-                            if (mounted) _refresh();
-                          },
-                        );
-                      }
-                      final order = list[i - tables.length];
-                      final matchedClient =
-                          _resolveActivePlanClient(clients, order);
-                      final planLunches = !order.paidByPlan &&
-                              matchedClient != null &&
-                              matchedClient.activeLunches > 0
-                          ? matchedClient.activeLunches
-                          : null;
-                      return _OrderCard(
-                        order: order,
-                        planOverrideLunches: planLunches,
-                        onAction: () => _act(
+            Expanded(
+              child: visibleOrdersAsync.when(
+                skipLoadingOnReload: true,
+                loading: () => const OwnerLoadingView('Cargando pedidos'),
+                error: (_, _) => OwnerErrorView(
+                  title: 'Error al cargar pedidos',
+                  message: 'No se pudieron sincronizar los pedidos.',
+                  onRetry: _refresh,
+                ),
+                data: (list) {
+                  _maybeOpenFromScanner(list, clients);
+                  if (list.isEmpty && tables.isEmpty) {
+                    return _Empty(
+                      onBack: _back,
+                      hasDispatchedToday: lunchesToday > 0,
+                    );
+                  }
+                  final totalItems = tables.length + list.length;
+                  return RefreshIndicator(
+                    onRefresh: () async => _refresh(),
+                    child: ListView.separated(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+                      itemCount: totalItems,
+                      separatorBuilder: (_, _) => const SizedBox(height: 12),
+                      itemBuilder: (_, i) {
+                        if (i < tables.length) {
+                          final t = tables[i];
+                          return _TableOrderCard(
+                            table: t,
+                            onAction: () async {
+                              await context.push('/owner/cobrar-mesa/${t.id}');
+                              if (mounted) _refresh();
+                            },
+                          );
+                        }
+                        final order = list[i - tables.length];
+                        final matchedClient = _resolveActivePlanClient(
+                          clients,
                           order,
-                          planOverrideClient: matchedClient,
-                        ),
-                      );
-                    },
-                  ),
-                );
-              },
+                        );
+                        final planLunches =
+                            !order.paidByPlan &&
+                                matchedClient != null &&
+                                matchedClient.activeLunches > 0
+                            ? matchedClient.activeLunches
+                            : null;
+                        return _OrderCard(
+                          order: order,
+                          planOverrideLunches: planLunches,
+                          onAction: () =>
+                              _act(order, planOverrideClient: matchedClient),
+                        );
+                      },
+                    ),
+                  );
+                },
+              ),
             ),
-          ),
-        ]),
+          ],
+        ),
       ),
     );
   }
@@ -449,7 +483,11 @@ class _TableOrderCard extends StatelessWidget {
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.schedule_rounded, size: 15, color: colors.onSurfaceVariant),
+                  Icon(
+                    Icons.schedule_rounded,
+                    size: 15,
+                    color: colors.onSurfaceVariant,
+                  ),
                   const SizedBox(width: 4),
                   Text(
                     'Llega ${table.time}',
@@ -490,7 +528,10 @@ class _TableOrderCard extends StatelessWidget {
                     children: [
                       TextSpan(
                         text: 'Modalidad: ',
-                        style: TextStyle(fontWeight: FontWeight.w800, color: colors.primary),
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          color: colors.primary,
+                        ),
                       ),
                       TextSpan(text: modalityText),
                     ],
@@ -516,8 +557,9 @@ class _TableOrderCard extends StatelessWidget {
                           if (chosen.isNotEmpty) chosen,
                           if (extrasText.isNotEmpty) extrasText,
                         ].join(' · ');
-                        final dishText =
-                            combined.isNotEmpty ? combined : 'Sin selección aún';
+                        final dishText = combined.isNotEmpty
+                            ? combined
+                            : 'Sin selección aún';
                         final extraTag = m.takeaway ? ' (Para llevar)' : '';
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 3),
@@ -545,7 +587,8 @@ class _TableOrderCard extends StatelessWidget {
             runSpacing: 6,
             children: [
               OwnerBadge(
-                label: '${table.planCount} con Plan · ${table.cashCount} pagan en caja',
+                label:
+                    '${table.planCount} con Plan · ${table.cashCount} pagan en caja',
                 background: table.cashCount == 0
                     ? b.successContainer
                     : colors.secondaryContainer,
@@ -583,13 +626,19 @@ class _OrderCard extends StatelessWidget {
     final colors = context.colorScheme;
     final b = context.bocadooColors;
     final arrival = _arrivalLabel(order);
-    final isPlan = order.hasPlanLineInQuote ||
+    final isPlan =
+        order.hasPlanLineInQuote ||
         order.paidByPlan ||
         (planOverrideLunches != null && planOverrideLunches! > 0);
-    TextSpan line(String label, String value) => TextSpan(children: [
-          TextSpan(text: '$label: ', style: TextStyle(fontWeight: FontWeight.w800, color: colors.primary)),
-          TextSpan(text: value),
-        ]);
+    TextSpan line(String label, String value) => TextSpan(
+      children: [
+        TextSpan(
+          text: '$label: ',
+          style: TextStyle(fontWeight: FontWeight.w800, color: colors.primary),
+        ),
+        TextSpan(text: value),
+      ],
+    );
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -598,167 +647,210 @@ class _OrderCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(24),
         border: Border.all(color: colors.outlineVariant),
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Row(children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-            decoration: BoxDecoration(
-              color: colors.primaryContainer,
-              borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-            ),
-            child: Text('#${order.number}',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: colors.onPrimaryContainer)),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(order.dinerName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900, color: colors.onSurface)),
-          ),
-          Icon(Icons.schedule_rounded, size: 15, color: colors.onSurfaceVariant),
-          const SizedBox(width: 4),
-          Text(
-            'Llega $arrival',
-            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: colors.onSurfaceVariant),
-          ),
-        ]),
-        const SizedBox(height: 10),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: colors.primaryContainer.withValues(alpha: 0.4),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Text.rich(
-            TextSpan(children: [
-              if (order.soup != null) line('Sopa', order.soup!),
-              if (order.soup != null && order.main != null) const TextSpan(text: '\n'),
-              if (order.main != null) line('Segundo', order.main!),
-              if (order.drink != null) ...[
-                if (order.soup != null || order.main != null) const TextSpan(text: '\n'),
-                line('Jugo', order.drink!),
-              ],
-              if (order.cashItems.isNotEmpty) ...[
-                if (order.soup != null || order.main != null || order.drink != null)
-                  const TextSpan(text: '\n'),
-                line('Carta / Extras', order.cashItems.join(', ')),
-              ],
-              const TextSpan(text: '\n'),
-              line(
-                'Modalidad',
-                order.takeaway
-                    ? 'Para llevar (+${OwnerFormat.money(Money.fromCents(order.takeawaySurchargeCents))})'
-                    : 'En local',
-              ),
-              const TextSpan(text: '\n'),
-              line('Llegada est.', arrival),
-              if (!isPlan) ...[
-                const TextSpan(text: '\n'),
-                line('Pago', 'Pago por confirmar en caja'),
-              ] else if (order.paidByPlan && order.cashToCollectCents > 0) ...[
-                const TextSpan(text: '\n'),
-                line(
-                  'Saldo por cobrar',
-                  OwnerFormat.money(Money.fromCents(order.cashToCollectCents)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 3,
                 ),
-              ] else ...[
-                const TextSpan(text: '\n'),
-                line('Cobertura', '1 almuerzo del plan activo'),
-              ],
-            ]),
-            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, height: 1.4, color: colors.onSurface),
+                decoration: BoxDecoration(
+                  color: colors.primaryContainer,
+                  borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+                ),
+                child: Text(
+                  '#${order.number}',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w900,
+                    color: colors.onPrimaryContainer,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  order.dinerName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w900,
+                    color: colors.onSurface,
+                  ),
+                ),
+              ),
+              Icon(
+                Icons.schedule_rounded,
+                size: 15,
+                color: colors.onSurfaceVariant,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                'Llega $arrival',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: colors.onSurfaceVariant,
+                ),
+              ),
+            ],
           ),
-        ),
-        const SizedBox(height: 12),
-        if (!isPlan)
-          // Preorden sin plan: abre escáner QR -> modal POS Confirmar cobro.
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final labelRow = Row(
-                mainAxisSize: MainAxisSize.min,
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: colors.primaryContainer.withValues(alpha: 0.4),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Text.rich(
+              TextSpan(
                 children: [
-                  Icon(Icons.payments_outlined, size: 18, color: colors.onSurface),
-                  const SizedBox(width: 6),
-                  Flexible(
-                    child: Text(
-                      'Por cobrar · ${OwnerFormat.money(Money.fromCents(order.effectiveBalanceToCollectCents))}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w800,
-                        color: colors.onSurface,
+                  if (order.soup != null) line('Sopa', order.soup!),
+                  if (order.soup != null && order.main != null)
+                    const TextSpan(text: '\n'),
+                  if (order.main != null) line('Segundo', order.main!),
+                  if (order.drink != null) ...[
+                    if (order.soup != null || order.main != null)
+                      const TextSpan(text: '\n'),
+                    line('Jugo', order.drink!),
+                  ],
+                  if (order.cashItems.isNotEmpty) ...[
+                    if (order.soup != null ||
+                        order.main != null ||
+                        order.drink != null)
+                      const TextSpan(text: '\n'),
+                    line('Carta / Extras', order.cashItems.join(', ')),
+                  ],
+                  const TextSpan(text: '\n'),
+                  line(
+                    'Modalidad',
+                    order.takeaway
+                        ? 'Para llevar (+${OwnerFormat.money(Money.fromCents(order.takeawaySurchargeCents))})'
+                        : 'En local',
+                  ),
+                  const TextSpan(text: '\n'),
+                  line('Llegada est.', arrival),
+                  if (!isPlan) ...[
+                    const TextSpan(text: '\n'),
+                    line('Pago', 'Pago por confirmar en caja'),
+                  ] else if (order.paidByPlan &&
+                      order.cashToCollectCents > 0) ...[
+                    const TextSpan(text: '\n'),
+                    line(
+                      'Saldo por cobrar',
+                      OwnerFormat.money(
+                        Money.fromCents(order.cashToCollectCents),
                       ),
                     ),
-                  ),
-                ],
-              );
-              final actionBtn = OwnerSmallButton(
-                label: 'Cobrar y entregar',
-                icon: Icons.qr_code_scanner_rounded,
-                onPressed: onAction,
-              );
-              if (constraints.maxWidth < 330) {
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    labelRow,
-                    const SizedBox(height: 10),
-                    actionBtn,
+                  ] else ...[
+                    const TextSpan(text: '\n'),
+                    line('Cobertura', '1 almuerzo del plan activo'),
                   ],
-                );
-              }
-              return Row(
-                children: [
-                  Expanded(child: labelRow),
-                  const SizedBox(width: 8),
-                  actionBtn,
                 ],
-              );
-            },
-          )
-        else
-          // Preorden cubierta por plan activo: descuenta 1 almuerzo del plan y entrega.
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final badge = OwnerBadge(
-                label: (planOverrideLunches != null && !order.hasPlanLineInQuote)
-                    ? 'Plan activo · Cubierto por plan ($planOverrideLunches disp.)'
-                    : 'Plan activo · Cubierto por plan',
-                background: b.successContainer,
-                foreground: b.onSuccessContainer,
-              );
-              final actionBtn = OwnerSmallButton(
-                label: 'Descontar 1 almuerzo',
-                icon: Icons.qr_code_scanner_rounded,
-                onPressed: onAction,
-              );
-              if (constraints.maxWidth < 330) {
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Align(alignment: Alignment.centerLeft, child: badge),
-                    const SizedBox(height: 10),
-                    actionBtn,
-                  ],
-                );
-              }
-              return Row(
-                children: [
-                  Expanded(
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: badge,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  actionBtn,
-                ],
-              );
-            },
+              ),
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                height: 1.4,
+                color: colors.onSurface,
+              ),
+            ),
           ),
-      ]),
+          const SizedBox(height: 12),
+          if (!isPlan)
+            // Preorden sin plan: abre escáner QR -> modal POS Confirmar cobro.
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final labelRow = Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.payments_outlined,
+                      size: 18,
+                      color: colors.onSurface,
+                    ),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        'Por cobrar · ${OwnerFormat.money(Money.fromCents(order.effectiveBalanceToCollectCents))}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800,
+                          color: colors.onSurface,
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+                final actionBtn = OwnerSmallButton(
+                  label: 'Cobrar y entregar',
+                  icon: Icons.qr_code_scanner_rounded,
+                  onPressed: onAction,
+                );
+                if (constraints.maxWidth < 330) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [labelRow, const SizedBox(height: 10), actionBtn],
+                  );
+                }
+                return Row(
+                  children: [
+                    Expanded(child: labelRow),
+                    const SizedBox(width: 8),
+                    actionBtn,
+                  ],
+                );
+              },
+            )
+          else
+            // Preorden cubierta por plan activo: descuenta 1 almuerzo del plan y entrega.
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final badge = OwnerBadge(
+                  label:
+                      (planOverrideLunches != null && !order.hasPlanLineInQuote)
+                      ? 'Plan activo · Cubierto por plan ($planOverrideLunches disp.)'
+                      : 'Plan activo · Cubierto por plan',
+                  background: b.successContainer,
+                  foreground: b.onSuccessContainer,
+                );
+                final actionBtn = OwnerSmallButton(
+                  label: 'Descontar 1 almuerzo',
+                  icon: Icons.qr_code_scanner_rounded,
+                  onPressed: onAction,
+                );
+                if (constraints.maxWidth < 330) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Align(alignment: Alignment.centerLeft, child: badge),
+                      const SizedBox(height: 10),
+                      actionBtn,
+                    ],
+                  );
+                }
+                return Row(
+                  children: [
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: badge,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    actionBtn,
+                  ],
+                );
+              },
+            ),
+        ],
+      ),
     );
   }
 }
@@ -769,10 +861,12 @@ class _OrderConfirmChargeSheet extends StatefulWidget {
   const _OrderConfirmChargeSheet({
     required this.order,
     this.planOverrideLunches,
+    this.isCashier = false,
   });
 
   final OwnerOrder order;
   final int? planOverrideLunches;
+  final bool isCashier;
 
   @override
   State<_OrderConfirmChargeSheet> createState() =>
@@ -782,11 +876,14 @@ class _OrderConfirmChargeSheet extends StatefulWidget {
 class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
   OwnerPayMethod _method = OwnerPayMethod.efectivo;
   final TextEditingController _cash = TextEditingController();
+  final TextEditingController _reference = TextEditingController();
+  bool _referenceTouched = false;
   bool _expanded = false;
 
   @override
   void dispose() {
     _cash.dispose();
+    _reference.dispose();
     super.dispose();
   }
 
@@ -810,20 +907,25 @@ class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
         !order.hasPlanLineInQuote &&
         widget.planOverrideLunches != null &&
         widget.planOverrideLunches! > 0;
-    final isPlan = order.hasPlanLineInQuote || order.paidByPlan || hasPlanOverride;
+    final isPlan =
+        order.hasPlanLineInQuote || order.paidByPlan || hasPlanOverride;
     final totalCents = hasPlanOverride
         ? 0
         : order.effectiveBalanceToCollectCents;
     final hasCashToCollect = totalCents > 0;
     final arrival = _arrivalLabel(order);
     final dishesParts = [
-      if (order.soup != null && order.soup!.trim().isNotEmpty) order.soup!.trim(),
-      if (order.main != null && order.main!.trim().isNotEmpty) order.main!.trim(),
-      if (order.drink != null && order.drink!.trim().isNotEmpty) order.drink!.trim(),
+      if (order.soup != null && order.soup!.trim().isNotEmpty)
+        order.soup!.trim(),
+      if (order.main != null && order.main!.trim().isNotEmpty)
+        order.main!.trim(),
+      if (order.drink != null && order.drink!.trim().isNotEmpty)
+        order.drink!.trim(),
       ...order.cashItems,
     ];
-    final dishesSummary =
-        dishesParts.isNotEmpty ? dishesParts.join(' · ') : 'Almuerzo del día';
+    final dishesSummary = dishesParts.isNotEmpty
+        ? dishesParts.join(' · ')
+        : 'Almuerzo del día';
     final modalityLabel = order.takeaway ? 'Para llevar' : 'En local';
 
     final isCash = _method == OwnerPayMethod.efectivo && hasCashToCollect;
@@ -832,9 +934,14 @@ class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
         isCash && _cash.text.trim().isNotEmpty && receivedCents == null;
     final shortfall =
         isCash && receivedCents != null && receivedCents < totalCents;
-    final changeCents =
-        receivedCents == null ? 0 : receivedCents - totalCents;
-    final canConfirm = !isCash || (!invalid && !shortfall);
+    final changeCents = receivedCents == null ? 0 : receivedCents - totalCents;
+    final requiresReference = widget.isCashier &&
+        hasCashToCollect &&
+        _method != OwnerPayMethod.efectivo;
+    final hasReference = _reference.text.trim().isNotEmpty;
+    final canConfirm =
+        (!isCash || (!invalid && !shortfall)) &&
+        (!requiresReference || hasReference);
     final bills = [5, 10, 20].where((v) => v * 100 >= totalCents).toList();
     final totalFormatted = _fmt(totalCents);
 
@@ -842,13 +949,14 @@ class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
     final keyboard = mq.viewInsets.bottom;
     final sysNav = mq.viewPadding.bottom;
     final safeBottom = mq.padding.bottom;
-    final navClearance =
-        keyboard > 0 ? 0.0 : (sysNav - safeBottom).clamp(0.0, double.infinity);
+    final navClearance = keyboard > 0
+        ? 0.0
+        : (sysNav - safeBottom).clamp(0.0, double.infinity);
 
     final primaryButtonLabel = isPlan
         ? (hasCashToCollect
-            ? 'Descontar 1 almuerzo y cobrar · $totalFormatted'
-            : 'Descontar 1 almuerzo del plan')
+              ? 'Descontar 1 almuerzo y cobrar · $totalFormatted'
+              : 'Descontar 1 almuerzo del plan')
         : 'Confirmar cobro y entrega · $totalFormatted';
     final headlineMetric = isPlan
         ? (hasCashToCollect ? totalFormatted : '1 almuerzo')
@@ -981,7 +1089,9 @@ class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
                           decoration: BoxDecoration(
                             border: Border(
                               top: BorderSide(
-                                color: colors.outlineVariant.withValues(alpha: 0.6),
+                                color: colors.outlineVariant.withValues(
+                                  alpha: 0.6,
+                                ),
                               ),
                             ),
                           ),
@@ -1000,7 +1110,8 @@ class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
                                   children: [
                                     _OrderDetailLine(
                                       label: 'Turno',
-                                      value: '#${order.number} · Llega $arrival',
+                                      value:
+                                          '#${order.number} · Llega $arrival',
                                     ),
                                     if (order.soup != null &&
                                         order.soup!.trim().isNotEmpty)
@@ -1083,23 +1194,31 @@ class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
                       (OwnerPayMethod.efectivo, Icons.payments_outlined),
                       (
                         OwnerPayMethod.transferencia,
-                        Icons.account_balance_outlined
+                        Icons.account_balance_outlined,
                       ),
                       (OwnerPayMethod.deuna, Icons.bolt_rounded),
                     ]) ...[
-                      if (m != OwnerPayMethod.efectivo) const SizedBox(width: 8),
+                      if (m != OwnerPayMethod.efectivo)
+                        const SizedBox(width: 8),
                       Expanded(
                         child: Builder(
                           builder: (context) {
                             final selected = hasCashToCollect && _method == m;
                             final bg = !hasCashToCollect
-                                ? colors.surfaceContainerHighest.withValues(alpha: 0.45)
+                                ? colors.surfaceContainerHighest.withValues(
+                                    alpha: 0.45,
+                                  )
                                 : (selected
-                                    ? colors.primary
-                                    : Theme.of(context).scaffoldBackgroundColor);
+                                      ? colors.primary
+                                      : Theme.of(context)
+                                            .scaffoldBackgroundColor);
                             final fg = !hasCashToCollect
-                                ? colors.onSurfaceVariant.withValues(alpha: 0.55)
-                                : (selected ? colors.onPrimary : colors.onSurface);
+                                ? colors.onSurfaceVariant.withValues(
+                                    alpha: 0.55,
+                                  )
+                                : (selected
+                                      ? colors.onPrimary
+                                      : colors.onSurface);
                             return Material(
                               color: bg,
                               shape: RoundedRectangleBorder(
@@ -1119,11 +1238,16 @@ class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
                                           _method = m;
                                           if (m != OwnerPayMethod.efectivo) {
                                             _cash.clear();
+                                          } else {
+                                            _reference.clear();
+                                            _referenceTouched = false;
                                           }
                                         })
                                     : null,
                                 child: Padding(
-                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 12,
+                                  ),
                                   child: Column(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
@@ -1162,7 +1286,9 @@ class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
                             decimal: true,
                           ),
                           inputFormatters: [
-                            FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+                            FilteringTextInputFormatter.allow(
+                              RegExp(r'[0-9.,]'),
+                            ),
                           ],
                           decoration: InputDecoration(
                             isDense: true,
@@ -1171,8 +1297,8 @@ class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
                             errorText: invalid
                                 ? 'Monto inválido'
                                 : (shortfall
-                                    ? 'Faltan ${_fmt(totalCents - receivedCents)}'
-                                    : null),
+                                      ? 'Faltan ${_fmt(totalCents - receivedCents)}'
+                                      : null),
                           ),
                         ),
                       ),
@@ -1216,13 +1342,48 @@ class _OrderConfirmChargeSheetState extends State<_OrderConfirmChargeSheet> {
                     ],
                   ),
                 ],
+                if (hasCashToCollect && _method != OwnerPayMethod.efectivo) ...[
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _reference,
+                    onChanged: (_) => setState(() => _referenceTouched = true),
+                    textCapitalization: TextCapitalization.characters,
+                    textInputAction: TextInputAction.done,
+                    decoration: InputDecoration(
+                      isDense: true,
+                      prefixIcon: const Icon(Icons.receipt_long_outlined),
+                      labelText: widget.isCashier
+                          ? 'N.º de referencia / comprobante *'
+                          : 'N.º de referencia / comprobante (opcional)',
+                      hintText: _method == OwnerPayMethod.deuna
+                          ? 'Ej. Código Deuna o últimos dígitos'
+                          : 'Ej. N.º de comprobante bancario',
+                      helperText: widget.isCashier
+                          ? 'Obligatorio para cobros en ${_method.shortLabel} como cajero.'
+                          : null,
+                      errorText: widget.isCashier &&
+                              _referenceTouched &&
+                              _reference.text.trim().isEmpty
+                          ? 'Ingresa la referencia del pago.'
+                          : null,
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 16),
                 ElevatedButton.icon(
                   onPressed: canConfirm
-                      ? () => Navigator.of(context).pop((
+                      ? () {
+                          final trimmedRef = _reference.text.trim();
+                          Navigator.of(context).pop((
                             method: _method,
                             changeCents: changeCents > 0 ? changeCents : 0,
-                          ))
+                            reference: hasCashToCollect &&
+                                    _method != OwnerPayMethod.efectivo &&
+                                    trimmedRef.isNotEmpty
+                                ? trimmedRef
+                                : null,
+                          ));
+                        }
                       : null,
                   icon: const Icon(Icons.check_circle_outline_rounded),
                   label: Text(
@@ -1286,22 +1447,43 @@ class _Empty extends StatelessWidget {
     return Center(
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(32),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Icon(Icons.schedule_rounded, size: 52, color: colors.onSurfaceVariant),
-          const SizedBox(height: 8),
-          Text('Sin pedidos pendientes',
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Icon(
+              Icons.schedule_rounded,
+              size: 52,
+              color: colors.onSurfaceVariant,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Sin pedidos pendientes',
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: colors.onSurface)),
-          const SizedBox(height: 4),
-          Text(
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w900,
+                color: colors.onSurface,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
               hasDispatchedToday
                   ? 'Todos los almuerzos fueron despachados.'
                   : 'Aún no hay comensales en camino para el menú de hoy.',
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant)),
-          const SizedBox(height: 20),
-          ElevatedButton(onPressed: onBack, child: const Text('Volver a caja')),
-        ]),
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: colors.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: onBack,
+              child: const Text('Volver a caja'),
+            ),
+          ],
+        ),
       ),
     );
   }

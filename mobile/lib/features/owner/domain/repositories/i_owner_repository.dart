@@ -116,6 +116,7 @@ abstract class IOwnerCashRepository {
     required OwnerPlanTemplate template,
     required OwnerPayMethod method,
     bool deductToday = false,
+    String? referenciaExterna,
   });
 
   /// Identifica un comensal a partir de un QR de pase o código sin consumir su saldo.
@@ -149,6 +150,7 @@ abstract class IOwnerCashRepository {
     required List<PosSaleLine> lines,
     required double total,
     required OwnerPayMethod method,
+    String? referenciaExterna,
   });
 
   /// Ofertas vigentes del local (N flash, cada una de un solo plato) más la
@@ -252,6 +254,7 @@ abstract class IOwnerOrdersRepository {
     String orderIdOrCode,
     String activeRestaurantId, {
     OwnerPayMethod paymentMethod = OwnerPayMethod.efectivo,
+    String? referenciaExterna,
   });
 }
 

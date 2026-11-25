@@ -10,6 +10,10 @@ import '../../../core/network/api_exception.dart';
 import '../../../core/session/session_notifier.dart';
 import '../../../core/utils/formatters.dart';
 
+/// Indica si el servidor respondió `403 REGISTRO_CERRADO` para registro de dueños.
+final ValueNotifier<bool> ownerRegistrationClosedNotifier =
+    ValueNotifier<bool>(false);
+
 class AuthResult {
   const AuthResult._({
     required this.ok,
@@ -245,6 +249,8 @@ class ApiAuthRepository implements IAuthRepository {
     required String password,
     required AppRole expectedRole,
   }) async {
+    await _session.resetAllCachesAndSession(notify: false);
+    eventsService.resetSession();
     try {
       final tokenData = await guard(
         () => _api.send<Map<String, dynamic>>(
@@ -258,6 +264,7 @@ class ApiAuthRepository implements IAuthRepository {
         ),
       );
       if (tokenData == null) {
+        await _session.resetAllCachesAndSession();
         return AuthResult.failure('No pudimos iniciar sesión. Inténtalo de nuevo.');
       }
       final meInfo = await _session.onLogin(
@@ -265,6 +272,7 @@ class ApiAuthRepository implements IAuthRepository {
         refreshToken: tokenData['refreshToken'] as String,
         expiresInSeconds: (tokenData['expiresIn'] as num).toInt(),
         expectedRole: expectedRole,
+        loginEmail: identifier.trim(),
       );
       eventsService.resetSession();
       eventsService.track(
@@ -279,6 +287,7 @@ class ApiAuthRepository implements IAuthRepository {
       );
       return AuthResult.success(hasRestaurant: meInfo.restaurants.isNotEmpty);
     } on ApiException catch (e) {
+      await _session.resetAllCachesAndSession();
       eventsService.track(
         'auth.login_error',
         props: {
@@ -291,6 +300,9 @@ class ApiAuthRepository implements IAuthRepository {
         return AuthResult.failure('Correo o contraseña incorrectos.');
       }
       return AuthResult.failure(e.userMessage);
+    } catch (_) {
+      await _session.resetAllCachesAndSession();
+      return AuthResult.failure('No pudimos iniciar sesión. Inténtalo de nuevo.');
     }
   }
 
@@ -327,6 +339,7 @@ class ApiAuthRepository implements IAuthRepository {
       if (!loginResult.ok) return loginResult;
 
       await _session.profile.saveDinerProfile(
+        userId: _session.userId,
         phone: phone != null ? Phone.toLocal(Phone.toE164(phone)) : null,
         zone: zone,
         lat: lat,
@@ -415,8 +428,13 @@ class ApiAuthRepository implements IAuthRepository {
       if (!loginResult.ok) return loginResult;
 
       // No persistimos la cédula/RUC en claro en cliente; se muestra solo la versión enmascarada del servidor.
-      await _session.profile.saveOwnerRuc(null);
-      await _session.profile.saveDinerProfile(zone: zone, lat: lat, lng: lng);
+      await _session.profile.saveOwnerRuc(null, userId: _session.userId);
+      await _session.profile.saveDinerProfile(
+        userId: _session.userId,
+        zone: zone,
+        lat: lat,
+        lng: lng,
+      );
 
       final corePatchBody = <String, dynamic>{
         if (phoneToSend.isNotEmpty) 'telefono': phoneToSend,
@@ -510,9 +528,10 @@ class ApiAuthRepository implements IAuthRepository {
       }
 
       if (codeUpper == 'REGISTRO_CERRADO' || e.status == 403) {
+        ownerRegistrationClosedNotifier.value = true;
         return AuthResult.failure(
-          'El registro de restaurantes está cerrado temporalmente.',
-          errorCode: e.code,
+          'El registro de dueños está cerrado por ahora.',
+          errorCode: 'REGISTRO_CERRADO',
         );
       }
 

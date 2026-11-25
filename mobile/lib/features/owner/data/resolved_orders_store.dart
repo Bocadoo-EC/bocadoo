@@ -122,6 +122,23 @@ class ResolvedOrdersStore {
     }
   }
 
+  /// Limpia por completo las órdenes resueltas en memoria y en `SharedPreferences`
+  /// (obligatorio en `logout` / cambio de cuenta).
+  Future<void> clearAll() async {
+    _resolvedIds.clear();
+    _resolvedNumbers.clear();
+    _loadedDay = '';
+    _loadingFuture = null;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      for (final key in prefs.getKeys().toList()) {
+        if (key.startsWith(_keyPrefix)) {
+          await prefs.remove(key);
+        }
+      }
+    } catch (_) {}
+  }
+
   bool isMarkedResolved({String? id, String? number}) {
     final today = EcuadorTime.today();
     if (_loadedDay != today) return false;

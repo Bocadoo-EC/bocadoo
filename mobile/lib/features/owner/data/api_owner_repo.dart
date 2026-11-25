@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/analytics/events_service.dart';
@@ -411,7 +412,7 @@ class ApiOwnerRepository
       );
       return _mapOrder(data);
     } on ApiException catch (e) {
-      _lastError = e.userMessage;
+      _lastError = _formatConflictOrApiError(e);
       return null;
     }
   }
@@ -2192,8 +2193,16 @@ class ApiOwnerRepository
     required OwnerPlanTemplate template,
     required OwnerPayMethod method,
     bool deductToday = false,
+    String? referenciaExterna,
   }) async {
     _lastError = null;
+    final trimmedRef = referenciaExterna?.trim();
+    if (_isCashier &&
+        method != OwnerPayMethod.efectivo &&
+        (trimmedRef == null || trimmedRef.isEmpty)) {
+      _lastError = 'Ingresa la referencia del pago para confirmar.';
+      return null;
+    }
     try {
       var targetClientId = clientId;
       if (targetClientId == null || targetClientId.isEmpty) {
@@ -2207,7 +2216,7 @@ class ApiOwnerRepository
       }
 
       final intent =
-          'sell_plan:$targetClientId:${template.id}:${_mapPayMethodApi(method)}';
+          'sell_plan:$targetClientId:${template.id}:${_mapPayMethodApi(method)}:${trimmedRef ?? ""}';
       final ik = _idempotency.keyFor(intent);
       late final String saleId;
       try {
@@ -2220,6 +2229,8 @@ class ApiOwnerRepository
                   'planId': template.id,
                   'metodoPago': _mapPayMethodApi(method),
                   'pagoConfirmado': true,
+                  if (trimmedRef != null && trimmedRef.isNotEmpty)
+                    'referenciaExterna': trimmedRef,
                 },
                 restaurant: true,
                 idempotencyKey: ik,
@@ -2273,7 +2284,7 @@ class ApiOwnerRepository
 
       return saleId;
     } on ApiException catch (e) {
-      _lastError = e.userMessage;
+      _lastError = _formatConflictOrApiError(e);
       return null;
     }
   }
@@ -2669,8 +2680,16 @@ class ApiOwnerRepository
     required List<PosSaleLine> lines,
     required double total,
     required OwnerPayMethod method,
+    String? referenciaExterna,
   }) async {
     _lastError = null;
+    final trimmedRef = referenciaExterna?.trim();
+    if (_isCashier &&
+        method != OwnerPayMethod.efectivo &&
+        (trimmedRef == null || trimmedRef.isEmpty)) {
+      _lastError = 'Ingresa la referencia del pago para confirmar.';
+      return null;
+    }
     try {
       if (_cachedLunchPriceCents == 0) {
         await _fetchRestaurantMap();
@@ -2754,7 +2773,7 @@ class ApiOwnerRepository
       final paraLlevar = mesaTexto.toLowerCase().startsWith('para llevar');
 
       final intent =
-          'pos:$restaurantId:$mesaTexto:$targetCents:${_mapPayMethodApi(method)}';
+          'pos:$restaurantId:$mesaTexto:$targetCents:${_mapPayMethodApi(method)}:${trimmedRef ?? ""}';
       final ik = _idempotency.keyFor(intent);
       try {
         final res = await guard(
@@ -2768,6 +2787,8 @@ class ApiOwnerRepository
                   'paraLlevar': paraLlevar,
                   if (mesaTexto.isNotEmpty) 'mesaTexto': mesaTexto,
                   'pagoConfirmado': true,
+                  if (trimmedRef != null && trimmedRef.isNotEmpty)
+                    'referenciaExterna': trimmedRef,
                 },
                 restaurant: true,
                 idempotencyKey: ik,
@@ -2793,8 +2814,150 @@ class ApiOwnerRepository
         _idempotency.done(intent);
       }
     } on ApiException catch (e) {
-      _lastError = e.userMessage;
+      _lastError = _formatConflictOrApiError(e);
       return null;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Gestión de equipo / Cajeros (`POST /v1/restaurante/personal/cajeros`)
+  // ---------------------------------------------------------------------------
+
+  static String _formatRetryAfter(int? seconds) {
+    if (seconds == null || seconds <= 0) {
+      return 'Espera unos minutos antes de intentar nuevamente.';
+    }
+    if (seconds < 60) {
+      return 'Intenta de nuevo en $seconds s.';
+    }
+    final mins = (seconds / 60).ceil();
+    return mins == 1
+        ? 'Intenta de nuevo en 1 minuto.'
+        : 'Intenta de nuevo en $mins minutos.';
+  }
+
+  /// Crea una cuenta de cajero (si aún no existe) sin tocar la sesión del dueño
+  /// y la vincula al restaurante mediante `POST /v1/restaurante/personal/cajeros`.
+  Future<({bool ok, String message, int? retryAfterSeconds})>
+  createCashierAccount({
+    required String nombre,
+    required String correo,
+    required String password,
+  }) async {
+    _lastError = null;
+    final cleanName = nombre.trim();
+    final cleanEmail = correo.trim();
+    if (cleanName.isEmpty || cleanEmail.isEmpty || password.isEmpty) {
+      return (
+        ok: false,
+        message: 'Completa nombre, correo y contraseña del cajero.',
+        retryAfterSeconds: null,
+      );
+    }
+
+    // Paso 1: registrar usuario sin enviar ni sobrescribir el JWT del dueño.
+    try {
+      await _api.dio.post<Map<String, dynamic>>(
+        '${ApiConfig.v1}/auth/register',
+        data: {
+          'nombre': cleanName,
+          'correo': cleanEmail,
+          'password': password,
+          'aceptaTerminos': true,
+        },
+        options: Options(
+          extra: const {'auth': false, 'restaurant': false, 'skipRetry': true},
+        ),
+      );
+    } on DioException catch (e) {
+      final apiErr = e.error is ApiException
+          ? e.error as ApiException
+          : (e.response != null
+                ? ApiException.fromResponse(e.response!)
+                : ApiException.network());
+      final status = e.response?.statusCode ?? apiErr.status;
+      final codeUpper = apiErr.code.toUpperCase();
+      final msgUpper =
+          '$codeUpper ${apiErr.title.toUpperCase()} ${apiErr.detail.toUpperCase()}';
+      final isAlreadyRegistered =
+          status == 409 ||
+          codeUpper == 'CONFLICT' ||
+          msgUpper.contains('EXISTE') ||
+          msgUpper.contains('REGISTRAD') ||
+          msgUpper.contains('DUPLICAD');
+      if (!isAlreadyRegistered) {
+        if (status == 429) {
+          final retry = int.tryParse(
+            e.response?.headers.value('retry-after')?.trim() ?? '',
+          );
+          return (
+            ok: false,
+            message:
+                'Demasiados intentos de registro. ${_formatRetryAfter(retry)}',
+            retryAfterSeconds: retry,
+          );
+        }
+        final detail = apiErr.detail.trim();
+        return (
+          ok: false,
+          message: detail.isNotEmpty ? detail : apiErr.userMessage,
+          retryAfterSeconds: null,
+        );
+      }
+    } catch (_) {
+      return (
+        ok: false,
+        message: 'No se pudo conectar para crear la cuenta del cajero.',
+        retryAfterSeconds: null,
+      );
+    }
+
+    // Paso 2: vincular el correo al restaurante actual con el JWT del dueño.
+    try {
+      await _api.dio.post<Map<String, dynamic>>(
+        '${ApiConfig.v1}/restaurante/personal/cajeros',
+        data: {'correo': cleanEmail},
+        options: Options(
+          extra: const {'auth': true, 'restaurant': true, 'skipRetry': true},
+        ),
+      );
+      eventsService.track('dueno.cajero_vinculado');
+      return (
+        ok: true,
+        message:
+            'Cajero vinculado correctamente. Ya puede iniciar sesión con su correo y contraseña en Terminal Restaurante.',
+        retryAfterSeconds: null,
+      );
+    } on DioException catch (e) {
+      final apiErr = e.error is ApiException
+          ? e.error as ApiException
+          : (e.response != null
+                ? ApiException.fromResponse(e.response!)
+                : ApiException.network());
+      final status = e.response?.statusCode ?? apiErr.status;
+      if (status == 429) {
+        final retry = int.tryParse(
+          e.response?.headers.value('retry-after')?.trim() ?? '',
+        );
+        return (
+          ok: false,
+          message:
+              'Límite de vinculaciones alcanzado (máx. 10/hora). ${_formatRetryAfter(retry)}',
+          retryAfterSeconds: retry,
+        );
+      }
+      final detail = apiErr.detail.trim();
+      return (
+        ok: false,
+        message: detail.isNotEmpty ? detail : _formatConflictOrApiError(apiErr),
+        retryAfterSeconds: null,
+      );
+    } catch (_) {
+      return (
+        ok: false,
+        message: 'No se pudo vincular el cajero al restaurante.',
+        retryAfterSeconds: null,
+      );
     }
   }
 
@@ -3353,6 +3516,7 @@ class ApiOwnerRepository
     String activeRestaurantId, {
     String? rawCodeKey,
     OwnerPayMethod paymentMethod = OwnerPayMethod.efectivo,
+    String? referenciaExterna,
   }) async {
     _lastError = null;
     final cleaned = BocadooQrParser.sanitizeManualInput(orderIdOrCode);
@@ -3528,7 +3692,11 @@ class ApiOwnerRepository
             amount: Money.fromCents(order.effectiveTotalCents),
           );
 
-      await _commitDeliverOrder(entry, paymentMethod: paymentMethod);
+      await _commitDeliverOrder(
+        entry,
+        paymentMethod: paymentMethod,
+        referenciaExterna: referenciaExterna,
+      );
       if (_lastOrderResolvedAlreadyCovered) {
         await ResolvedOrdersStore.instance.markResolved(
           id: order.id,
@@ -3649,6 +3817,7 @@ class ApiOwnerRepository
     String activeRestaurantId, {
     required String clientId,
     OwnerPayMethod paymentMethod = OwnerPayMethod.efectivo,
+    String? referenciaExterna,
   }) async {
     _lastError = null;
     var order = await _findOrderByAnyCode(orderIdOrCode, activeRestaurantId);
@@ -3668,6 +3837,7 @@ class ApiOwnerRepository
         order.number,
         activeRestaurantId,
         paymentMethod: paymentMethod,
+        referenciaExterna: referenciaExterna,
       );
     }
 
@@ -3953,10 +4123,26 @@ class ApiOwnerRepository
     String restaurantId, {
     required int saldoEsperadoCentavos,
     OwnerPayMethod paymentMethod = OwnerPayMethod.efectivo,
+    String? referenciaExterna,
   }) async {
     _lastError = null;
     _lastSaldoCambioConflict = null;
     _lastOrderResolvedAlreadyCovered = false;
+    final trimmedRef = referenciaExterna?.trim();
+    if (saldoEsperadoCentavos > 0 &&
+        _isCashier &&
+        paymentMethod != OwnerPayMethod.efectivo &&
+        (trimmedRef == null || trimmedRef.isEmpty)) {
+      _lastError = 'Ingresa la referencia del pago para confirmar.';
+      return ScanResult(
+        isValid: false,
+        outcome: 'ROJO',
+        title: 'Falta referencia de pago',
+        supportingLine: _lastError!,
+        passId: 'ORD:$orderNumber',
+        actionRequired: 'NINGUNA',
+      );
+    }
     final intent =
         'order_canjear_saldo:$orderId:$saldoEsperadoCentavos:${DateTime.now().microsecondsSinceEpoch}';
     final ik = _idempotency.keyFor(intent);
@@ -3971,8 +4157,9 @@ class ApiOwnerRepository
                   'saldoEsperadoCentavos': saldoEsperadoCentavos,
                   if (saldoEsperadoCentavos > 0) ...{
                     'metodoPago': _mapPayMethodApi(paymentMethod),
-                    if (!_isCashier || paymentMethod == OwnerPayMethod.efectivo)
-                      'pagoConfirmado': true,
+                    'pagoConfirmado': true,
+                    if (trimmedRef != null && trimmedRef.isNotEmpty)
+                      'referenciaExterna': trimmedRef,
                   },
                 },
               },
@@ -4227,8 +4414,19 @@ class ApiOwnerRepository
   Future<void> _commitDeliverOrder(
     _OrderCacheEntry entry, {
     OwnerPayMethod paymentMethod = OwnerPayMethod.efectivo,
+    String? referenciaExterna,
   }) async {
     final today = EcuadorTime.today();
+    final trimmedRef = referenciaExterna?.trim();
+    if (_isCashier &&
+        !entry.paidByPlan &&
+        entry.amount > 0.005 &&
+        paymentMethod != OwnerPayMethod.efectivo &&
+        (trimmedRef == null || trimmedRef.isEmpty)) {
+      _lastError = 'Ingresa la referencia del pago para confirmar.';
+      _pendingDeliverOrders.remove(entry.number);
+      return;
+    }
     try {
       var porCobrarCents = 0;
       var beforeCashCents = 0;
@@ -4255,6 +4453,18 @@ class ApiOwnerRepository
                 .send<Map<String, dynamic>>(
                   'POST',
                   '${ApiConfig.v1}/caja/pedidos/${entry.id}/canjear',
+                  body: (!entry.paidByPlan &&
+                          entry.amount > 0.005 &&
+                          trimmedRef != null &&
+                          trimmedRef.isNotEmpty)
+                      ? {
+                          'cobro': {
+                            'metodoPago': _mapPayMethodApi(paymentMethod),
+                            'pagoConfirmado': true,
+                            'referenciaExterna': trimmedRef,
+                          },
+                        }
+                      : null,
                   restaurant: true,
                   idempotencyKey: ik,
                 )
@@ -4342,6 +4552,8 @@ class ApiOwnerRepository
                     'paraLlevar': false,
                     'mesaTexto': 'Pedido #${entry.number}',
                     'pagoConfirmado': true,
+                    if (trimmedRef != null && trimmedRef.isNotEmpty)
+                      'referenciaExterna': trimmedRef,
                   },
                   restaurant: true,
                   idempotencyKey: ventaIk,
@@ -6051,7 +6263,7 @@ class ApiOwnerRepository
         } catch (_) {}
       }
     } on ApiException catch (e) {
-      _lastError = e.userMessage;
+      _lastError = _formatConflictOrApiError(e);
     } catch (_) {
       _lastError = 'No se pudo deshacer la cartulina.';
     } finally {
@@ -6431,9 +6643,12 @@ class ApiOwnerRepository
     var lat = (data['latitud'] as num?)?.toDouble();
     var lng = (data['longitud'] as num?)?.toDouble();
     final profile = _session.profile;
-    if (zone.isEmpty) zone = await profile.getZone() ?? '';
-    lat ??= await profile.getLat();
-    lng ??= await profile.getLng();
+    final canUseLocalProfile = await profile.belongsToUser(_session.userId);
+    if (canUseLocalProfile) {
+      if (zone.isEmpty) zone = await profile.getZone() ?? '';
+      lat ??= await profile.getLat();
+      lng ??= await profile.getLng();
+    }
     final rawMaskedCedula = (data['cedulaRucEnmascarada'] ?? data['cedulaRuc'])
         ?.toString()
         .trim();
@@ -6621,7 +6836,7 @@ class ApiOwnerRepository
         props: {'metodo': _mapPayMethodApi(method), 'origen': 'solicitud'},
       );
     } on ApiException catch (e) {
-      _lastError = e.userMessage;
+      _lastError = _formatConflictOrApiError(e);
     } catch (_) {
       _lastError = 'No se pudo cobrar la solicitud de plan.';
     } finally {

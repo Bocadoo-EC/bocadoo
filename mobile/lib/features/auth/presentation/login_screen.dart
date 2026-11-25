@@ -8,6 +8,9 @@ import '../../../core/config/app_mode.dart';
 import '../../../core/session/session_notifier.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/bocadoo_logo.dart';
+import '../../customer/presentation/account_screen.dart';
+import '../../customer/presentation/customer_controller.dart';
+import '../../owner/presentation/owner_controller.dart';
 import '../data/auth_repository.dart';
 import 'google_sign_in_flow.dart';
 
@@ -99,9 +102,17 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     return eErr == null && pErr == null;
   }
 
+  void _invalidateAllBusinessProviders() {
+    invalidateOwnerBusinessProviders(ref);
+    ref.invalidate(customerRepositoryProvider);
+    ref.invalidate(customerControllerProvider);
+    ref.invalidate(customerProfileProvider);
+  }
+
   Future<void> _login() async {
     if (!_validate()) return;
     setState(() => _loading = true);
+    _invalidateAllBusinessProviders();
     final expectedRole = _role == _UserRole.customer
         ? AppRole.diner
         : AppRole.owner;
@@ -113,8 +124,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           expectedRole: expectedRole,
         );
     if (!mounted) return;
-    setState(() => _loading = false);
     if (!result.ok) {
+      _invalidateAllBusinessProviders();
+      setState(() => _loading = false);
       final msg = result.errorMessage ?? 'No pudimos iniciar sesión.';
       setState(() => _serverError = msg);
       if (msg.contains('pertenece a un restaurante') ||
@@ -135,7 +147,22 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       }
       return;
     }
-    if (_role == _UserRole.customer) {
+
+    _invalidateAllBusinessProviders();
+    if (!AppMode.useMock && (_role == _UserRole.owner || result.hasRestaurant)) {
+      try {
+        ref.invalidate(localInfoProvider);
+        await ref.read(localInfoProvider.future);
+      } catch (_) {
+        // `SessionNotifier.onLogin` ya validó `/v1/restaurante`; Ajustes permite reintento.
+      }
+      ref.invalidate(dailySummaryProvider);
+      ref.invalidate(posMenuProvider);
+      ref.invalidate(planTemplatesProvider);
+    }
+    if (!mounted) return;
+    setState(() => _loading = false);
+    if (_role == _UserRole.customer && !result.hasRestaurant) {
       context.go('/customer/pase');
     } else {
       context.go('/owner/caja');
@@ -419,34 +446,42 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
               const SizedBox(height: 24),
 
-              Center(
-                child: Wrap(
-                  alignment: WrapAlignment.center,
-                  children: [
-                    Text(
-                      '¿Primera vez en Bocadoo? ',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: cs.onSurfaceVariant,
-                      ),
-                    ),
-                    GestureDetector(
-                      onTap: () => isCustomer
-                          ? context.push('/auth/registro/comensal')
-                          : context.push('/auth/registro/dueno'),
-                      child: Text(
-                        isCustomer
-                            ? 'Crear cuenta de Comensal'
-                            : 'Registrar mi Restaurante',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: cs.primary,
+              ValueListenableBuilder<bool>(
+                valueListenable: ownerRegistrationClosedNotifier,
+                builder: (context, ownerClosed, _) {
+                  if (!isCustomer && ownerClosed) {
+                    return const SizedBox.shrink();
+                  }
+                  return Center(
+                    child: Wrap(
+                      alignment: WrapAlignment.center,
+                      children: [
+                        Text(
+                          '¿Primera vez en Bocadoo? ',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: cs.onSurfaceVariant,
+                          ),
                         ),
-                      ),
+                        GestureDetector(
+                          onTap: () => isCustomer
+                              ? context.push('/auth/registro/comensal')
+                              : context.push('/auth/registro/dueno'),
+                          child: Text(
+                            isCustomer
+                                ? 'Crear cuenta de Comensal'
+                                : 'Registrar mi Restaurante',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: cs.primary,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
+                  );
+                },
               ),
 
               const SizedBox(height: 20),

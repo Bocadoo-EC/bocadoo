@@ -32,8 +32,9 @@ import '../domain/repositories/i_owner_repository.dart';
 final _sharedMock = MockOwnerRepository();
 final _sharedOwnerRepository = OwnerRepository(delegate: _sharedMock);
 
-/// Instancia única de [ApiOwnerRepository] vinculada al restaurante activo en sesión.
+/// Instancia única de [ApiOwnerRepository] vinculada al usuario y restaurante activos.
 final apiOwnerRepositoryProvider = Provider<ApiOwnerRepository>((ref) {
+  ref.watch(ownerSessionKeyProvider);
   ref.watch(ownerRestaurantIdProvider);
   final repo = ApiOwnerRepository(
     api: ref.watch(apiClientProvider),
@@ -56,9 +57,8 @@ final ownerMenuRepositoryProvider = Provider<IOwnerMenuRepository>(
 );
 
 final ownerCashRepositoryProvider = Provider<IOwnerCashRepository>(
-  (ref) => AppMode.useMock
-      ? _sharedMock
-      : ref.watch(apiOwnerRepositoryProvider),
+  (ref) =>
+      AppMode.useMock ? _sharedMock : ref.watch(apiOwnerRepositoryProvider),
 );
 
 final ownerCatalogRepositoryProvider = Provider<IOwnerCatalogRepository>(
@@ -68,36 +68,34 @@ final ownerCatalogRepositoryProvider = Provider<IOwnerCatalogRepository>(
 );
 
 final ownerMetricsRepositoryProvider = Provider<IOwnerMetricsRepository>(
-  (ref) => AppMode.useMock
-      ? _sharedMock
-      : ref.watch(apiOwnerRepositoryProvider),
+  (ref) =>
+      AppMode.useMock ? _sharedMock : ref.watch(apiOwnerRepositoryProvider),
 );
 
 final ownerOrdersRepositoryProvider = Provider<IOwnerOrdersRepository>(
-  (ref) => AppMode.useMock
-      ? _sharedMock
-      : ref.watch(apiOwnerRepositoryProvider),
+  (ref) =>
+      AppMode.useMock ? _sharedMock : ref.watch(apiOwnerRepositoryProvider),
 );
 
 final ownerTablesRepositoryProvider = Provider<IOwnerTablesRepository>(
-  (ref) => AppMode.useMock
-      ? _sharedMock
-      : ref.watch(apiOwnerRepositoryProvider),
+  (ref) =>
+      AppMode.useMock ? _sharedMock : ref.watch(apiOwnerRepositoryProvider),
 );
 
 final ownerFeedbackRepositoryProvider = Provider<IOwnerFeedbackRepository>(
-  (ref) => AppMode.useMock
-      ? _sharedMock
-      : ref.watch(apiOwnerRepositoryProvider),
+  (ref) =>
+      AppMode.useMock ? _sharedMock : ref.watch(apiOwnerRepositoryProvider),
 );
 
 final ownerSettingsRepositoryProvider = Provider<IOwnerSettingsRepository>(
-  (ref) => AppMode.useMock
-      ? _sharedMock
-      : ref.watch(apiOwnerRepositoryProvider),
+  (ref) =>
+      AppMode.useMock ? _sharedMock : ref.watch(apiOwnerRepositoryProvider),
 );
 
-void _scheduleOrdersPoll(Ref ref, {Duration interval = const Duration(seconds: 8)}) {
+void _scheduleOrdersPoll(
+  Ref ref, {
+  Duration interval = const Duration(seconds: 8),
+}) {
   if (AppMode.useMock) return;
   final timer = Timer.periodic(interval, (_) {
     if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
@@ -108,10 +106,15 @@ void _scheduleOrdersPoll(Ref ref, {Duration interval = const Duration(seconds: 8
 }
 
 /// O12 · Preórdenes por cobrar y entregar.
-final activeOrdersProvider = FutureProvider.autoDispose<List<OwnerOrder>>((ref) async {
+final activeOrdersProvider = FutureProvider.autoDispose<List<OwnerOrder>>((
+  ref,
+) async {
+  ref.watch(ownerSessionKeyProvider);
+  final rid = ref.watch(ownerRestaurantIdProvider);
   _scheduleOrdersPoll(ref);
-  final rid = ref.read(ownerRestaurantIdProvider);
-  final orders = await ref.read(ownerOrdersRepositoryProvider).getActiveOrders(rid);
+  final orders = await ref
+      .read(ownerOrdersRepositoryProvider)
+      .getActiveOrders(rid);
   final movements = ref.watch(cajaMovementsProvider).items;
   return ResolvedOrdersStore.instance.filterAndReconcileOrders(
     orders,
@@ -120,8 +123,11 @@ final activeOrdersProvider = FutureProvider.autoDispose<List<OwnerOrder>>((ref) 
 });
 
 /// Mesas con amigos por cobrar (banner de Caja / Pedidos en camino).
-final pendingTablesProvider =
-    FutureProvider.autoDispose<List<PendingTable>>((ref) async {
+final pendingTablesProvider = FutureProvider.autoDispose<List<PendingTable>>((
+  ref,
+) async {
+  ref.watch(ownerSessionKeyProvider);
+  final restaurantId = ref.watch(ownerRestaurantIdProvider);
   _scheduleOrdersPoll(ref, interval: const Duration(seconds: 4));
 
   final sim = GroupOrderSimulationStore.instance;
@@ -129,7 +135,6 @@ final pendingTablesProvider =
   sim.addListener(onSimChanged);
   ref.onDispose(() => sim.removeListener(onSimChanged));
 
-  final restaurantId = ref.read(ownerRestaurantIdProvider);
   final simTables = sim.ownerTablesFor(restaurantId);
 
   List<PendingTable> repoTables = const <PendingTable>[];
@@ -153,28 +158,36 @@ final pendingTablesProvider =
 
 /// O15 · Opiniones.
 final opinionsProvider = FutureProvider.autoDispose<List<OwnerOpinion>>((ref) {
-  return ref.read(ownerFeedbackRepositoryProvider).getOpinions(ref.read(ownerRestaurantIdProvider));
+  ref.watch(ownerSessionKeyProvider);
+  final rid = ref.watch(ownerRestaurantIdProvider);
+  return ref.read(ownerFeedbackRepositoryProvider).getOpinions(rid);
 });
 
 /// O16 · Datos y logo del local.
 final localInfoProvider = FutureProvider.autoDispose<LocalInfo>((ref) {
-  return ref.read(ownerSettingsRepositoryProvider).getLocalInfo(ref.read(ownerRestaurantIdProvider));
+  ref.watch(ownerSessionKeyProvider);
+  final rid = ref.watch(ownerRestaurantIdProvider);
+  return ref.read(ownerSettingsRepositoryProvider).getLocalInfo(rid);
 });
 
 const _roleStorageKey = 'bocadoo-owner-role';
 
 /// Rol de este dispositivo (O16). Se guarda en el teléfono.
-final ownerRoleProvider = NotifierProvider<OwnerRoleNotifier, OwnerRole>(OwnerRoleNotifier.new);
+final ownerRoleProvider = NotifierProvider<OwnerRoleNotifier, OwnerRole>(
+  OwnerRoleNotifier.new,
+);
 
 class OwnerRoleNotifier extends Notifier<OwnerRole> {
   bool _changed = false;
 
   @override
   OwnerRole build() {
+    ref.watch(ownerSessionKeyProvider);
     final session = ref.watch(sessionProvider);
     void onSession() => ref.invalidateSelf();
     session.addListener(onSession);
     ref.onDispose(() => session.removeListener(onSession));
+    _changed = false;
 
     if (!AppMode.useMock && session.isCashierAccount) {
       return OwnerRole.cashier;
@@ -206,12 +219,26 @@ class OwnerRoleNotifier extends Notifier<OwnerRole> {
     state = role;
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_roleStorageKey, role == OwnerRole.cashier ? 'cashier' : 'owner');
+      await prefs.setString(
+        _roleStorageKey,
+        role == OwnerRole.cashier ? 'cashier' : 'owner',
+      );
     } catch (_) {
       // Se mantiene solo en memoria.
     }
   }
 }
+
+/// Clave única de aislamiento por usuario + restaurante autenticados.
+final ownerSessionKeyProvider = Provider<String>((ref) {
+  if (AppMode.useMock) return 'mock:rest-001';
+  final session = ref.watch(sessionProvider);
+  void onSession() => ref.invalidateSelf();
+  session.addListener(onSession);
+  ref.onDispose(() => session.removeListener(onSession));
+  if (!session.isAuthenticated) return '';
+  return '${session.userId ?? ''}:${session.activeRestaurantId ?? ''}';
+});
 
 /// Restaurante activo de la caja actual (lee la sesión real cuando `!AppMode.useMock`).
 final ownerRestaurantIdProvider = Provider<String>((ref) {
@@ -233,25 +260,41 @@ final ownerRestaurantNameProvider = Provider<String>((ref) {
   return session.activeRestaurant?.name ?? 'Mi Restaurante';
 });
 
-final catalogDishesProvider = FutureProvider.autoDispose<List<CatalogDish>>((ref) {
-  return ref.read(ownerCatalogRepositoryProvider).getDishes(ref.read(ownerRestaurantIdProvider));
-});
-
-final planClientCountsProvider = FutureProvider.autoDispose<Map<String, int>>((ref) {
-  return ref.read(ownerCashRepositoryProvider).getPlanClientCounts(ref.read(ownerRestaurantIdProvider));
-});
-
-final metricsProvider = FutureProvider.autoDispose.family<OwnerMetrics, MetricsPeriod>((ref, period) {
+final catalogDishesProvider = FutureProvider.autoDispose<List<CatalogDish>>((
+  ref,
+) {
+  ref.watch(ownerSessionKeyProvider);
   return ref
-      .read(ownerMetricsRepositoryProvider)
-      .getMetrics(ref.read(ownerRestaurantIdProvider), period: period);
+      .read(ownerCatalogRepositoryProvider)
+      .getDishes(ref.watch(ownerRestaurantIdProvider));
 });
+
+final planClientCountsProvider = FutureProvider.autoDispose<Map<String, int>>((
+  ref,
+) {
+  ref.watch(ownerSessionKeyProvider);
+  return ref
+      .read(ownerCashRepositoryProvider)
+      .getPlanClientCounts(ref.watch(ownerRestaurantIdProvider));
+});
+
+final metricsProvider = FutureProvider.autoDispose
+    .family<OwnerMetrics, MetricsPeriod>((ref, period) {
+      ref.watch(ownerSessionKeyProvider);
+      return ref
+          .read(ownerMetricsRepositoryProvider)
+          .getMetrics(ref.watch(ownerRestaurantIdProvider), period: period);
+    });
 
 /// Solicitudes de plan enviadas por comensales pendientes de cobro en caja (P-01).
-final planRequestsProvider = FutureProvider.autoDispose<List<OwnerPlanRequest>>((ref) {
-  if (AppMode.useMock) return Future.value(const []);
-  return ref.read(apiOwnerRepositoryProvider).getPlanRequests();
-});
+final planRequestsProvider = FutureProvider.autoDispose<List<OwnerPlanRequest>>(
+  (ref) {
+    ref.watch(ownerSessionKeyProvider);
+    ref.watch(ownerRestaurantIdProvider);
+    if (AppMode.useMock) return Future.value(const []);
+    return ref.read(apiOwnerRepositoryProvider).getPlanRequests();
+  },
+);
 
 /// Estado paginado por cursor para `GET /v1/caja/movimientos?fecha=YYYY-MM-DD`.
 @immutable
@@ -300,22 +343,24 @@ class CajaMovementsState {
       isLoading: isLoading ?? this.isLoading,
       isLoadingMore: isLoadingMore ?? this.isLoadingMore,
       errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
-      warningMessage:
-          clearWarning ? null : (warningMessage ?? this.warningMessage),
+      warningMessage: clearWarning
+          ? null
+          : (warningMessage ?? this.warningMessage),
     );
   }
 }
 
 final cajaMovementsProvider =
     NotifierProvider.autoDispose<CajaMovementsNotifier, CajaMovementsState>(
-  CajaMovementsNotifier.new,
-);
+      CajaMovementsNotifier.new,
+    );
 
 class CajaMovementsNotifier extends Notifier<CajaMovementsState> {
   static const int _pageSize = 20;
 
   @override
   CajaMovementsState build() {
+    ref.watch(ownerSessionKeyProvider);
     ref.watch(ownerRestaurantIdProvider);
     ref.watch(ownerRoleProvider);
     final today = EcuadorTime.today();
@@ -330,7 +375,8 @@ class CajaMovementsNotifier extends Notifier<CajaMovementsState> {
     String? roleWarning;
     if (!isOwner && targetDate != today) {
       targetDate = today;
-      roleWarning = 'Solo el dueño puede consultar movimientos de otras fechas.';
+      roleWarning =
+          'Solo el dueño puede consultar movimientos de otras fechas.';
     }
 
     if (!silent) {
@@ -346,11 +392,9 @@ class CajaMovementsNotifier extends Notifier<CajaMovementsState> {
 
     final rid = ref.read(ownerRestaurantIdProvider);
     try {
-      final page = await ref.read(ownerCashRepositoryProvider).getCajaMovements(
-            rid,
-            fecha: targetDate,
-            limit: _pageSize,
-          );
+      final page = await ref
+          .read(ownerCashRepositoryProvider)
+          .getCajaMovements(rid, fecha: targetDate, limit: _pageSize);
       state = CajaMovementsState(
         selectedDate: targetDate,
         items: page.items,
@@ -372,10 +416,7 @@ class CajaMovementsNotifier extends Notifier<CajaMovementsState> {
         }
         return;
       }
-      state = state.copyWith(
-        isLoading: false,
-        errorMessage: e.userMessage,
-      );
+      state = state.copyWith(isLoading: false, errorMessage: e.userMessage);
     } catch (_) {
       state = state.copyWith(
         isLoading: false,
@@ -398,7 +439,9 @@ class CajaMovementsNotifier extends Notifier<CajaMovementsState> {
     state = state.copyWith(isLoadingMore: true, clearError: true);
     final rid = ref.read(ownerRestaurantIdProvider);
     try {
-      final page = await ref.read(ownerCashRepositoryProvider).getCajaMovements(
+      final page = await ref
+          .read(ownerCashRepositoryProvider)
+          .getCajaMovements(
             rid,
             fecha: state.selectedDate,
             cursor: cursor,
@@ -417,10 +460,7 @@ class CajaMovementsNotifier extends Notifier<CajaMovementsState> {
         isLoadingMore: false,
       );
     } on ApiException catch (e) {
-      state = state.copyWith(
-        isLoadingMore: false,
-        errorMessage: e.userMessage,
-      );
+      state = state.copyWith(isLoadingMore: false, errorMessage: e.userMessage);
     } catch (_) {
       state = state.copyWith(
         isLoadingMore: false,
@@ -431,36 +471,57 @@ class CajaMovementsNotifier extends Notifier<CajaMovementsState> {
 }
 
 /// Resumen del turno. Se recarga con `ref.invalidate`.
-final dailySummaryProvider =
-    FutureProvider.autoDispose<TransactionSummary>((ref) {
+final dailySummaryProvider = FutureProvider.autoDispose<TransactionSummary>((
+  ref,
+) {
+  ref.watch(ownerSessionKeyProvider);
   return ref
       .read(ownerRepositoryProvider)
-      .getDailyClosingSummary(ref.read(ownerRestaurantIdProvider));
+      .getDailyClosingSummary(ref.watch(ownerRestaurantIdProvider));
 });
 
 final lunchPriceProvider = FutureProvider.autoDispose<double>((ref) {
-  return ref.read(ownerCashRepositoryProvider).getSingleLunchPrice(ref.read(ownerRestaurantIdProvider));
+  ref.watch(ownerSessionKeyProvider);
+  return ref
+      .read(ownerCashRepositoryProvider)
+      .getSingleLunchPrice(ref.watch(ownerRestaurantIdProvider));
 });
 
-final ownerClientsProvider = FutureProvider.autoDispose<List<OwnerClient>>((ref) {
-  return ref.read(ownerCashRepositoryProvider).getClients(ref.read(ownerRestaurantIdProvider));
+final ownerClientsProvider = FutureProvider.autoDispose<List<OwnerClient>>((
+  ref,
+) {
+  ref.watch(ownerSessionKeyProvider);
+  return ref
+      .read(ownerCashRepositoryProvider)
+      .getClients(ref.watch(ownerRestaurantIdProvider));
 });
 
-final planTemplatesProvider = FutureProvider.autoDispose<List<OwnerPlanTemplate>>((ref) {
-  return ref.read(ownerCashRepositoryProvider).getPlanTemplates(ref.read(ownerRestaurantIdProvider));
-});
+final planTemplatesProvider =
+    FutureProvider.autoDispose<List<OwnerPlanTemplate>>((ref) {
+      ref.watch(ownerSessionKeyProvider);
+      return ref
+          .read(ownerCashRepositoryProvider)
+          .getPlanTemplates(ref.watch(ownerRestaurantIdProvider));
+    });
 
 final catalogProvider = FutureProvider.autoDispose<List<CatalogItem>>((ref) {
-  return ref.read(ownerCashRepositoryProvider).getCatalog(ref.read(ownerRestaurantIdProvider));
+  ref.watch(ownerSessionKeyProvider);
+  return ref
+      .read(ownerCashRepositoryProvider)
+      .getCatalog(ref.watch(ownerRestaurantIdProvider));
 });
 
 final posMenuProvider = FutureProvider.autoDispose<DailyMenu?>((ref) {
-  return ref.read(ownerMenuRepositoryProvider).getTodayMenu(ref.read(ownerRestaurantIdProvider));
+  ref.watch(ownerSessionKeyProvider);
+  return ref
+      .read(ownerMenuRepositoryProvider)
+      .getTodayMenu(ref.watch(ownerRestaurantIdProvider));
 });
 
 /// Disponibilidad reactiva del menú publicado de hoy (`SIN_PUBLICAR`, `DISPONIBLE`, `AGOTADO_TOTAL`).
-final menuAvailabilityProvider =
-    Provider.autoDispose<MenuAvailabilityState>((ref) {
+final menuAvailabilityProvider = Provider.autoDispose<MenuAvailabilityState>((
+  ref,
+) {
   final menu = ref.watch(posMenuProvider).value;
   if (menu == null) return MenuAvailabilityState.sinPublicar;
   return menu.availabilityState;
@@ -473,13 +534,20 @@ final isTodayMenuPublishedProvider = Provider.autoDispose<bool>((ref) {
 });
 
 /// Ofertas vigentes del local: N flash (un plato cada una) + promo programada.
-final activeOffersProvider = FutureProvider.autoDispose<List<FlashOffer>>((ref) {
-  return ref.read(ownerCashRepositoryProvider).getActiveOffers(ref.read(ownerRestaurantIdProvider));
+final activeOffersProvider = FutureProvider.autoDispose<List<FlashOffer>>((
+  ref,
+) {
+  ref.watch(ownerSessionKeyProvider);
+  return ref
+      .read(ownerCashRepositoryProvider)
+      .getActiveOffers(ref.watch(ownerRestaurantIdProvider));
 });
 
 final ordersOnTheWayProvider = FutureProvider.autoDispose<int>((ref) {
+  ref.watch(ownerSessionKeyProvider);
+  final rid = ref.watch(ownerRestaurantIdProvider);
   _scheduleOrdersPoll(ref, interval: const Duration(seconds: 15));
-  return ref.read(ownerCashRepositoryProvider).getOrdersOnTheWayCount(ref.read(ownerRestaurantIdProvider));
+  return ref.read(ownerCashRepositoryProvider).getOrdersOnTheWayCount(rid);
 });
 
 enum CajaLiveAlertKind { ofertaFlash, planPrepagado, preorden, pedidoGrupal }
@@ -536,8 +604,8 @@ class CajaLiveSyncState {
 
 final cajaLiveSyncProvider =
     NotifierProvider.autoDispose<CajaLiveSyncNotifier, CajaLiveSyncState>(
-  CajaLiveSyncNotifier.new,
-);
+      CajaLiveSyncNotifier.new,
+    );
 
 class CajaLiveSyncNotifier extends Notifier<CajaLiveSyncState> {
   final Set<String> _idsVistos = <String>{};
@@ -547,6 +615,7 @@ class CajaLiveSyncNotifier extends Notifier<CajaLiveSyncState> {
 
   @override
   CajaLiveSyncState build() {
+    ref.watch(ownerSessionKeyProvider);
     ref.watch(ownerRestaurantIdProvider);
     _idsVistos.clear();
     _hasSeededSeenIds = false;
@@ -562,7 +631,8 @@ class CajaLiveSyncNotifier extends Notifier<CajaLiveSyncState> {
       return raw.padLeft(5, '0');
     }
     final target =
-        order.estimatedArrival ?? order.createdAt.add(const Duration(minutes: 15));
+        order.estimatedArrival ??
+        order.createdAt.add(const Duration(minutes: 15));
     final ec = target.toUtc().subtract(const Duration(hours: 5));
     final hh = ec.hour.toString().padLeft(2, '0');
     final mm = ec.minute.toString().padLeft(2, '0');
@@ -582,7 +652,9 @@ class CajaLiveSyncNotifier extends Notifier<CajaLiveSyncState> {
           .getEnCaminoOrders(rid)
           .catchError((_) => state.enCaminoOrders);
       final tablesFuture = () async {
-        final simTables = GroupOrderSimulationStore.instance.ownerTablesFor(rid);
+        final simTables = GroupOrderSimulationStore.instance.ownerTablesFor(
+          rid,
+        );
         List<PendingTable> repoTables = const <PendingTable>[];
         if (ApiCapabilities.ownerPendingTablesList) {
           try {
@@ -602,7 +674,10 @@ class CajaLiveSyncNotifier extends Notifier<CajaLiveSyncState> {
           .getPendingPayments(rid)
           .catchError((_) => state.pendingPayments);
       final movementsFuture = includeMovements
-          ? ref.read(cajaMovementsProvider.notifier).refresh().catchError((_) {})
+          ? ref
+                .read(cajaMovementsProvider.notifier)
+                .refresh()
+                .catchError((_) {})
           : Future<void>.value();
 
       final results = await Future.wait<dynamic>([
@@ -615,10 +690,8 @@ class CajaLiveSyncNotifier extends Notifier<CajaLiveSyncState> {
 
       final rawOrders = results[0] as List<OwnerOrder>;
       final movements = ref.read(cajaMovementsProvider).items;
-      final orders = await ResolvedOrdersStore.instance.filterAndReconcileOrders(
-        rawOrders,
-        movements: movements,
-      );
+      final orders = await ResolvedOrdersStore.instance
+          .filterAndReconcileOrders(rawOrders, movements: movements);
       if (_disposed) return const [];
       final tables = results[1] as List<PendingTable>;
       final payments = results[2] as List<PendingPaymentItem>;
@@ -640,7 +713,9 @@ class CajaLiveSyncNotifier extends Notifier<CajaLiveSyncState> {
         for (final o in orders) {
           final key = 'ord:${o.id ?? o.number}';
           if (!_idsVistos.add(key)) continue;
-          final nombre = o.dinerName.trim().isEmpty ? 'Comensal' : o.dinerName.trim();
+          final nombre = o.dinerName.trim().isEmpty
+              ? 'Comensal'
+              : o.dinerName.trim();
           if (o.hasFlashOffer) {
             newAlerts.add(
               CajaLiveAlert(
@@ -675,7 +750,9 @@ class CajaLiveSyncNotifier extends Notifier<CajaLiveSyncState> {
         for (final t in tables) {
           final key = 'mesa:${t.id}';
           if (!_idsVistos.add(key)) continue;
-          final host = t.hostName.trim().isEmpty ? 'Anfitrión' : t.hostName.trim();
+          final host = t.hostName.trim().isEmpty
+              ? 'Anfitrión'
+              : t.hostName.trim();
           newAlerts.add(
             CajaLiveAlert(
               key: key,
@@ -716,7 +793,10 @@ class CajaLiveSyncNotifier extends Notifier<CajaLiveSyncState> {
 }
 
 final shiftClosedProvider = FutureProvider.autoDispose<bool>((ref) {
-  return ref.read(ownerCashRepositoryProvider).isShiftClosed(ref.read(ownerRestaurantIdProvider));
+  ref.watch(ownerSessionKeyProvider);
+  return ref
+      .read(ownerCashRepositoryProvider)
+      .isShiftClosed(ref.watch(ownerRestaurantIdProvider));
 });
 
 /// Estado manual del semáforo en Caja y temporizador local de `LLENO`.
@@ -737,13 +817,14 @@ class ManualOccupancyState {
 
 final manualOccupancyProvider =
     NotifierProvider<ManualOccupancyNotifier, ManualOccupancyState>(
-  ManualOccupancyNotifier.new,
-);
+      ManualOccupancyNotifier.new,
+    );
 
 /// Fuente de verdad única en Dueño del estado público efectivo del restaurante.
 /// Jerarquía: 1) `CERRADO` manual; 2) `AGOTADO_HOY` si menú sin disponibles; 3) semáforo manual.
-final ownerPublicStatusProvider =
-    Provider.autoDispose<RestaurantPublicStatus>((ref) {
+final ownerPublicStatusProvider = Provider.autoDispose<RestaurantPublicStatus>((
+  ref,
+) {
   final menuAvail = ref.watch(menuAvailabilityProvider);
   final manualState = ref.watch(manualOccupancyProvider);
   return resolveRestaurantPublicStatus(
@@ -766,17 +847,25 @@ class ManualOccupancyNotifier extends Notifier<ManualOccupancyState> {
   Timer? _timer;
   bool _loadedFromApi = false;
   bool _disposed = false;
+  String? _lastSessionKey;
 
   @override
   ManualOccupancyState build() {
+    final sessionKey = ref.watch(ownerSessionKeyProvider);
     ref.watch(ownerRestaurantIdProvider);
+    if (_lastSessionKey != sessionKey) {
+      _lastSessionKey = sessionKey;
+      _loadedFromApi = false;
+      _timer?.cancel();
+      _timer = null;
+    }
     _disposed = false;
     ref.onDispose(() {
       _disposed = true;
       _timer?.cancel();
       _timer = null;
     });
-    if (!AppMode.useMock && !_loadedFromApi) {
+    if (!AppMode.useMock && sessionKey.isNotEmpty && !_loadedFromApi) {
       _loadedFromApi = true;
       Future.microtask(_loadInitial);
     }
@@ -886,16 +975,18 @@ class ManualOccupancyNotifier extends Notifier<ManualOccupancyState> {
         return (apiErr != null && apiErr.isNotEmpty)
             ? apiErr
             : (next == ManualOccupancyStatus.lleno
-                ? 'No se pudo marcar como Lleno en el servidor.'
-                : 'No se pudo marcar como Concurrido en el servidor.');
+                  ? 'No se pudo marcar como Lleno en el servidor.'
+                  : 'No se pudo marcar como Concurrido en el servidor.');
       }
-      final confirmedUntil =
-          syncedUntil.isAfter(DateTime.now()) ? syncedUntil : until;
+      final confirmedUntil = syncedUntil.isAfter(DateTime.now())
+          ? syncedUntil
+          : until;
       state = ManualOccupancyState(
         manual: next,
         fullUntil: next == ManualOccupancyStatus.lleno ? confirmedUntil : null,
-        concurridoUntil:
-            next == ManualOccupancyStatus.concurrido ? confirmedUntil : null,
+        concurridoUntil: next == ManualOccupancyStatus.concurrido
+            ? confirmedUntil
+            : null,
         tick: prev.tick + 1,
       );
       RestaurantStatusLiveSync.instance.notifyStatusChanged(
@@ -907,10 +998,7 @@ class ManualOccupancyNotifier extends Notifier<ManualOccupancyState> {
       return null;
     }
 
-    await cashRepo.setManualOccupancy(
-      rid,
-      status: next,
-    );
+    await cashRepo.setManualOccupancy(rid, status: next);
     if (_disposed) return null;
     final apiErr = !AppMode.useMock && cashRepo is ApiOwnerRepository
         ? cashRepo.consumeLastError()
@@ -933,7 +1021,8 @@ class ManualOccupancyNotifier extends Notifier<ManualOccupancyState> {
     final prev = state;
     final rid = ref.read(ownerRestaurantIdProvider);
     final cashRepo = ref.read(ownerCashRepositoryProvider);
-    final base = (prev.fullUntil != null && prev.fullUntil!.isAfter(DateTime.now()))
+    final base =
+        (prev.fullUntil != null && prev.fullUntil!.isAfter(DateTime.now()))
         ? prev.fullUntil!
         : DateTime.now();
     final extendedUntil = base.add(extendDuration);
@@ -952,8 +1041,9 @@ class ManualOccupancyNotifier extends Notifier<ManualOccupancyState> {
           ? apiErr
           : 'No se pudo extender el tiempo de Lleno.';
     }
-    final confirmedUntil =
-        synced.isAfter(DateTime.now()) ? synced : extendedUntil;
+    final confirmedUntil = synced.isAfter(DateTime.now())
+        ? synced
+        : extendedUntil;
     state = ManualOccupancyState(
       manual: ManualOccupancyStatus.lleno,
       fullUntil: confirmedUntil,
@@ -964,8 +1054,9 @@ class ManualOccupancyNotifier extends Notifier<ManualOccupancyState> {
   }
 }
 
-final ownerControllerProvider =
-    NotifierProvider<OwnerController, OwnerState>(OwnerController.new);
+final ownerControllerProvider = NotifierProvider<OwnerController, OwnerState>(
+  OwnerController.new,
+);
 
 /// Estado del escaneo del Dueño.
 @immutable
@@ -1018,7 +1109,12 @@ class OwnerController extends Notifier<OwnerState> {
   IOwnerRepository get _repo => ref.read(ownerRepositoryProvider);
 
   @override
-  OwnerState build() => const OwnerIdle();
+  OwnerState build() {
+    ref.watch(ownerSessionKeyProvider);
+    _busy = false;
+    _lastNetworkRetryCode = null;
+    return const OwnerIdle();
+  }
 
   void startScanning() {
     if (_busy) return;
@@ -1046,7 +1142,12 @@ class OwnerController extends Notifier<OwnerState> {
   /// formatos: código corto de 6 caracteres, pase de plan (`BCD1.`), mesa
   /// (`BCD-MESA-`), preorden (`BCD-ORD-`, UUID o `#N`).
   Future<void> onCodeDetected(String rawPayload) async {
-    if (_busy || state is OwnerSuccess || state is OwnerError || state is OwnerRedirect) return;
+    if (_busy ||
+        state is OwnerSuccess ||
+        state is OwnerError ||
+        state is OwnerRedirect) {
+      return;
+    }
     if (rawPayload.trim().isEmpty) return;
 
     _busy = true;
@@ -1055,21 +1156,21 @@ class OwnerController extends Notifier<OwnerState> {
     try {
       final trimmed = rawPayload.trim();
       final upper = trimmed.toUpperCase();
-      final couldBeOrder = !trimmed.startsWith('BCD1.') &&
+      final couldBeOrder =
+          !trimmed.startsWith('BCD1.') &&
           !upper.startsWith(BocadooQrParser.planPrefix) &&
           !upper.startsWith('BCD-MESA-') &&
           !upper.startsWith('MESA-');
       if (couldBeOrder) {
         final orderCheck = await ref
             .read(ownerOrdersRepositoryProvider)
-            .verifyOrderQrCode(
-              rawPayload,
-              ref.read(ownerRestaurantIdProvider),
-            );
+            .verifyOrderQrCode(rawPayload, ref.read(ownerRestaurantIdProvider));
         if (orderCheck.isValid &&
             orderCheck.order != null &&
             !orderCheck.order!.paidByPlan) {
-          state = OwnerRedirect('/owner/pedidos?cobrar=${orderCheck.order!.number}');
+          state = OwnerRedirect(
+            '/owner/pedidos?cobrar=${orderCheck.order!.number}',
+          );
           return;
         }
       }
@@ -1090,7 +1191,9 @@ class OwnerController extends Notifier<OwnerState> {
         ref.invalidate(ordersOnTheWayProvider);
         ref.invalidate(ownerClientsProvider);
         unawaited(
-          ref.read(cajaLiveSyncProvider.notifier).syncNow(includeMovements: true),
+          ref
+              .read(cajaLiveSyncProvider.notifier)
+              .syncNow(includeMovements: true),
         );
       }
       state = ok
@@ -1135,7 +1238,9 @@ class OwnerController extends Notifier<OwnerState> {
     String? batchRedemptionId,
   }) async {
     if (extraGuests <= 0) return true;
-    final ok = await ref.read(ownerCashRepositoryProvider).commitExtraGuests(
+    final ok = await ref
+        .read(ownerCashRepositoryProvider)
+        .commitExtraGuests(
           passId: passId,
           extraGuests: extraGuests,
           batchRedemptionId: batchRedemptionId,
@@ -1149,10 +1254,9 @@ class OwnerController extends Notifier<OwnerState> {
     String batchRedemptionId, {
     String? fallbackPassId,
   }) async {
-    final ok = await ref.read(ownerCashRepositoryProvider).undoBatchRedemption(
-          batchRedemptionId,
-          fallbackPassId: fallbackPassId,
-        );
+    final ok = await ref
+        .read(ownerCashRepositoryProvider)
+        .undoBatchRedemption(batchRedemptionId, fallbackPassId: fallbackPassId);
     if (ok) {
       if (state is OwnerSuccess) state = const OwnerIdle();
       ref.invalidate(dailySummaryProvider);
@@ -1213,15 +1317,28 @@ class ExecutivePricesNotifier extends Notifier<ExecutivePrices> {
   double _soloSecond = 2.50;
   double _soloSoup = 1.50;
   double? _takeawayOverride;
+  String? _lastSessionKey;
 
   @override
   ExecutivePrices build() {
+    final sessionKey = ref.watch(ownerSessionKeyProvider);
+    if (_lastSessionKey != sessionKey) {
+      _lastSessionKey = sessionKey;
+      _lunchOverride = null;
+      _soloSecond = 2.50;
+      _soloSoup = 1.50;
+      _takeawayOverride = null;
+    }
     final serverLunch = ref.watch(lunchPriceProvider).value;
-    final serverSurchargeCents =
-        ref.watch(localInfoProvider).value?.takeawaySurchargeCents;
-    final lunch = _lunchOverride ??
+    final serverSurchargeCents = ref
+        .watch(localInfoProvider)
+        .value
+        ?.takeawaySurchargeCents;
+    final lunch =
+        _lunchOverride ??
         (serverLunch != null && serverLunch > 0 ? serverLunch : 3.00);
-    final takeawaySurcharge = _takeawayOverride ??
+    final takeawaySurcharge =
+        _takeawayOverride ??
         (serverSurchargeCents != null
             ? Money.fromCents(serverSurchargeCents)
             : 0.25);
@@ -1254,8 +1371,8 @@ class ExecutivePricesNotifier extends Notifier<ExecutivePrices> {
 
 final executivePricesProvider =
     NotifierProvider<ExecutivePricesNotifier, ExecutivePrices>(
-  ExecutivePricesNotifier.new,
-);
+      ExecutivePricesNotifier.new,
+    );
 
 /// Categorías del catálogo fijo permanente (`Carta y Bebidas`).
 enum PermanentCatalogGroup { carta, bebidas, extras }
@@ -1303,10 +1420,7 @@ class PermanentCatalogItem {
 
 @immutable
 class PermanentCatalogState {
-  const PermanentCatalogState({
-    this.items = const [],
-    this.dirty = false,
-  });
+  const PermanentCatalogState({this.items = const [], this.dirty = false});
 
   final List<PermanentCatalogItem> items;
   final bool dirty;
@@ -1396,11 +1510,24 @@ class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
   final Set<String> _removedIds = {};
   bool _dirty = false;
   int _seq = 1;
+  String? _lastSessionKey;
 
   @override
   PermanentCatalogState build() {
-    final posCatalog = ref.watch(catalogProvider).value ?? const <CatalogItem>[];
-    final dishes = ref.watch(catalogDishesProvider).value ?? const <CatalogDish>[];
+    final sessionKey = ref.watch(ownerSessionKeyProvider);
+    if (_lastSessionKey != sessionKey) {
+      _lastSessionKey = sessionKey;
+      _priceOverrides.clear();
+      _availableOverrides.clear();
+      _addedItems.clear();
+      _removedIds.clear();
+      _dirty = false;
+      _seq = 1;
+    }
+    final posCatalog =
+        ref.watch(catalogProvider).value ?? const <CatalogItem>[];
+    final dishes =
+        ref.watch(catalogDishesProvider).value ?? const <CatalogDish>[];
     final todayMenu = ref.watch(posMenuProvider).value;
 
     final lunchJuices = <String>{
@@ -1503,15 +1630,22 @@ class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
     final rid = ref.read(ownerRestaurantIdProvider);
     if (!AppMode.useMock) {
       final repo = ref.read(ownerCatalogRepositoryProvider);
-      final (String categoria, String seccion, List<String> etiquetas) =
-          switch (group) {
-        PermanentCatalogGroup.carta => ('A_LA_CARTA', 'FUERTE', const <String>[]),
+      final (
+        String categoria,
+        String seccion,
+        List<String> etiquetas,
+      ) = switch (group) {
+        PermanentCatalogGroup.carta => (
+          'A_LA_CARTA',
+          'FUERTE',
+          const <String>[],
+        ),
         PermanentCatalogGroup.bebidas => ('BEBIDA', 'JUGO', const <String>[]),
         PermanentCatalogGroup.extras => (
-            'EXTRA',
-            isDessert ? 'POSTRE' : 'ADICIONAL',
-            [isDessert ? 'POSTRE' : 'EXTRA'],
-          ),
+          'EXTRA',
+          isDessert ? 'POSTRE' : 'ADICIONAL',
+          [isDessert ? 'POSTRE' : 'EXTRA'],
+        ),
       };
       final created = await repo.addPermanentDish(
         rid,
@@ -1563,10 +1697,7 @@ class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
     );
     _addedItems.add(item);
     _dirty = true;
-    state = PermanentCatalogState(
-      items: [...state.items, item],
-      dirty: true,
-    );
+    state = PermanentCatalogState(items: [...state.items, item], dirty: true);
     MenuAndCartaLiveSync.instance.notifyUpdated(rid);
     return null;
   }
@@ -1645,11 +1776,7 @@ class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
 
     final rid = ref.read(ownerRestaurantIdProvider);
     final repo = ref.read(ownerCatalogRepositoryProvider);
-    final ok = await repo.setCatalogDishSoldOut(
-      rid,
-      id,
-      soldOut: !available,
-    );
+    final ok = await repo.setCatalogDishSoldOut(rid, id, soldOut: !available);
     if (ok) {
       MenuAndCartaLiveSync.instance.notifyUpdated(rid);
       return null;
@@ -1714,11 +1841,47 @@ class PermanentCatalogNotifier extends Notifier<PermanentCatalogState> {
   void saveChanges() {
     _dirty = false;
     state = PermanentCatalogState(items: state.items, dirty: false);
-    MenuAndCartaLiveSync.instance.notifyUpdated(ref.read(ownerRestaurantIdProvider));
+    MenuAndCartaLiveSync.instance.notifyUpdated(
+      ref.read(ownerRestaurantIdProvider),
+    );
   }
 }
 
 final permanentCatalogProvider =
     NotifierProvider<PermanentCatalogNotifier, PermanentCatalogState>(
-  PermanentCatalogNotifier.new,
-);
+      PermanentCatalogNotifier.new,
+    );
+
+/// Invalida y reinicia todos los providers/notifiers de negocio del módulo Dueño
+/// al cerrar sesión o completar un nuevo login.
+void invalidateOwnerBusinessProviders(WidgetRef ref) {
+  ref
+    ..invalidate(ownerSessionKeyProvider)
+    ..invalidate(ownerRestaurantIdProvider)
+    ..invalidate(ownerRestaurantNameProvider)
+    ..invalidate(apiOwnerRepositoryProvider)
+    ..invalidate(ownerRoleProvider)
+    ..invalidate(ownerControllerProvider)
+    ..invalidate(localInfoProvider)
+    ..invalidate(lunchPriceProvider)
+    ..invalidate(dailySummaryProvider)
+    ..invalidate(ownerClientsProvider)
+    ..invalidate(planTemplatesProvider)
+    ..invalidate(planClientCountsProvider)
+    ..invalidate(planRequestsProvider)
+    ..invalidate(catalogProvider)
+    ..invalidate(catalogDishesProvider)
+    ..invalidate(posMenuProvider)
+    ..invalidate(permanentCatalogProvider)
+    ..invalidate(activeOffersProvider)
+    ..invalidate(activeOrdersProvider)
+    ..invalidate(ordersOnTheWayProvider)
+    ..invalidate(pendingTablesProvider)
+    ..invalidate(cajaMovementsProvider)
+    ..invalidate(cajaLiveSyncProvider)
+    ..invalidate(shiftClosedProvider)
+    ..invalidate(manualOccupancyProvider)
+    ..invalidate(executivePricesProvider)
+    ..invalidate(opinionsProvider)
+    ..invalidate(metricsProvider);
+}

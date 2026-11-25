@@ -122,6 +122,16 @@ final GoRouter appRouter = GoRouter(
     if (path.startsWith('/owner/') && !sessionNotifier.hasRestaurant) {
       return '/customer/pase';
     }
+    if (sessionNotifier.isCashierAccount &&
+        (path == '/owner/menu' ||
+            path == '/owner/planes' ||
+            path == '/owner/metricas' ||
+            path == '/owner/opiniones' ||
+            path == '/owner/cash-closing' ||
+            path == '/owner/cartulina' ||
+            path == '/owner/oferta-flash')) {
+      return '/owner/caja';
+    }
     if (path.startsWith('/customer/') && sessionNotifier.hasRestaurant) {
       return '/owner/caja';
     }
