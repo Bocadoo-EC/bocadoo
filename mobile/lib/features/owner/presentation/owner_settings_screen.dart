@@ -6,7 +6,6 @@ import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:material_ui/material_ui.dart';
 
-import '../../../core/config/api_capabilities.dart';
 import '../../../core/config/app_mode.dart';
 import '../../../core/config/support_config.dart';
 import '../../../core/contracts/models.dart';
@@ -63,8 +62,7 @@ class OwnerSettingsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colorScheme;
-    final role = ref.watch(ownerRoleProvider);
-    final isOwner = role == OwnerRole.owner;
+    final isOwner = ref.watch(ownerRoleProvider) == OwnerRole.owner;
 
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
@@ -86,10 +84,6 @@ class OwnerSettingsScreen extends ConsumerWidget {
           ),
           Expanded(
             child: ListView(padding: const EdgeInsets.fromLTRB(16, 16, 16, 32), children: [
-              if (ApiCapabilities.canSwitchToOwner) ...[
-                _RoleCard(role: role),
-                const SizedBox(height: 12),
-              ],
               if (!isOwner) ...[
                 const _CashierShiftCard(),
                 const SizedBox(height: 12),
@@ -185,64 +179,6 @@ class _Card extends StatelessWidget {
         border: Border.all(color: colors.outlineVariant),
       ),
       child: child,
-    );
-  }
-}
-
-class _RoleCard extends ConsumerWidget {
-  const _RoleCard({required this.role});
-
-  final OwnerRole role;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final colors = context.colorScheme;
-    final notifier = ref.read(ownerRoleProvider.notifier);
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: colors.primaryContainer.withValues(alpha: 0.35),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: colors.outlineVariant),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        const OwnerSectionLabel('Rol del dispositivo'),
-        const SizedBox(height: 10),
-        Row(children: [
-          Expanded(
-            child: IgnorePointer(
-              ignoring: !ApiCapabilities.canSwitchToOwner,
-              child: Opacity(
-                opacity: ApiCapabilities.canSwitchToOwner ? 1.0 : 0.45,
-                child: OwnerChoice(
-                  label: 'Dueño (Todo)',
-                  icon: Icons.storefront_outlined,
-                  selected: role == OwnerRole.owner,
-                  onTap: () => notifier.set(OwnerRole.owner),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: OwnerChoice(
-              label: 'Cajero / Ayudante',
-              icon: Icons.badge_outlined,
-              selected: role == OwnerRole.cashier,
-              onTap: () => notifier.set(OwnerRole.cashier),
-            ),
-          ),
-        ]),
-        const SizedBox(height: 10),
-        Text(
-          !ApiCapabilities.canSwitchToOwner
-              ? 'Tu cuenta tiene rol de cajero en este local y solo ve Caja, Cobrar, Vender y Pedidos.'
-              : role == OwnerRole.cashier
-                  ? 'El cajero solo ve Caja, Cobrar, Vender y Pedidos en camino.'
-                  : 'El dueño tiene acceso total a ventas, reportes y cierre.',
-          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.onSurfaceVariant),
-        ),
-      ]),
     );
   }
 }
@@ -1711,10 +1647,17 @@ class _CashierShiftCard extends ConsumerWidget {
   }
 }
 
-class _TeamCashiersCard extends ConsumerWidget {
+class _TeamCashiersCard extends ConsumerStatefulWidget {
   const _TeamCashiersCard();
 
-  Future<void> _openCreateCashier(BuildContext context, WidgetRef ref) async {
+  @override
+  ConsumerState<_TeamCashiersCard> createState() => _TeamCashiersCardState();
+}
+
+class _TeamCashiersCardState extends ConsumerState<_TeamCashiersCard> {
+  bool _expanded = false;
+
+  Future<void> _openCreateCashier() async {
     final createdMessage = await showModalBottomSheet<String>(
       context: context,
       useRootNavigator: true,
@@ -1726,7 +1669,8 @@ class _TeamCashiersCard extends ConsumerWidget {
       ),
       builder: (_) => const _CreateCashierSheet(),
     );
-    if (createdMessage == null || !context.mounted) return;
+    if (createdMessage == null || !mounted) return;
+    setState(() => _expanded = true);
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -1742,9 +1686,44 @@ class _TeamCashiersCard extends ConsumerWidget {
     );
   }
 
+  Future<void> _confirmRemoveCashier(LocalCashier cashier) async {
+    final b = context.bocadooColors;
+    final messenger = ScaffoldMessenger.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Eliminar cajero'),
+        content: Text('¿Quitar a ${cashier.nombre} de la lista de cajeros?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: b.danger,
+              foregroundColor: b.dangerForeground,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await ref.read(localCashiersProvider.notifier).removeCashier(cashier.correo);
+    if (!mounted) return;
+    messenger.showSnackBar(
+      SnackBar(content: Text('${cashier.nombre} quitado de la lista.')),
+    );
+  }
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final colors = context.colorScheme;
+    final b = context.bocadooColors;
+    final cashiers = ref.watch(localCashiersProvider);
+
     return _Card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1761,9 +1740,165 @@ class _TeamCashiersCard extends ConsumerWidget {
           ),
           const SizedBox(height: 12),
           ElevatedButton.icon(
-            onPressed: () => _openCreateCashier(context, ref),
+            onPressed: _openCreateCashier,
             icon: const Icon(Icons.person_add_alt_1_rounded),
             label: const Text('Crear cuenta de cajero'),
+          ),
+          const SizedBox(height: 12),
+          Container(
+            decoration: BoxDecoration(
+              color: colors.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: colors.outlineVariant),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                InkWell(
+                  onTap: () => setState(() => _expanded = !_expanded),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 12,
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.groups_outlined,
+                          size: 18,
+                          color: colors.primary,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Cajeros registrados (${cashiers.length})',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w800,
+                              color: colors.onSurface,
+                            ),
+                          ),
+                        ),
+                        Icon(
+                          _expanded
+                              ? Icons.keyboard_arrow_up_rounded
+                              : Icons.keyboard_arrow_down_rounded,
+                          color: colors.onSurfaceVariant,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                AnimatedCrossFade(
+                  firstChild: const SizedBox.shrink(),
+                  secondChild: Container(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                    decoration: BoxDecoration(
+                      border: Border(
+                        top: BorderSide(
+                          color: colors.outlineVariant.withValues(alpha: 0.7),
+                        ),
+                      ),
+                    ),
+                    child: cashiers.isEmpty
+                        ? Padding(
+                            padding: const EdgeInsets.only(top: 12),
+                            child: Text(
+                              'Aún no hay cajeros registrados en este local.',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: colors.onSurfaceVariant,
+                              ),
+                            ),
+                          )
+                        : Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              const SizedBox(height: 10),
+                              for (var i = 0; i < cashiers.length; i++) ...[
+                                Container(
+                                  padding: const EdgeInsets.fromLTRB(
+                                    12,
+                                    10,
+                                    8,
+                                    10,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: colors.surface,
+                                    borderRadius: BorderRadius.circular(14),
+                                    border: Border.all(
+                                      color: colors.outlineVariant,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              cashiers[i].nombre,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w800,
+                                                color: colors.onSurface,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              cashiers[i].correo,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                fontSize: 12.5,
+                                                fontWeight: FontWeight.w600,
+                                                color: colors.onSurfaceVariant,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      TextButton.icon(
+                                        onPressed: () =>
+                                            _confirmRemoveCashier(cashiers[i]),
+                                        style: TextButton.styleFrom(
+                                          foregroundColor: b.danger,
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 6,
+                                          ),
+                                          minimumSize: Size.zero,
+                                          tapTargetSize:
+                                              MaterialTapTargetSize.shrinkWrap,
+                                        ),
+                                        icon: const Icon(
+                                          Icons.delete_outline_rounded,
+                                          size: 18,
+                                        ),
+                                        label: const Text('Eliminar'),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                if (i < cashiers.length - 1)
+                                  const SizedBox(height: 8),
+                              ],
+                            ],
+                          ),
+                  ),
+                  crossFadeState: _expanded
+                      ? CrossFadeState.showSecond
+                      : CrossFadeState.showFirst,
+                  duration: const Duration(milliseconds: 180),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -1833,6 +1968,10 @@ class _CreateCashierSheetState extends ConsumerState<_CreateCashierSheet> {
     });
 
     if (AppMode.useMock) {
+      await ref.read(localCashiersProvider.notifier).addCashier(
+            nombre: _nameCtrl.text,
+            correo: _emailCtrl.text,
+          );
       if (!mounted) return;
       Navigator.of(context).pop(
         'Cajero vinculado correctamente (modo demo). Ya puede iniciar sesión en Terminal Restaurante.',
@@ -1849,6 +1988,11 @@ class _CreateCashierSheetState extends ConsumerState<_CreateCashierSheet> {
     setState(() => _saving = false);
 
     if (res.ok) {
+      await ref.read(localCashiersProvider.notifier).addCashier(
+            nombre: _nameCtrl.text,
+            correo: _emailCtrl.text,
+          );
+      if (!mounted) return;
       Navigator.of(context).pop(res.message);
       return;
     }

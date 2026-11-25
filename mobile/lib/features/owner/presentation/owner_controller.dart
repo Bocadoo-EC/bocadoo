@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -170,64 +171,151 @@ final localInfoProvider = FutureProvider.autoDispose<LocalInfo>((ref) {
   return ref.read(ownerSettingsRepositoryProvider).getLocalInfo(rid);
 });
 
-const _roleStorageKey = 'bocadoo-owner-role';
+/// Rol efectivo derivado estrictamente de las credenciales reales de sesión.
+/// - Cuenta `CAJERO`/`STAFF` -> [OwnerRole.cashier] (Caja, Pedidos, Turno).
+/// - Cuenta `DUENO`/`OWNER` -> [OwnerRole.owner] (acceso total en 5 pestañas).
+final ownerRoleProvider = Provider<OwnerRole>((ref) {
+  ref.watch(ownerSessionKeyProvider);
+  final session = ref.watch(sessionProvider);
+  void onSession() => ref.invalidateSelf();
+  session.addListener(onSession);
+  ref.onDispose(() => session.removeListener(onSession));
 
-/// Rol de este dispositivo (O16). Se guarda en el teléfono.
-final ownerRoleProvider = NotifierProvider<OwnerRoleNotifier, OwnerRole>(
-  OwnerRoleNotifier.new,
-);
+  if (!AppMode.useMock && session.isCashierAccount) {
+    return OwnerRole.cashier;
+  }
+  return OwnerRole.owner;
+});
 
-class OwnerRoleNotifier extends Notifier<OwnerRole> {
-  bool _changed = false;
+/// Registro local por restaurante de cajeros creados/vinculados desde este dispositivo.
+@immutable
+class LocalCashier {
+  const LocalCashier({
+    required this.nombre,
+    required this.correo,
+    required this.creadoEn,
+  });
+
+  final String nombre;
+  final String correo;
+  final DateTime creadoEn;
+
+  factory LocalCashier.fromJson(Map<String, dynamic> json) {
+    return LocalCashier(
+      nombre: (json['nombre'] ?? '').toString().trim(),
+      correo: (json['correo'] ?? '').toString().trim(),
+      creadoEn:
+          DateTime.tryParse((json['creadoEn'] ?? '').toString()) ??
+          DateTime.now(),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'nombre': nombre,
+    'correo': correo,
+    'creadoEn': creadoEn.toIso8601String(),
+  };
+}
+
+class LocalCashiersNotifier extends Notifier<List<LocalCashier>> {
+  String _loadedForRid = '';
+  bool _mutated = false;
+
+  static String storageKeyFor(String restaurantId) =>
+      'cajeros_local_${restaurantId.trim()}';
 
   @override
-  OwnerRole build() {
+  List<LocalCashier> build() {
     ref.watch(ownerSessionKeyProvider);
-    final session = ref.watch(sessionProvider);
-    void onSession() => ref.invalidateSelf();
-    session.addListener(onSession);
-    ref.onDispose(() => session.removeListener(onSession));
-    _changed = false;
-
-    if (!AppMode.useMock && session.isCashierAccount) {
-      return OwnerRole.cashier;
-    }
-    _load();
-    return OwnerRole.owner;
+    final rid = ref.watch(ownerRestaurantIdProvider).trim();
+    _loadedForRid = rid;
+    _mutated = false;
+    if (rid.isEmpty) return const [];
+    Future.microtask(() => _load(rid));
+    return const [];
   }
 
-  Future<void> _load() async {
-    if (!ApiCapabilities.canSwitchToOwner) {
-      state = OwnerRole.cashier;
-      return;
-    }
+  Future<void> _load(String rid) async {
+    if (rid.isEmpty) return;
     try {
       final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString(_roleStorageKey);
-      if (_changed || raw == null) return;
-      state = raw == 'cashier' ? OwnerRole.cashier : OwnerRole.owner;
-    } catch (_) {
-      // Sin almacenamiento (pruebas): queda como dueño.
-    }
+      final raw = prefs.getString(storageKeyFor(rid));
+      if (_loadedForRid != rid || _mutated) return;
+      if (raw == null || raw.trim().isEmpty) {
+        state = const [];
+        return;
+      }
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return;
+      final seen = <String>{};
+      final parsed = <LocalCashier>[];
+      for (final item in decoded) {
+        if (item is! Map) continue;
+        final cashier = LocalCashier.fromJson(Map<String, dynamic>.from(item));
+        final emailKey = cashier.correo.toLowerCase();
+        if (cashier.correo.isEmpty || !seen.add(emailKey)) continue;
+        parsed.add(cashier);
+      }
+      if (_loadedForRid != rid || _mutated) return;
+      state = List.unmodifiable(parsed);
+    } catch (_) {}
   }
 
-  Future<void> set(OwnerRole role) async {
-    if (!ApiCapabilities.canSwitchToOwner && role == OwnerRole.owner) {
-      return;
-    }
-    _changed = true;
-    state = role;
+  Future<void> _persist(String rid, List<LocalCashier> list) async {
+    if (rid.isEmpty) return;
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(
-        _roleStorageKey,
-        role == OwnerRole.cashier ? 'cashier' : 'owner',
+        storageKeyFor(rid),
+        jsonEncode([for (final c in list) c.toJson()]),
       );
-    } catch (_) {
-      // Se mantiene solo en memoria.
-    }
+    } catch (_) {}
+  }
+
+  Future<void> addCashier({
+    required String nombre,
+    required String correo,
+    DateTime? creadoEn,
+  }) async {
+    final cleanName = nombre.trim();
+    final cleanEmail = correo.trim();
+    if (cleanName.isEmpty || cleanEmail.isEmpty) return;
+    final rid = ref.read(ownerRestaurantIdProvider).trim();
+    final emailKey = cleanEmail.toLowerCase();
+    final entry = LocalCashier(
+      nombre: cleanName,
+      correo: cleanEmail,
+      creadoEn: creadoEn ?? DateTime.now(),
+    );
+    _mutated = true;
+    final updated = <LocalCashier>[
+      entry,
+      for (final existing in state)
+        if (existing.correo.trim().toLowerCase() != emailKey) existing,
+    ];
+    state = List.unmodifiable(updated);
+    await _persist(rid, updated);
+  }
+
+  Future<void> removeCashier(String correo) async {
+    final emailKey = correo.trim().toLowerCase();
+    if (emailKey.isEmpty) return;
+    final rid = ref.read(ownerRestaurantIdProvider).trim();
+    _mutated = true;
+    final updated = <LocalCashier>[
+      for (final existing in state)
+        if (existing.correo.trim().toLowerCase() != emailKey) existing,
+    ];
+    state = List.unmodifiable(updated);
+    await _persist(rid, updated);
   }
 }
+
+/// Cajeros registrados localmente por restaurante (`cajeros_local_<restauranteId>`).
+final localCashiersProvider =
+    NotifierProvider<LocalCashiersNotifier, List<LocalCashier>>(
+      LocalCashiersNotifier.new,
+    );
 
 /// Clave única de aislamiento por usuario + restaurante autenticados.
 final ownerSessionKeyProvider = Provider<String>((ref) {
@@ -1861,6 +1949,7 @@ void invalidateOwnerBusinessProviders(WidgetRef ref) {
     ..invalidate(ownerRestaurantNameProvider)
     ..invalidate(apiOwnerRepositoryProvider)
     ..invalidate(ownerRoleProvider)
+    ..invalidate(localCashiersProvider)
     ..invalidate(ownerControllerProvider)
     ..invalidate(localInfoProvider)
     ..invalidate(lunchPriceProvider)
