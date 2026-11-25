@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -8,6 +11,7 @@ import '../../../core/widgets/bottom_nav_bar.dart';
 import '../domain/models/daily_menu.dart';
 import '../domain/models/extras_models.dart';
 import '../domain/models/menu_models.dart';
+import 'caja_screen.dart' show showOwnerPendingPaymentSheet;
 import 'owner_controller.dart';
 import 'scan_result_screen.dart';
 
@@ -86,9 +90,119 @@ class OwnerShell extends ConsumerStatefulWidget {
   ConsumerState<OwnerShell> createState() => _OwnerShellState();
 }
 
-class _OwnerShellState extends ConsumerState<OwnerShell> {
+class _OwnerShellState extends ConsumerState<OwnerShell>
+    with WidgetsBindingObserver {
   String? _checkedRestaurantId;
   String? _lastSessionKey;
+  Timer? _liveTicker;
+  Timer? _alertTimer;
+  bool _isAppForeground = true;
+  final List<CajaLiveAlert> _alertQueue = <CajaLiveAlert>[];
+  CajaLiveAlert? _activeAlert;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    _isAppForeground =
+        lifecycle == null || lifecycle == AppLifecycleState.resumed;
+    _startLiveTicker();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_runLiveSync(includeMovements: false));
+    });
+  }
+
+  @override
+  void dispose() {
+    _liveTicker?.cancel();
+    _alertTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _isAppForeground = state == AppLifecycleState.resumed;
+    if (_isAppForeground) {
+      _startLiveTicker();
+      unawaited(_runLiveSync(includeMovements: true));
+    } else {
+      _liveTicker?.cancel();
+      _liveTicker = null;
+    }
+  }
+
+  void _startLiveTicker() {
+    _liveTicker ??= Timer.periodic(const Duration(seconds: 8), (_) {
+      if (!mounted || !_isAppForeground) return;
+      unawaited(_runLiveSync(includeMovements: true));
+    });
+  }
+
+  Future<void> _runLiveSync({required bool includeMovements}) async {
+    if (!mounted || !_isAppForeground) return;
+    final alerts = await ref
+        .read(cajaLiveSyncProvider.notifier)
+        .syncNow(includeMovements: includeMovements);
+    if (!mounted || alerts.isEmpty) return;
+    HapticFeedback.mediumImpact();
+    SystemSound.play(SystemSoundType.alert);
+    _alertQueue.addAll(alerts);
+    if (_activeAlert == null) {
+      _showNextAlert();
+    }
+  }
+
+  void _showNextAlert() {
+    _alertTimer?.cancel();
+    if (_alertQueue.isEmpty) {
+      if (_activeAlert != null && mounted) {
+        setState(() => _activeAlert = null);
+      }
+      return;
+    }
+    final next = _alertQueue.removeAt(0);
+    setState(() => _activeAlert = next);
+    _alertTimer = Timer(const Duration(seconds: 5), () {
+      if (!mounted) return;
+      _showNextAlert();
+    });
+  }
+
+  void _dismissActiveAlert() {
+    _alertTimer?.cancel();
+    _showNextAlert();
+  }
+
+  Future<void> _handleAlertView(CajaLiveAlert alert) async {
+    _alertTimer?.cancel();
+    _alertQueue.clear();
+    if (mounted) setState(() => _activeAlert = null);
+
+    switch (alert.kind) {
+      case CajaLiveAlertKind.pedidoGrupal:
+        final tid = alert.tableId;
+        if (tid != null && tid.isNotEmpty) {
+          await context.push('/owner/cobrar-mesa/$tid');
+        } else {
+          await context.push('/owner/pedidos');
+        }
+      case CajaLiveAlertKind.ofertaFlash:
+      case CajaLiveAlertKind.preorden:
+        await context.push('/owner/pedidos');
+      case CajaLiveAlertKind.planPrepagado:
+        final payment = alert.pendingPayment;
+        if (payment != null) {
+          await showOwnerPendingPaymentSheet(context, payment);
+        } else {
+          await context.push('/owner/pedidos');
+        }
+    }
+    if (mounted) {
+      unawaited(_runLiveSync(includeMovements: true));
+    }
+  }
 
   void _maybeShowOnboarding({
     required String restaurantId,
@@ -163,7 +277,28 @@ class _OwnerShellState extends ConsumerState<OwnerShell> {
     }
 
     return Scaffold(
-      body: widget.child,
+      body: Stack(
+        children: [
+          widget.child,
+          if (_activeAlert != null)
+            Positioned(
+              top: 0,
+              left: 12,
+              right: 12,
+              child: SafeArea(
+                bottom: false,
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: _OwnerLiveAlertBanner(
+                    alert: _activeAlert!,
+                    onDismiss: _dismissActiveAlert,
+                    onView: () => unawaited(_handleAlertView(_activeAlert!)),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
       bottomNavigationBar: isCashier
           ? BocadooBottomNavBar(
               currentIndex: currentIndex,
@@ -527,6 +662,88 @@ class OwnerSheetPage<T> extends Page<T> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
       builder: (_) => child,
+    );
+  }
+}
+
+class _OwnerLiveAlertBanner extends StatelessWidget {
+  const _OwnerLiveAlertBanner({
+    required this.alert,
+    required this.onDismiss,
+    required this.onView,
+  });
+
+  final CajaLiveAlert alert;
+  final VoidCallback onDismiss;
+  final VoidCallback onView;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colorScheme;
+    return GestureDetector(
+      onVerticalDragEnd: (details) {
+        if ((details.primaryVelocity ?? 0) < -150) {
+          onDismiss();
+        }
+      },
+      child: Dismissible(
+        key: ValueKey('live-alert-${alert.key}'),
+        direction: DismissDirection.horizontal,
+        onDismissed: (_) => onDismiss(),
+        child: Material(
+          elevation: 6,
+          shadowColor: colors.shadow.withValues(alpha: 0.22),
+          color: colors.surface,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+            side: BorderSide(color: colors.primary, width: 1.5),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    alert.message,
+                    maxLines: 1,
+                    softWrap: false,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      color: colors.onSurface,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                FilledButton(
+                  onPressed: onView,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: colors.primary,
+                    foregroundColor: colors.onPrimary,
+                    visualDensity: VisualDensity.compact,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
+                    minimumSize: const Size(0, 32),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+                    ),
+                  ),
+                  child: const Text(
+                    'Ver',
+                    maxLines: 1,
+                    softWrap: false,
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

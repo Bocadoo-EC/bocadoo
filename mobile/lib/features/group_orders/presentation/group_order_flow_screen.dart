@@ -262,6 +262,7 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
             dailyMenu: menu,
             hostSelection: _dishSelection,
             qrPayload: existing.qrPayload,
+            shareUrl: existing.shareUrl,
           );
           _simStore.syncRemoteMembers(existing.id, existing.members);
 
@@ -397,6 +398,17 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
 
     try {
       final repo = ref.read(customerRepositoryProvider);
+      var resolvedRestaurant = restaurant;
+      if (resolvedRestaurant == null || resolvedRestaurant.todayMenu.isEmpty) {
+        try {
+          final fetched = await repo.getRestaurantById(rid);
+          if (fetched != null) {
+            resolvedRestaurant = fetched;
+            _hydratedRestaurant = fetched;
+            ref.read(customerControllerProvider).syncRestaurantSummary(fetched);
+          }
+        } catch (_) {}
+      }
       final isFull = _isRestaurantFull(rid);
       final targetHhmm = _formatHhmm(_estimatedConsumptionTime);
       var table = await repo.openSharedTable(
@@ -406,12 +418,14 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
         takeaway: isFull || _dishSelection.takeaway,
         mode: _selectedMode,
       );
-      final hostLunchIds = _dishSelection.resolveLunchDishIds(restaurant);
-      if (hostLunchIds.isNotEmpty) {
+      final hostLunchIds = _dishSelection.resolveLunchDishIds(resolvedRestaurant);
+      final hostExtras = _dishSelection.resolveExtras(resolvedRestaurant);
+      if (hostLunchIds.isNotEmpty || hostExtras.isNotEmpty) {
         try {
           table = await repo.updateTableSelection(
             table.id,
             lunchDishIds: hostLunchIds,
+            extras: hostExtras,
           );
         } catch (_) {
           // Mantiene la mesa abierta si la selección aún no es aceptada.
@@ -444,6 +458,7 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
           takeaway: isFull || _dishSelection.takeaway,
         ),
         qrPayload: synced.qrPayload,
+        shareUrl: synced.shareUrl,
       );
       ref.read(customerControllerProvider).syncTable(synced);
 
@@ -558,6 +573,45 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
     _poller?.stop();
     _simStore.confirmNow(tableId);
     setState(() => _status = GroupOrderStatus.confirmed);
+    unawaited(_syncConfirmedTableToBackend(tableId));
+  }
+
+  Future<void> _syncConfirmedTableToBackend(String tableId) async {
+    if (AppMode.useMock) return;
+    try {
+      final repo = ref.read(customerRepositoryProvider);
+      final current = _table;
+      if (current != null) {
+        var rest = _restaurantFor(current.restaurantId);
+        if (rest == null || rest.todayMenu.isEmpty) {
+          rest = await repo.getRestaurantById(current.restaurantId);
+          if (rest != null && mounted) _hydratedRestaurant = rest;
+        }
+        final hostIds = _dishSelection.resolveLunchDishIds(rest);
+        final hostExtras = _dishSelection.resolveExtras(rest);
+        final selfMember =
+            current.members.where((m) => m.id == 'self').firstOrNull;
+        final missingHostSelection =
+            selfMember == null || (selfMember.selection?.isEmpty ?? true);
+        if (missingHostSelection &&
+            (hostIds.isNotEmpty || hostExtras.isNotEmpty)) {
+          await repo.updateTableSelection(
+            tableId,
+            lunchDishIds: hostIds,
+            extras: hostExtras,
+          );
+        }
+      }
+      final latest = await repo.getSharedTable(tableId);
+      if (!mounted || latest == null) return;
+      _simStore.syncRemoteMembers(tableId, latest.members);
+      final merged = latest.copyWith(
+        partySize: _partySize,
+        scheduledAt: _estimatedConsumptionTime,
+      );
+      ref.read(customerControllerProvider).syncTable(merged);
+      setState(() => _table = merged);
+    } catch (_) {}
   }
 
   void _transitionToExpired(SharedTable t) {
@@ -678,12 +732,18 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
         const Duration(minutes: 15);
   }
 
+  String _inviteLinkFor(SharedTable t) {
+    final raw = t.shareUrl.trim();
+    if (raw.startsWith('bocadoo://')) return raw;
+    return buildGroupInviteLink(t.id);
+  }
+
   Future<void> _shareWhatsApp(SharedTable t, GroupOrderSession? session) async {
     final hostName = session?.hostName ?? t.hostName;
     final message = buildGroupWhatsAppMessage(
       hostName: hostName,
       restaurantName: t.restaurantName,
-      tableCode: t.shortId,
+      tableCode: _inviteLinkFor(t),
     );
     final waUri = Uri.parse(
       'https://wa.me/?text=${Uri.encodeComponent(message)}',
@@ -698,7 +758,7 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
 
   Future<void> _copyLink(SharedTable t) async {
     final messenger = ScaffoldMessenger.of(context);
-    final link = buildGroupInviteLink(t.shortId);
+    final link = _inviteLinkFor(t);
     await Clipboard.setData(ClipboardData(text: link));
     if (!mounted) return;
     setState(() => _copied = true);
@@ -783,12 +843,18 @@ class _GroupOrderFlowScreenState extends ConsumerState<GroupOrderFlowScreen>
     );
     if (participant.isHost) {
       setState(() => _dishSelection = saved);
-      final hostIds = saved.resolveLunchDishIds(_restaurantFor(t.restaurantId));
-      if (hostIds.isNotEmpty) {
+      final rest = _restaurantFor(t.restaurantId);
+      final hostIds = saved.resolveLunchDishIds(rest);
+      final hostExtras = saved.resolveExtras(rest);
+      if (hostIds.isNotEmpty || hostExtras.isNotEmpty) {
         unawaited(
           ref
               .read(customerRepositoryProvider)
-              .updateTableSelection(t.id, lunchDishIds: hostIds)
+              .updateTableSelection(
+                t.id,
+                lunchDishIds: hostIds,
+                extras: hostExtras,
+              )
               .catchError((_) => t),
         );
       }

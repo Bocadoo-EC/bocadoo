@@ -3245,8 +3245,11 @@ class ApiOwnerRepository
 
   @override
   Future<int> getOrdersOnTheWayCount(String restaurantId) async {
-    final orders = await getActiveOrders(restaurantId);
-    return orders.length;
+    final results = await Future.wait([
+      getActiveOrders(restaurantId),
+      getPendingTables(restaurantId).catchError((_) => const <PendingTable>[]),
+    ]);
+    return (results[0] as List).length + (results[1] as List).length;
   }
 
   @override
@@ -4650,13 +4653,18 @@ class ApiOwnerRepository
             : const <String, dynamic>{};
         final hostName = (anfitrion['nombre'] ?? 'Mesa grupal').toString();
 
-        final rawMembers = vista['miembros'] is List
+        final vistaMembers = vista['miembros'] is List
             ? (vista['miembros'] as List).whereType<Map>().toList()
-            : (m['miembros'] is List
-                  ? (m['miembros'] as List).whereType<Map>().toList()
-                  : const <Map>[]);
+            : const <Map>[];
+        final listMembers = m['miembros'] is List
+            ? (m['miembros'] as List).whereType<Map>().toList()
+            : const <Map>[];
+        final rawMembers = vistaMembers.isNotEmpty ? vistaMembers : listMembers;
 
         final modoRaw = (vista['modo'] ?? m['modo'] ?? 'CADA_UNO')
+            .toString()
+            .toUpperCase();
+        final estadoMesa = (vista['estado'] ?? m['estado'] ?? 'ABIERTA')
             .toString()
             .toUpperCase();
         final hostMember = rawMembers
@@ -4666,7 +4674,9 @@ class ApiOwnerRepository
 
         final totalPersonas = _asInt(vista['personas']) > 0
             ? _asInt(vista['personas'])
-            : rawMembers.length;
+            : (_asInt(m['personas']) > 0
+                  ? _asInt(m['personas'])
+                  : rawMembers.length);
         final hasVistaCounts =
             vista.isNotEmpty && vista.containsKey('cubiertos');
         final cubiertos = hasVistaCounts ? _asInt(vista['cubiertos']) : 0;
@@ -4674,6 +4684,7 @@ class ApiOwnerRepository
         final memberDishes = <PendingTableMemberDish>[];
         var takeawayCount = 0;
         var inferredPlanCount = 0;
+        var confirmedDishesCount = 0;
         for (final mm in rawMembers) {
           final isTakeaway = mm['paraLlevar'] == true;
           if (isTakeaway) takeawayCount++;
@@ -4693,6 +4704,11 @@ class ApiOwnerRepository
           if (hasPlan) inferredPlanCount++;
 
           final parsedSel = _parseTableMemberSelection(mm);
+          final hasAnySelection =
+              (parsedSel.soup != null && parsedSel.soup!.isNotEmpty) ||
+              (parsedSel.main != null && parsedSel.main!.isNotEmpty) ||
+              parsedSel.extras.isNotEmpty;
+          if (hasAnySelection) confirmedDishesCount++;
           memberDishes.add(
             PendingTableMemberDish(
               memberName: (mm['nombre'] ?? 'Comensal').toString(),
@@ -4713,6 +4729,9 @@ class ApiOwnerRepository
         final timeStr = horaRaw != null && horaRaw.isNotEmpty
             ? _hhmmEcuador(_parseDateTime(horaRaw))
             : '--:--';
+        final isStillCollecting =
+            (estadoMesa == 'ABIERTA' || estadoMesa == 'EN_ESPERA') &&
+            (totalPersonas < 2 || confirmedDishesCount < totalPersonas);
 
         out.add(
           PendingTable(
@@ -4725,6 +4744,8 @@ class ApiOwnerRepository
             takeawayCount: takeawayCount,
             takeawaySurchargeCents: takeawayCount * recargoUnitCents,
             memberDishes: memberDishes,
+            isCollecting: isStillCollecting,
+            confirmedCount: confirmedDishesCount,
           ),
         );
       }
@@ -4735,11 +4756,13 @@ class ApiOwnerRepository
     }
   }
 
-  /// Extrae sopa, segundo y extras desde `miembros[].seleccion` (Entrega C) o campos planos legacy.
+  /// Extrae sopa, segundo, bebida, postre y extras desde `miembros[].seleccion`.
   static ({String? soup, String? main, List<String> extras})
   _parseTableMemberSelection(Map mm) {
     String? soup;
     String? main;
+    String? drink;
+    String? dessert;
     final extras = <String>[];
 
     void addLunchPlatos(List rawPlatos) {
@@ -4754,9 +4777,13 @@ class ApiOwnerRepository
               sec == 'SEGUNDO' ||
               sec == 'PLATO_FUERTE') {
             main ??= nombre;
+          } else if (sec == 'BEBIDA' || sec == 'JUGO') {
+            drink ??= nombre;
+          } else if (sec == 'POSTRE') {
+            dessert ??= nombre;
           } else {
             if (main != null) {
-              soup ??= nombre;
+              drink ??= nombre;
             }
             main ??= nombre;
           }
@@ -4777,8 +4804,14 @@ class ApiOwnerRepository
         final mRaw = (almuerzo['segundo'] ?? almuerzo['fuerte'])
             ?.toString()
             .trim();
+        final dRaw = (almuerzo['bebida'] ?? almuerzo['jugo'])
+            ?.toString()
+            .trim();
+        final pRaw = almuerzo['postre']?.toString().trim();
         if (sRaw != null && sRaw.isNotEmpty) soup ??= sRaw;
         if (mRaw != null && mRaw.isNotEmpty) main ??= mRaw;
+        if (dRaw != null && dRaw.isNotEmpty) drink ??= dRaw;
+        if (pRaw != null && pRaw.isNotEmpty) dessert ??= pRaw;
       } else if (almuerzo is List) {
         addLunchPlatos(almuerzo);
       }
@@ -4803,15 +4836,24 @@ class ApiOwnerRepository
     } else {
       final sRaw = mm['sopa']?.toString().trim();
       final mRaw = (mm['segundo'] ?? mm['plato'])?.toString().trim();
+      final dRaw = (mm['bebida'] ?? mm['jugo'])?.toString().trim();
+      final pRaw = mm['postre']?.toString().trim();
       if (sRaw != null && sRaw.isNotEmpty) soup = sRaw;
       if (mRaw != null && mRaw.isNotEmpty) main = mRaw;
+      if (dRaw != null && dRaw.isNotEmpty) drink = dRaw;
+      if (pRaw != null && pRaw.isNotEmpty) dessert = pRaw;
     }
 
-    final finalSoup = soup;
-    final finalMain = main;
+    final combinedMain = [
+      if (main != null && main!.trim().isNotEmpty) main!.trim(),
+      if (drink != null && drink!.trim().isNotEmpty) drink!.trim(),
+      if (dessert != null && dessert!.trim().isNotEmpty) dessert!.trim(),
+    ].join(' · ');
+
+    final finalSoup = soup?.trim();
     return (
       soup: (finalSoup != null && finalSoup.isNotEmpty) ? finalSoup : null,
-      main: (finalMain != null && finalMain.isNotEmpty) ? finalMain : null,
+      main: combinedMain.isNotEmpty ? combinedMain : null,
       extras: extras,
     );
   }

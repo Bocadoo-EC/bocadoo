@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../../core/config/api_capabilities.dart';
+import '../../../core/router/app_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/auth_repository.dart';
 
@@ -46,7 +47,11 @@ Future<void> continueWithGoogle(
   }
   if (!context.mounted) return;
   if (result.ok) {
-    router.go(role == 'customer' ? '/customer/pase' : '/owner/caja');
+    router.go(
+      role == 'customer'
+          ? resolvePostDinerAuthLocation(router)
+          : '/owner/caja',
+    );
   } else {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(

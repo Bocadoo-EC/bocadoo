@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../../core/config/app_mode.dart';
+import '../../../core/router/app_router.dart';
 import '../../../core/session/session_notifier.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/bocadoo_logo.dart';
@@ -163,7 +164,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     if (!mounted) return;
     setState(() => _loading = false);
     if (_role == _UserRole.customer && !result.hasRestaurant) {
-      context.go('/customer/pase');
+      context.go(resolvePostDinerAuthLocation(GoRouter.of(context)));
     } else {
       context.go('/owner/caja');
     }

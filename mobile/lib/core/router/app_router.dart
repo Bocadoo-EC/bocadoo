@@ -44,6 +44,52 @@ import '../session/session_notifier.dart';
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
 String? _pendingInviteTableId;
 
+String? _extractInviteTableId(Uri uri) {
+  if (uri.scheme == 'bocadoo' &&
+      uri.host == 'mesa' &&
+      uri.pathSegments.isNotEmpty) {
+    final candidate = uri.pathSegments.first.trim();
+    if (candidate.isNotEmpty) return candidate;
+  }
+  final host = uri.host.toLowerCase();
+  if ((uri.scheme == 'https' || uri.scheme == 'http') &&
+      (host == 'bocadoo.app' ||
+          host == 'www.bocadoo.app' ||
+          host == 'bocadoo.ec' ||
+          host == 'www.bocadoo.ec')) {
+    final segs = uri.pathSegments;
+    final mesaIdx = segs.indexOf('mesa');
+    if (mesaIdx >= 0 && mesaIdx + 1 < segs.length) {
+      final candidate = segs[mesaIdx + 1].trim();
+      if (candidate.isNotEmpty) return candidate;
+    }
+  }
+  final segs = uri.pathSegments;
+  if (segs.length >= 3 && segs[0] == 'customer' && segs[1] == 'mesa') {
+    final candidate = segs[2].trim();
+    if (candidate.isNotEmpty) return candidate;
+  }
+  return null;
+}
+
+/// Resuelve el destino tras autenticar a un comensal respetando invitaciones
+/// grupales pendientes (ya sea antes o después de que GoRouter redirija).
+String resolvePostDinerAuthLocation(
+  GoRouter router, {
+  String fallback = '/customer/pase',
+}) {
+  final pending = _pendingInviteTableId;
+  if (pending != null && pending.isNotEmpty) {
+    _pendingInviteTableId = null;
+    return '/customer/mesa/$pending';
+  }
+  final currentPath = router.routerDelegate.currentConfiguration.uri.path;
+  if (currentPath.startsWith('/customer/mesa/')) {
+    return currentPath;
+  }
+  return fallback;
+}
+
 class _AnalyticsRouteObserver extends NavigatorObserver {
   String? _currentRole() {
     if (!sessionNotifier.isAuthenticated) return null;
@@ -77,13 +123,7 @@ final GoRouter appRouter = GoRouter(
   observers: [_AnalyticsRouteObserver()],
   redirect: (context, state) {
     final uri = state.uri;
-    String? incomingInviteId;
-    if (uri.scheme == 'bocadoo' &&
-        uri.host == 'mesa' &&
-        uri.pathSegments.isNotEmpty) {
-      final candidate = uri.pathSegments.first.trim();
-      if (candidate.isNotEmpty) incomingInviteId = candidate;
-    }
+    final incomingInviteId = _extractInviteTableId(uri);
 
     if (AppMode.useMock) {
       if (incomingInviteId != null) {

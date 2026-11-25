@@ -1,7 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -26,177 +24,13 @@ class CajaScreen extends ConsumerStatefulWidget {
   ConsumerState<CajaScreen> createState() => _CajaScreenState();
 }
 
-class _CajaScreenState extends ConsumerState<CajaScreen>
-    with WidgetsBindingObserver {
-  Timer? _ticker;
-  Timer? _alertTimer;
-  ValueListenable<RouteInformation>? _routeInfo;
-  bool _isAppForeground = true;
-  bool _wasVisible = false;
-  bool _didInitialSeed = false;
-
-  final List<CajaLiveAlert> _alertQueue = <CajaLiveAlert>[];
-  CajaLiveAlert? _activeAlert;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    final lifecycle = WidgetsBinding.instance.lifecycleState;
-    _isAppForeground =
-        lifecycle == null || lifecycle == AppLifecycleState.resumed;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      _syncPollingState(triggerImmediate: true, includeMovementsOnImmediate: false);
-    });
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final nextRouteInfo = GoRouter.maybeOf(context)?.routeInformationProvider;
-    if (!identical(_routeInfo, nextRouteInfo)) {
-      _routeInfo?.removeListener(_onVisibilityChanged);
-      _routeInfo = nextRouteInfo;
-      _routeInfo?.addListener(_onVisibilityChanged);
-    }
-    _syncPollingState();
-  }
-
-  bool get _isCajaVisible {
-    if (!mounted) return false;
-    final path = _routeInfo?.value.uri.path;
-    if (path != null && path.isNotEmpty) {
-      return path == '/owner/caja';
-    }
-    return ModalRoute.of(context)?.isCurrent ?? true;
-  }
-
-  void _onVisibilityChanged() {
-    if (!mounted) return;
-    _syncPollingState(triggerImmediate: true);
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    _isAppForeground = state == AppLifecycleState.resumed;
-    _syncPollingState(triggerImmediate: _isAppForeground);
-  }
-
-  void _syncPollingState({
-    bool triggerImmediate = false,
-    bool includeMovementsOnImmediate = true,
-  }) {
-    final visibleNow = mounted && _isAppForeground && _isCajaVisible;
-    if (!visibleNow) {
-      _ticker?.cancel();
-      _ticker = null;
-      _wasVisible = false;
-      return;
-    }
-
-    _ticker ??= Timer.periodic(const Duration(seconds: 8), (_) {
-      if (!mounted || !_isAppForeground || !_isCajaVisible) return;
-      unawaited(_runSync(includeMovements: true));
-    });
-
-    if (!_wasVisible && (triggerImmediate || !_didInitialSeed)) {
-      _wasVisible = true;
-      final includeMovements = _didInitialSeed && includeMovementsOnImmediate;
-      _didInitialSeed = true;
-      unawaited(_runSync(includeMovements: includeMovements));
-    } else {
-      _wasVisible = true;
-    }
-  }
-
+class _CajaScreenState extends ConsumerState<CajaScreen> {
   Future<void> _runSync({required bool includeMovements}) async {
     if (!mounted) return;
-    final alerts = await ref
+    await ref
         .read(cajaLiveSyncProvider.notifier)
         .syncNow(includeMovements: includeMovements);
-    if (!mounted) return;
-    if (alerts.isNotEmpty) {
-      HapticFeedback.mediumImpact();
-      SystemSound.play(SystemSoundType.alert);
-      _enqueueAlerts(alerts);
-    }
     if (mounted) setState(() {});
-  }
-
-  void _enqueueAlerts(List<CajaLiveAlert> alerts) {
-    _alertQueue.addAll(alerts);
-    if (_activeAlert == null) {
-      _showNextAlert();
-    }
-  }
-
-  void _showNextAlert() {
-    _alertTimer?.cancel();
-    if (_alertQueue.isEmpty) {
-      if (_activeAlert != null && mounted) {
-        setState(() => _activeAlert = null);
-      }
-      return;
-    }
-    final next = _alertQueue.removeAt(0);
-    setState(() => _activeAlert = next);
-    _alertTimer = Timer(const Duration(seconds: 5), () {
-      if (!mounted) return;
-      _showNextAlert();
-    });
-  }
-
-  void _dismissActiveAlert() {
-    _alertTimer?.cancel();
-    _showNextAlert();
-  }
-
-  Future<void> _handleAlertView(CajaLiveAlert alert) async {
-    _alertTimer?.cancel();
-    _alertQueue.clear();
-    if (mounted) setState(() => _activeAlert = null);
-
-    switch (alert.kind) {
-      case CajaLiveAlertKind.pedidoGrupal:
-        final tid = alert.tableId;
-        if (tid != null && tid.isNotEmpty) {
-          await context.push('/owner/cobrar-mesa/$tid');
-        } else {
-          await context.push('/owner/pedidos');
-        }
-      case CajaLiveAlertKind.ofertaFlash:
-      case CajaLiveAlertKind.preorden:
-        await context.push('/owner/pedidos');
-      case CajaLiveAlertKind.planPrepagado:
-        final payment = alert.pendingPayment;
-        if (payment != null) {
-          await _openPendingPaymentSheet(payment);
-        } else {
-          await context.push('/owner/pedidos');
-        }
-    }
-    if (mounted) {
-      unawaited(_runSync(includeMovements: true));
-    }
-  }
-
-  Future<void> _openPendingPaymentSheet(PendingPaymentItem payment) async {
-    await showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      useRootNavigator: true,
-      builder: (ctx) => _PendingPaymentDetailSheet(payment: payment),
-    );
-  }
-
-  @override
-  void dispose() {
-    _ticker?.cancel();
-    _alertTimer?.cancel();
-    _routeInfo?.removeListener(_onVisibilityChanged);
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
   }
 
   @override
@@ -206,49 +40,28 @@ class _CajaScreenState extends ConsumerState<CajaScreen>
 
     return Scaffold(
       backgroundColor: colors.surface,
-      body: Stack(
-        children: [
-          SafeArea(
-            bottom: false,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const _Header(),
-                const _OrdersStrip(),
-                Expanded(
-                  child: summary.when(
-                    skipLoadingOnReload: true,
-                    loading: () => const _CajaLoading(),
-                    error: (e, _) => _CajaError(
-                      onRetry: () => ref.invalidate(dailySummaryProvider),
-                    ),
-                    data: (s) => _CajaBody(
-                      summary: s,
-                      onSyncRequested: () => _runSync(includeMovements: true),
-                    ),
-                  ),
+      body: SafeArea(
+        bottom: false,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const _Header(),
+            const _OrdersStrip(),
+            Expanded(
+              child: summary.when(
+                skipLoadingOnReload: true,
+                loading: () => const _CajaLoading(),
+                error: (e, _) => _CajaError(
+                  onRetry: () => ref.invalidate(dailySummaryProvider),
                 ),
-              ],
-            ),
-          ),
-          if (_activeAlert != null)
-            Positioned(
-              top: 0,
-              left: 12,
-              right: 12,
-              child: SafeArea(
-                bottom: false,
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: _FloatingLiveAlertBanner(
-                    alert: _activeAlert!,
-                    onDismiss: _dismissActiveAlert,
-                    onView: () => unawaited(_handleAlertView(_activeAlert!)),
-                  ),
+                data: (s) => _CajaBody(
+                  summary: s,
+                  onSyncRequested: () => _runSync(includeMovements: true),
                 ),
               ),
             ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -1579,87 +1392,17 @@ class _PlanRequestsSectionState extends ConsumerState<_PlanRequestsSection> {
   }
 }
 
-class _FloatingLiveAlertBanner extends StatelessWidget {
-  const _FloatingLiveAlertBanner({
-    required this.alert,
-    required this.onDismiss,
-    required this.onView,
-  });
-
-  final CajaLiveAlert alert;
-  final VoidCallback onDismiss;
-  final VoidCallback onView;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colorScheme;
-    return GestureDetector(
-      onVerticalDragEnd: (details) {
-        if ((details.primaryVelocity ?? 0) < -150) {
-          onDismiss();
-        }
-      },
-      child: Dismissible(
-        key: ValueKey('live-alert-${alert.key}'),
-        direction: DismissDirection.horizontal,
-        onDismissed: (_) => onDismiss(),
-        child: Material(
-          elevation: 6,
-          shadowColor: colors.shadow.withValues(alpha: 0.22),
-          color: colors.surface,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(18),
-            side: BorderSide(color: colors.primary, width: 1.5),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    alert.message,
-                    maxLines: 1,
-                    softWrap: false,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w800,
-                      color: colors.onSurface,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                FilledButton(
-                  onPressed: onView,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: colors.primary,
-                    foregroundColor: colors.onPrimary,
-                    visualDensity: VisualDensity.compact,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 6,
-                    ),
-                    minimumSize: const Size(0, 32),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-                    ),
-                  ),
-                  child: const Text(
-                    'Ver',
-                    maxLines: 1,
-                    softWrap: false,
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
+/// Abre el detalle de un pago de plan pendiente reportado por alerta viva.
+Future<void> showOwnerPendingPaymentSheet(
+  BuildContext context,
+  PendingPaymentItem payment,
+) =>
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      useRootNavigator: true,
+      builder: (_) => _PendingPaymentDetailSheet(payment: payment),
     );
-  }
-}
 
 class _PendingPaymentDetailSheet extends ConsumerStatefulWidget {
   const _PendingPaymentDetailSheet({required this.payment});

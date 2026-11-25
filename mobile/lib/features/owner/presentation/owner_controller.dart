@@ -697,6 +697,7 @@ final cajaLiveSyncProvider =
 
 class CajaLiveSyncNotifier extends Notifier<CajaLiveSyncState> {
   final Set<String> _idsVistos = <String>{};
+  final Map<String, String> _tableSignatures = <String, String>{};
   bool _hasSeededSeenIds = false;
   bool _inFlight = false;
   bool _disposed = false;
@@ -706,11 +707,19 @@ class CajaLiveSyncNotifier extends Notifier<CajaLiveSyncState> {
     ref.watch(ownerSessionKeyProvider);
     ref.watch(ownerRestaurantIdProvider);
     _idsVistos.clear();
+    _tableSignatures.clear();
     _hasSeededSeenIds = false;
     _inFlight = false;
     _disposed = false;
     ref.onDispose(() => _disposed = true);
     return const CajaLiveSyncState();
+  }
+
+  static String _tableSignature(PendingTable t) {
+    final dishes = t.memberDishes
+        .map((d) => '${d.memberName}:${d.soup ?? ''}:${d.main ?? ''}:${d.extras.join(',')}')
+        .join(';');
+    return '${t.members}|${t.confirmedCount ?? -1}|${t.planCount}|${t.cashCount}|${t.takeawayCount}|${t.isCollecting}|$dishes';
   }
 
   static String _arrivalHHmm(OwnerOrder order) {
@@ -792,6 +801,7 @@ class CajaLiveSyncNotifier extends Notifier<CajaLiveSyncState> {
         }
         for (final t in tables) {
           _idsVistos.add('mesa:${t.id}');
+          _tableSignatures[t.id] = _tableSignature(t);
         }
         for (final p in payments) {
           _idsVistos.add('pago:${p.pagoId}');
@@ -835,20 +845,49 @@ class CajaLiveSyncNotifier extends Notifier<CajaLiveSyncState> {
           }
         }
 
+        final activeTableIds = {for (final t in tables) t.id};
+        _tableSignatures.removeWhere((id, _) => !activeTableIds.contains(id));
+
         for (final t in tables) {
           final key = 'mesa:${t.id}';
-          if (!_idsVistos.add(key)) continue;
+          final sig = _tableSignature(t);
+          final prevSig = _tableSignatures[t.id];
+          _tableSignatures[t.id] = sig;
           final host = t.hostName.trim().isEmpty
               ? 'Anfitrión'
               : t.hostName.trim();
-          newAlerts.add(
-            CajaLiveAlert(
-              key: key,
-              kind: CajaLiveAlertKind.pedidoGrupal,
-              message: '👥 Pedido Grupal · $host · ${t.members} personas',
-              tableId: t.id,
-            ),
-          );
+          final dishesReady = t.memberDishes
+              .where(
+                (d) =>
+                    (d.soup != null && d.soup!.isNotEmpty) ||
+                    (d.main != null && d.main!.isNotEmpty) ||
+                    d.extras.isNotEmpty,
+              )
+              .length;
+
+          if (_idsVistos.add(key)) {
+            newAlerts.add(
+              CajaLiveAlert(
+                key: key,
+                kind: CajaLiveAlertKind.pedidoGrupal,
+                message: dishesReady > 0
+                    ? '👥 Pedido Grupal · $host · $dishesReady/${t.members} listos'
+                    : '👥 Pedido Grupal · $host · ${t.members} personas',
+                tableId: t.id,
+              ),
+            );
+          } else if (prevSig != null && prevSig != sig) {
+            newAlerts.add(
+              CajaLiveAlert(
+                key: '$key:$sig',
+                kind: CajaLiveAlertKind.pedidoGrupal,
+                message: !t.isCollecting && dishesReady > 0
+                    ? '👥 Pedido Grupal confirmado · $host · ${t.members} personas'
+                    : '👥 Pedido Grupal · $host · $dishesReady/${t.members} con platos',
+                tableId: t.id,
+              ),
+            );
+          }
         }
 
         for (final p in payments) {
@@ -867,12 +906,23 @@ class CajaLiveSyncNotifier extends Notifier<CajaLiveSyncState> {
         }
       }
 
+      final hadTableChange =
+          state.activeTables.length != tables.length || newAlerts.any((a) => a.kind == CajaLiveAlertKind.pedidoGrupal);
+      final hadOrderChange =
+          state.enCaminoOrders.length != orders.length || newAlerts.isNotEmpty;
+
       state = CajaLiveSyncState(
         enCaminoOrders: orders,
         activeTables: tables,
         pendingPayments: payments,
         hasLoadedOnce: true,
       );
+      if (hadTableChange) {
+        ref.invalidate(pendingTablesProvider);
+      }
+      if (hadTableChange || hadOrderChange) {
+        ref.invalidate(ordersOnTheWayProvider);
+      }
       return newAlerts;
     } finally {
       _inFlight = false;

@@ -91,11 +91,20 @@ class GroupOrderSimulationStore extends ChangeNotifier {
   GroupOrderSession? get activeSession =>
       _activeSessionId == null ? null : _sessionsById[_activeSessionId];
 
-  GroupOrderSession? sessionById(String tableId) =>
-      _sessionsById[tableId] ??
-      _sessionsById.values
-          .where((s) => s.shortCode == tableId.toUpperCase())
-          .firstOrNull;
+  GroupOrderSession? sessionById(String tableId) {
+    final clean = tableId.trim();
+    if (clean.isEmpty) return null;
+    final direct = _sessionsById[clean];
+    if (direct != null) return direct;
+    final upper = clean.toUpperCase();
+    return _sessionsById.values
+        .where(
+          (s) =>
+              s.shortCode == upper ||
+              s.shareUrl.trim().split('/').last == clean,
+        )
+        .firstOrNull;
+  }
 
   /// Calcula la penalización por cancelación tardía / No-Show ($0,50 por cupo, tope $2,50).
   static int lateCancellationPenaltyCents(int confirmedParticipants) =>
@@ -173,6 +182,7 @@ class GroupOrderSimulationStore extends ChangeNotifier {
     required DailyMenu dailyMenu,
     required GroupOrderDishSelection hostSelection,
     required String qrPayload,
+    String? shareUrl,
   }) {
     final host = GroupOrderParticipant(
       id: 'host',
@@ -181,6 +191,10 @@ class GroupOrderSimulationStore extends ChangeNotifier {
       selection: hostSelection,
       paidByPlan: true,
     );
+
+    final resolvedShareUrl = (shareUrl != null && shareUrl.trim().isNotEmpty)
+        ? shareUrl.trim()
+        : buildGroupInviteLink(tableId);
 
     final session = GroupOrderSession(
       tableId: tableId,
@@ -196,7 +210,7 @@ class GroupOrderSimulationStore extends ChangeNotifier {
       dailyMenu: dailyMenu,
       participants: [host],
       qrPayload: qrPayload,
-      shareUrl: buildGroupInviteLink(shortCode),
+      shareUrl: resolvedShareUrl,
     );
     _sessionsById[tableId] = session;
     _activeSessionId = tableId;

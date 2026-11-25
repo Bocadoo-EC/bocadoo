@@ -212,11 +212,13 @@ class _GuestGroupOrderScreenState extends ConsumerState<GuestGroupOrderScreen> {
             rest = await repo.getRestaurantById(updated.restaurantId);
           }
           final lunchDishIds = _selection.resolveLunchDishIds(rest);
-          if (lunchDishIds.isNotEmpty) {
+          final guestExtras = _selection.resolveExtras(rest);
+          if (lunchDishIds.isNotEmpty || guestExtras.isNotEmpty) {
             try {
               updated = await repo.updateTableSelection(
                 updated.id,
                 lunchDishIds: lunchDishIds,
+                extras: guestExtras,
               );
             } catch (_) {
               // Mantiene la unión confirmada si el backend aún no acepta selección para este caso.

@@ -1,6 +1,7 @@
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../../../core/router/app_router.dart';
 import '../../../core/theme/app_theme.dart';
 
 /// Bienvenida interactiva por pasos tras el registro del comensal.
@@ -45,7 +46,12 @@ class _OnboardingDinerScreenState extends State<OnboardingDinerScreen> {
   }
 
   void _finishOnboarding() {
-    context.go('/customer/restaurants');
+    context.go(
+      resolvePostDinerAuthLocation(
+        GoRouter.of(context),
+        fallback: '/customer/restaurants',
+      ),
+    );
   }
 
   @override

@@ -11,10 +11,12 @@ enum GroupOrderStatus {
   cancelled,
 }
 
-/// Construye la URL modular de invitación para conectar el Deep Link final de backend.
-String buildGroupInviteLink(String tableCode) {
-  final clean = tableCode.trim();
-  return 'https://bocadoo.app/mesa/$clean';
+/// Construye el deep link nativo de invitación para abrir directo Bocadoo
+/// (Login si falta sesión, o directo al pedido grupal si ya está logueado).
+String buildGroupInviteLink(String tableIdOrInvite) {
+  final clean = tableIdOrInvite.trim();
+  if (clean.startsWith('bocadoo://')) return clean;
+  return 'bocadoo://mesa/$clean';
 }
 
 /// Mensaje prearmado exacto para compartir por WhatsApp.
@@ -25,7 +27,7 @@ String buildGroupWhatsAppMessage({
 }) {
   final inviteUrl = buildGroupInviteLink(tableCode);
   return '¡Hola qué tal! $hostName te invita a su mesa en $restaurantName, '
-      'da clic y sé parte de un momento de almuerzo: $inviteUrl';
+      'da clic y únete al pedido en Bocadoo: $inviteUrl';
 }
 
 /// Opción fija "sin sopa" del selector de menú diario.
@@ -227,6 +229,27 @@ class GroupOrderDishSelection {
     matchByName(cleanDrink);
     matchByName(dessert);
     return ids;
+  }
+
+  /// Resuelve los IDs y cantidades de extras para `PUT /v1/mis/mesas/{id}/seleccion`.
+  List<({String dishId, int quantity})> resolveExtras(Restaurant? restaurant) {
+    if (restaurant == null || restaurant.todayMenu.isEmpty || extras.isEmpty) {
+      return const [];
+    }
+    final counts = <String, int>{};
+    for (final raw in extras) {
+      final clean = raw.trim().toLowerCase();
+      if (clean.isEmpty) continue;
+      final hit = restaurant.todayMenu
+          .where((m) => m.name.trim().toLowerCase() == clean && m.id.isNotEmpty)
+          .firstOrNull;
+      if (hit != null) {
+        counts[hit.id] = (counts[hit.id] ?? 0) + 1;
+      }
+    }
+    return [
+      for (final e in counts.entries) (dishId: e.key, quantity: e.value),
+    ];
   }
 
   /// Descarta elecciones que ya no existen en el menú publicado.
